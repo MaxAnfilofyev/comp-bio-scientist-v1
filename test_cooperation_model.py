@@ -6,6 +6,7 @@ Tests the evolution of cooperation model to verify the system works
 
 import numpy as np
 import sys
+import os
 
 # Add ai_scientist to path
 sys.path.append('ai_scientist')
@@ -34,9 +35,20 @@ def test_cooperation_evolution():
         print("✓ Model solved successfully")
         print(f"Final cooperation frequency: {solution['frequencies'][-1][0]:.3f}")
         print(f"Final defection frequency: {solution['frequencies'][-1][1]:.3f}")
+        # Create plots
+        plotter = BiologicalPlotter()
 
-        # Create plots (commented out due to potential missing matplotlib)
-        print("Plotting would be available with matplotlib installed")
+        try:
+            # Create phase portrait
+            plot_path = plotter.plot_phase_portrait(
+                solution['frequencies'][:, 1],  # defection frequency
+                solution['frequencies'][:, 0],  # cooperation frequency
+                title="Evolution of Cooperation: Phase Portrait"
+            )
+            print(f"✓ Phase portrait created: {plot_path}")
+        except Exception as e:
+            print(f"✗ Failed to create phase portrait: {e}")
+
         return True
     else:
         print(f"✗ Model solution failed: {solution.get('message', 'Unknown error')}")
@@ -57,11 +69,22 @@ def test_predator_prey_model():
     solution = model.solve(time_points)
 
     if solution['success']:
+        prey_final, predator_final = solution['solutions'][-1]
         print("✓ Predator-prey model solved successfully")
-        final_prey = solution['solutions'][-1][0]
-        final_predator = solution['solutions'][-1][1]
-        print(f"Final prey population: {final_prey:.1f}")
-        print(f"Final predator population: {final_predator:.1f}")
+        print(f"Final prey: {prey_final:.1f}, Final predator: {predator_final:.1f}")
+        try:
+            plotter = BiologicalPlotter()
+            plot_path = plotter.plot_time_series(
+                solution['time'],
+                solution['solutions'],
+                labels=solution.get('variables', ['prey', 'predator']),
+                title="Predator-Prey Dynamics",
+                xlabel="Time",
+                ylabel="Population",
+            )
+            print(f"✓ Predator-prey dynamics plot created: {plot_path}")
+        except Exception as e:
+            print(f"✗ Failed to plot predator-prey dynamics: {e}")
         return True
     else:
         print(f"✗ Predator-prey model failed: {solution.get('message', 'Unknown error')}")

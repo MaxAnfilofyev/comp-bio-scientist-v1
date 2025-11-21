@@ -51,6 +51,12 @@ def save_token_tracker(idea_dir):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run AI scientist experiments")
     parser.add_argument(
+        "--load_ideas",
+        type=str,
+        required=True,
+        help="Path to pregenerated ideas JSON file",
+    )
+    parser.add_argument(
         "--writeup-type",
         type=str,
         default="icbinb",

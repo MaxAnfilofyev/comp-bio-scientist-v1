@@ -4,11 +4,53 @@ Provides mathematical modeling frameworks for theoretical computational biology
 including differential equations, agent-based models, and game theory.
 """
 
+import os
+mpl_config_dir = os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
+cache_dir = os.environ.setdefault("XDG_CACHE_HOME", os.path.join(os.getcwd(), ".cache"))
+os.makedirs(mpl_config_dir, exist_ok=True)
+os.makedirs(cache_dir, exist_ok=True)
+
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.integrate import odeint, solve_ivp
-from scipy.optimize import fsolve, minimize_scalar
 import warnings
+from types import SimpleNamespace
+
+try:
+    from scipy.integrate import solve_ivp
+    from scipy.optimize import fsolve, minimize_scalar
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
+    def solve_ivp(func, t_span, y0, t_eval, method="RK45", **kwargs):
+        """Minimal RK4 fallback when SciPy is unavailable."""
+        y0_arr = np.array(y0, dtype=float)
+        t_eval_arr = np.array(t_eval, dtype=float)
+        ys = np.zeros((len(y0_arr), len(t_eval_arr)))
+        ys[:, 0] = y0_arr
+
+        for i in range(len(t_eval_arr) - 1):
+            t = t_eval_arr[i]
+            dt = t_eval_arr[i + 1] - t
+            y_curr = ys[:, i]
+
+            k1 = np.array(func(t, y_curr, **kwargs))
+            k2 = np.array(func(t + dt / 2, y_curr + dt * k1 / 2, **kwargs))
+            k3 = np.array(func(t + dt / 2, y_curr + dt * k2 / 2, **kwargs))
+            k4 = np.array(func(t + dt, y_curr + dt * k3, **kwargs))
+
+            ys[:, i + 1] = y_curr + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+        return SimpleNamespace(success=True, t=t_eval_arr, y=ys)
+
+    def fsolve(*args, **kwargs):
+        raise ImportError("SciPy is required for fsolve; install scipy to enable equilibrium solving.")
+
+    def minimize_scalar(*args, **kwargs):
+        raise ImportError("SciPy is required for minimize_scalar; install scipy to enable optimization.")
+
 warnings.filterwarnings('ignore')
 
 
@@ -50,14 +92,14 @@ class DifferentialEquationModel(BiologicalModel):
         self.equations_func = equations_func
         self.equations_defined = True
 
-    def predator_prey_equations(self, y, t, alpha, beta, gamma, delta):
+    def predator_prey_equations(self, t, y, alpha, beta, gamma, delta):
         """Classic Lotka-Volterra predator-prey equations"""
         x, y_prey = y  # y_prey to avoid name conflict
         dxdt = alpha * x - beta * x * y_prey
         dydt = -gamma * y_prey + delta * x * y_prey
         return [dxdt, dydt]
 
-    def epidemiology_sir(self, y, t, beta, gamma):
+    def epidemiology_sir(self, t, y, beta, gamma):
         """SIR epidemiological model"""
         S, I, R = y
         dSdt = -beta * S * I
@@ -65,7 +107,7 @@ class DifferentialEquationModel(BiologicalModel):
         dRdt = gamma * I
         return [dSdt, dIdt, dRdt]
 
-    def evolutionary_game_theory(self, y, t, b, c):
+    def evolutionary_game_theory(self, t, y, b, c):
         """Replicator dynamics for evolution of cooperation"""
         x_coop, x_defect = y
 
@@ -81,7 +123,7 @@ class DifferentialEquationModel(BiologicalModel):
 
         return [dx_coop, dx_defect]
 
-    def chemical_reaction_network(self, y, t, k1, k2, k3):
+    def chemical_reaction_network(self, t, y, k1, k2, k3):
         """Simple enzyme-catalyzed reaction network"""
         S, E, ES, P = y  # Substrate, Enzyme, Enzyme-Substrate complex, Product
 
@@ -106,9 +148,18 @@ class DifferentialEquationModel(BiologicalModel):
         # Extract parameters for the equations function
         y0 = list(self.initial_conditions.values())
 
-        # Solve using scipy's solve_ivp (more modern approach)
-        sol = solve_ivp(self.equations_func, (time_points[0], time_points[-1]),
-                       y0, t_eval=time_points, method=method, **solver_kwargs)
+        def wrapped_equations(t, y):
+            return self.equations_func(t, y, **self.parameters)
+
+        # Solve using scipy's solve_ivp (or fallback)
+        sol = solve_ivp(
+            wrapped_equations,
+            (time_points[0], time_points[-1]),
+            y0,
+            t_eval=time_points,
+            method=method,
+            **solver_kwargs,
+        )
 
         if sol.success:
             return {
@@ -134,7 +185,7 @@ class DifferentialEquationModel(BiologicalModel):
         # Function that returns derivatives (should be zero at equilibria)
         def equilibrium_func(y):
             # Use t=0 for equilibrium calculation
-            return self.equations_func(y, 0, **self.parameters)
+            return self.equations_func(0, y, **self.parameters)
 
         try:
             equilibrium = fsolve(equilibrium_func, guess)
@@ -158,8 +209,8 @@ class DifferentialEquationModel(BiologicalModel):
             y_plus[i] += eps
             y_minus[i] -= eps
 
-            f_plus = np.array(self.equations_func(y_plus, t, **self.parameters))
-            f_minus = np.array(self.equations_func(y_minus, t, **self.parameters))
+            f_plus = np.array(self.equations_func(t, y_plus, **self.parameters))
+            f_minus = np.array(self.equations_func(t, y_minus, **self.parameters))
 
             jacobian[:, i] = (f_plus - f_minus) / (2 * eps)
 
@@ -329,8 +380,7 @@ class GameTheoryModel(BiologicalModel):
 
     def replicator_dynamics(self, strategy_frequencies, time_points):
         """Compute evolutionary dynamics using replicator equations"""
-        def replicator_eq(y, t):
-            frequencies = y
+        def replicator_eq(t, frequencies):
             avg_fitness = sum(self.compute_fitness(frequencies, i) * frequencies[i]
                             for i in range(len(frequencies)))
 
@@ -482,3 +532,6 @@ def create_sample_models():
 
     # Epidemiology
     epi_model = EvolutionaryModels.epidemiology_sir_model()
+    models['epidemiology_sir'] = epi_model
+
+    return models
