@@ -2,6 +2,7 @@
 anthropic
 backoff
 openai
+pydantic
 # Viz
 matplotlib
 pypdf
@@ -27,3 +28,20 @@ jsonschema
 omegaconf
 botocore
 boto3
+tiktoken
+
+# Optional GPU Support (install separately if you have CUDA GPUs)
+# torch>=1.9.0  # Uncomment for GPU acceleration
+# torchvision  # Uncomment for GPU acceleration
+# torchaudio    # Uncomment for GPU acceleration
+
+# Computational Biology Dependencies
+biopython  # Core biological computations, sequence analysis
+scipy  # Statistical analysis for biological data
+networkx  # Graph algorithms for biological pathways and networks
+scikit-learn  # Machine learning for biological modeling
+statsmodels  # Statistical modeling for biological data
+pandas  # Data manipulation for biological datasets
+requests  # API access to biological databases
+plotly  # Interactive biological visualizations
+seaborn  # Advanced statistical plotting for biological data

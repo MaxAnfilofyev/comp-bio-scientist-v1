@@ -42,22 +42,40 @@ def idea_to_markdown(data: dict, output_path: str, load_code: str) -> None:
                 f.write(f"```python\n{code}\n```\n\n")
 
 
-def edit_bfts_config_file(config_path: str, idea_dir: str, idea_path: str) -> str:
+def _deep_update(target: dict, updates: dict) -> dict:
+    """Recursively update nested dictionaries."""
+    for k, v in updates.items():
+        if isinstance(v, dict) and isinstance(target.get(k), dict):
+            target[k] = _deep_update(target.get(k, {}), v)
+        else:
+            target[k] = v
+    return target
+
+
+def edit_bfts_config_file(
+    config_path: str,
+    idea_dir: str,
+    idea_path: str,
+    biology_overrides: dict | None = None,
+) -> str:
     """
-    Edit the bfts_config.yaml file to point to the idea.md file
+    Edit the bfts_config.yaml file to point to the idea-specific files and optionally
+    override biological configuration fields.
 
     Args:
-        config_path: Path to the bfts_config.yaml file
-        idea_dir: Directory where the idea.md file is located
-        idea_path: Path to the idea.md file
+        config_path: Path to the base bfts_config.yaml file
+        idea_dir: Directory where the idea files are located
+        idea_path: Path to the idea.json file (or markdown description)
+        biology_overrides: Optional nested dict of overrides for the `biology` section
 
     Returns:
-        Path to the edited bfts_config.yaml file
+        Path to the edited bfts_config.yaml file for this idea
     """
     run_config_path = osp.join(idea_dir, "bfts_config.yaml")
     shutil.copy(config_path, run_config_path)
     with open(run_config_path, "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
+
     config["desc_file"] = idea_path
     config["workspace_dir"] = idea_dir
 
@@ -70,6 +88,12 @@ def edit_bfts_config_file(config_path: str, idea_dir: str, idea_path: str) -> st
     log_dir = osp.join(idea_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     config["log_dir"] = log_dir
+
+    # Optionally override biology configuration
+    if biology_overrides is not None:
+        if "biology" not in config or not isinstance(config["biology"], dict):
+            config["biology"] = {}
+        config["biology"] = _deep_update(config["biology"], biology_overrides)
 
     with open(run_config_path, "w") as f:
         yaml.dump(config, f)

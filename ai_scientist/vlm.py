@@ -11,10 +11,8 @@ from ai_scientist.utils.token_tracker import track_token_usage
 MAX_NUM_TOKENS = 4096
 
 AVAILABLE_VLMS = [
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20",
-    "gpt-4o-mini-2024-07-18",
+   
+    "gpt-5-mini-2025-08-07",
     "o3-mini",
 
     # Ollama models
@@ -195,11 +193,9 @@ def get_response_from_vlm(
 def create_client(model: str) -> tuple[Any, str]:
     """Create client for vision-language model."""
     if model in [
-        "gpt-4o-2024-05-13",
-        "gpt-4o-2024-08-06",
-        "gpt-4o-2024-11-20",
-        "gpt-4o-mini-2024-07-18",
-        "o3-mini",
+   
+        "gpt-5-mini-2025-08-07",
+        "gpt-5.1-2025-11-13",
     ]:
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model

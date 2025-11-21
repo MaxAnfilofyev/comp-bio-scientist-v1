@@ -151,7 +151,7 @@ def get_citation_addition(
 ):
     report, citations = context
     msg_history = []
-    citation_system_msg_template = """You are an ambitious AI researcher who is looking to publish a paper to a top-tier ML conference that will contribute significantly to the field.
+    citation_system_msg_template = """You are an ambitious computational biology researcher who is looking to publish a paper to a top-tier ML conference that will contribute significantly to the field.
 You have already completed the experiments and now you are looking to collect citations to related papers.
 This phase focuses on collecting references and annotating them to be integrated later.
 Collected citations will be added to a references.bib file.
@@ -342,7 +342,7 @@ This JSON will be automatically parsed, so ensure the format is precise."""
 
 
 # Using a template string to allow injection of the {page_limit} argument
-writeup_system_message_template = """You are an ambitious AI researcher who is looking to publish a paper that will contribute significantly to the field.
+writeup_system_message_template = """You are an ambitious computational biology researcher who is looking to publish a paper that will contribute significantly to the field.
 Ensure that the paper is scientifically accurate, objective, and truthful. Accurately report the experimental results, even if they are negative or inconclusive.
 You are planning to submit to a top-tier ML conference, which has guidelines:
 - The main paper is limited to {page_limit} pages, including all figures and tables, but excluding references, the impact statement, and optional appendices. In general, try to use the available space and include all relevant information.
@@ -456,8 +456,8 @@ def perform_writeup(
     base_folder,
     no_writing=False,
     num_cite_rounds=20,
-    small_model="gpt-4o-2024-05-13",
-    big_model="o1-2024-12-17",
+    small_model="gpt-5-mini-2025-08-07",
+    big_model="gpt-5.1-2025-11-13",
     n_writeup_reflections=3,
     page_limit=8,
 ):

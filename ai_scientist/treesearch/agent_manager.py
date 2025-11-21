@@ -148,22 +148,24 @@ class AgentManager:
         }
         self.main_stage_goals: Dict[int, str] = {
             1: """
-                - Focus on getting basic working implementation
-                - Use a simple dataset
-                - Aim for basic functional correctness
-                - If you are given \"Code To Use\", you can directly use it as a starting point.""",
+                - Biological Model Development: Implement computational models based on published literature and datasets
+                - Focus on biological plausibility and mechanistic interpretation using Semantic Scholar sources
+                - Use literature-derived parameters and validate against experimental data
+                - Incorporate biological constraints and domain knowledge from peer-reviewed studies""",
             2: """
-                - Change hyperparameters such as learning rate, number of epochs, batch size, etc. to improve the performance
-                - DO NOT change the model architecture from the previous stage
-                - Introduce TWO more new datasets from HuggingFace test the model. Try very hard to think what Huggingface datasets can be used here for testing.""",
+                - Parameter Optimization: Refine biological model parameters using literature-derived ranges
+                - DO NOT change the core biological mechanisms from the previous stage
+                - Introduce TWO more datasets based on literature recommendations and biological databases
+                - Focus on biological interpretation and parameter sensitivity analysis""",
             3: """
-                - Explore novel improvements
-                - Come up with experiments to reveal new insights
-                - Be creative and think outside the box
-                - MAKE SURE you use THREE HuggingFace dataset in total to test your models""",
+                - Mechanistic Insights & Hypothesis Testing: Develop experiments to reveal new biological insights
+                - Be creative in combining literature findings with computational approaches
+                - Integrate THREE biological datasets total to test mechanistic hypotheses
+                - Emphasize biological plausibility and mechanistic explanations""",
             4: """
-                - Conduct systematic component analysis that reveals the contribution of each part
-                - Use the same datasets you used from the previous stage""",
+                - Systematic Biological Component Analysis: Reveal the contribution of each biological mechanism
+                - Use the same datasets from the previous stage for consistent evaluation
+                - Focus on biological interpretation of parameter contributions""",
         }
         # Create initial stage
         self._create_initial_stage()
@@ -177,9 +179,9 @@ class AgentManager:
         )
 
     def _get_task_desc_str(self):
-        task_desc = """You are an ambitious AI researcher who is looking to publish a paper that will contribute significantly to the field.
+        task_desc = """You are an ambitious computational biology researcher who is looking to publish a paper in PLOS Computational Biology that will contribute significantly to the field.
 You have an idea and you want to conduct creative experiments to gain scientific insights.
-Your aim is to run experiments to gather sufficient results for a top conference paper.
+Your aim is to run experiments to gather sufficient results for a high-impact journal publication.
 Your research idea:\n\n
 """
         task_desc += (
@@ -342,7 +344,7 @@ Your research idea:\n\n
 
     def _check_substage_completion(
         self, current_substage: Stage, journal: Journal
-    ) -> bool:
+    ) -> Tuple[bool, str]:
         """Check if the current sub-stage is complete"""
         best_node = journal.get_best_node(cfg=self.cfg)
         if not best_node:
@@ -407,7 +409,7 @@ Your research idea:\n\n
         print(f"[green]Stage {current_substage.name} not completed[/green]")
         return False
 
-    def _check_stage_completion(self, stage: Stage) -> bool:
+    def _check_stage_completion(self, stage: Stage) -> Tuple[bool, str]:
         """Check if current stage is complete based on criteria"""
         journal = self.journals[stage.name]
         # Terminate if max iterations reached
@@ -440,6 +442,7 @@ Your research idea:\n\n
                     f"[green]Stage {stage.name} completed: found working implementation[/green]"
                 )
                 return True, "Found working implementation"
+            return False, "No working implementation found yet"
 
         if stage.stage_number == 2:
             best_node = journal.get_best_node(cfg=self.cfg)
@@ -652,10 +655,10 @@ Your research idea:\n\n
         return Stage(
             name=f"{main_stage_num}_{main_stage_name}_{sub_stage_num + 1}_{sub_stage_name}",
             description=sub_stage_name,
-            goals="Main stage goals:\n"
+            goals=["Main stage goals:\n"
             + main_stage_goal
             + "\n\nSub-stage goals:\n"
-            + sub_stage_goal,
+            + sub_stage_goal],
             max_iterations=self._get_max_iterations(main_stage_num),
             num_drafts=0,
             stage_number=current_substage.stage_number + 1,
@@ -878,6 +881,7 @@ Your research idea:\n\n
             prompt_parts.append(metrics_summary)
 
             # Save stage transition analysis to notes directory
+            current_stage_number = previous_stages[-1].stage_number + 1 if previous_stages else 2
             base_dir = Path(self.workspace_dir).parent.parent
             run_name = Path(self.workspace_dir).name
             notes_dir = (
@@ -885,14 +889,14 @@ Your research idea:\n\n
                 / "logs"
                 / run_name
                 / "notes"
-                / f"stage_{stage_number-1}_to_{stage_number}"
+                / f"stage_{previous_stages[-1].stage_number}_to_{current_stage_number}"
             )
             notes_dir.mkdir(parents=True, exist_ok=True)
 
             analysis_data = {
                 "stage_transition": {
-                    "from_stage": stage_number - 1,
-                    "to_stage": stage_number,
+                    "from_stage": previous_stages[-1].stage_number,
+                    "to_stage": current_stage_number,
                     "is_initial_stage": is_initial_stage,  # Add flag for initial stage
                     "metrics_summary": metrics_summary,
                     "node_summaries": previous_results["metrics"].get(

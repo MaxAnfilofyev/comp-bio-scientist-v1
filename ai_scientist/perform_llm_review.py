@@ -11,7 +11,7 @@ from ai_scientist.llm import (
 )
 
 reviewer_system_prompt_base = (
-    "You are an AI researcher who is reviewing a paper that was submitted to a prestigious ML venue."
+    "You are an computational biology researcher who is reviewing a paper that was submitted to a prestigious ML venue."
     "Be critical and cautious in your decision."
 )
 reviewer_system_prompt_neg = (

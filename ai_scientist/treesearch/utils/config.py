@@ -1,6 +1,6 @@
 """configuration and setup utils"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Hashable, cast, Literal, Optional
 
@@ -86,6 +86,57 @@ class ExperimentConfig:
 
 
 @dataclass
+class BiologyModelingConfig:
+    framework: str = "unspecified"
+    time_horizon: float = 100.0
+    num_time_points: int = 1000
+
+
+@dataclass
+class BiologyTargetsConfig:
+    primary_quantity: str = "unspecified"
+    secondary_quantities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BiologyReproducibilityConfig:
+    require_random_seed_logging: bool = True
+    require_environment_description: bool = True
+    require_dataset_accessions: bool = True
+    require_code_archive: bool = True
+
+
+@dataclass
+class BiologyCitationPolicyConfig:
+    use_semantic_scholar: bool = True
+    min_references: int = 10
+    require_dataset_citations: bool = True
+    require_model_citations: bool = True
+    require_software_citations: bool = False
+
+
+@dataclass
+class BiologyConfig:
+    research_type: str = "applied"   # "applied" (bioinformatics) or "theoretical" (mathematical modeling)
+    domain: str = "unspecified"      # e.g., "evolutionary_dynamics", "protein_structure"
+    phases: list[str] = field(
+        default_factory=lambda: [
+            "conceptualization",
+            "modeling",
+            "simulation",
+            "analysis",
+            "interpretation",
+            "communication",
+        ]
+    )
+    modeling: BiologyModelingConfig = field(default_factory=BiologyModelingConfig)
+    targets: BiologyTargetsConfig = field(default_factory=BiologyTargetsConfig)
+    eval_focus: str = "unspecified"
+    reproducibility: BiologyReproducibilityConfig = field(default_factory=BiologyReproducibilityConfig)
+    citation_policy: BiologyCitationPolicyConfig = field(default_factory=BiologyCitationPolicyConfig)
+
+
+@dataclass
 class Config(Hashable):
     data_dir: Path
     desc_file: Path | None
@@ -107,6 +158,8 @@ class Config(Hashable):
     agent: AgentConfig
     experiment: ExperimentConfig
     debug: DebugConfig
+
+    biology: Optional[BiologyConfig] = None
 
 
 def _get_next_logindex(dir: Path) -> int:
@@ -202,6 +255,74 @@ def load_task_desc(cfg: Config):
     task_desc = {"Task goal": cfg.goal}
     if cfg.eval is not None:
         task_desc["Task evaluation"] = cfg.eval
+
+    # Add biological configuration section if available
+    biology_cfg = getattr(cfg, "biology", None)
+    if biology_cfg is not None:
+        lines: list[str] = []
+        if getattr(biology_cfg, "research_type", None):
+            lines.append(f"Research type: {biology_cfg.research_type}")
+        if getattr(biology_cfg, "domain", None):
+            lines.append(f"Domain: {biology_cfg.domain}")
+        if getattr(biology_cfg, "phases", None):
+            phases_str = ", ".join(biology_cfg.phases)
+            lines.append(f"Phases: {phases_str}")
+        if getattr(biology_cfg, "modeling", None) is not None:
+            if getattr(biology_cfg.modeling, "framework", None):
+                lines.append(f"Modeling framework: {biology_cfg.modeling.framework}")
+            if getattr(biology_cfg.modeling, "time_horizon", None) is not None:
+                lines.append(f"Time horizon: {biology_cfg.modeling.time_horizon}")
+            if getattr(biology_cfg.modeling, "num_time_points", None) is not None:
+                lines.append(
+                    f"Number of time points: {biology_cfg.modeling.num_time_points}"
+                )
+        if getattr(biology_cfg, "targets", None) is not None:
+            if getattr(biology_cfg.targets, "primary_quantity", None):
+                lines.append(
+                    f"Primary quantity of interest: {biology_cfg.targets.primary_quantity}"
+                )
+            if getattr(biology_cfg.targets, "secondary_quantities", None):
+                if biology_cfg.targets.secondary_quantities:
+                    sec = ", ".join(biology_cfg.targets.secondary_quantities)
+                    lines.append(f"Secondary quantities: {sec}")
+        if getattr(biology_cfg, "eval_focus", None):
+            lines.append(f"Evaluation focus: {biology_cfg.eval_focus}")
+
+        # Reproducibility standards
+        repro = getattr(biology_cfg, "reproducibility", None)
+        if repro is not None:
+            repro_items = []
+            if getattr(repro, "require_random_seed_logging", None):
+                repro_items.append("log random seeds")
+            if getattr(repro, "require_environment_description", None):
+                repro_items.append("describe software/hardware environment")
+            if getattr(repro, "require_dataset_accessions", None):
+                repro_items.append("record dataset accessions/versions")
+            if getattr(repro, "require_code_archive", None):
+                repro_items.append("archive code used for experiments")
+            if repro_items:
+                lines.append("Reproducibility standards: " + "; ".join(repro_items))
+
+        # Citation policy
+        cite_pol = getattr(biology_cfg, "citation_policy", None)
+        if cite_pol is not None:
+            policy_bits = []
+            if getattr(cite_pol, "use_semantic_scholar", None):
+                policy_bits.append("use Semantic Scholar for citation search")
+            if getattr(cite_pol, "min_references", None):
+                policy_bits.append(f"aim for ≥{cite_pol.min_references} references")
+            if getattr(cite_pol, "require_dataset_citations", None):
+                policy_bits.append("cite datasets explicitly")
+            if getattr(cite_pol, "require_model_citations", None):
+                policy_bits.append("cite key models/algorithms")
+            if getattr(cite_pol, "require_software_citations", None):
+                policy_bits.append("cite critical software tools")
+            if policy_bits:
+                lines.append("Citation policy: " + "; ".join(policy_bits))
+
+        if lines:
+            task_desc["Biology configuration"] = "\n".join(lines)
+
     print(task_desc)
     return task_desc
 

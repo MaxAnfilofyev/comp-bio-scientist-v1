@@ -339,7 +339,7 @@ def get_citation_addition(
 ):
     report, citations = context
     msg_history = []
-    citation_system_msg_template = """You are an ambitious AI researcher who is looking to publish a paper to a workshop at ICLR 2025 that explores real-world pitfalls, failures, and challenges in deep learning.
+    citation_system_msg_template = """You are an ambitious computational biology researcher who is looking to publish a paper to a workshop at ICLR 2025 that explores real-world pitfalls, failures, and challenges in deep learning.
 You have already completed the experiments and now you are looking to collect citations to related papers.
 This phase focuses on collecting references and annotating them to be integrated later.
 Collected citations will be added to a references.bib file.
@@ -530,7 +530,7 @@ This JSON will be automatically parsed, so ensure the format is precise."""
     return references_prompt, False
 
 
-writeup_system_message_template = """You are an ambitious AI researcher who is looking to publish a paper to the "I Can't Believe It's Not Better" (ICBINB) Workshop at ICLR 2025.
+writeup_system_message_template = """You are an ambitious computational biology researcher who is looking to publish a paper to the "I Can't Believe It's Not Better" (ICBINB) Workshop at ICLR 2025.
 This workshop aims to highlight real-world pitfalls, challenges, and negative or inconclusive results in deep learning, encouraging open discussion.
 You must accurately represent the results of the experiments.
 The main paper is limited to {page_limit} pages in single-column format, not counting references. In general, try to use the available space and include all relevant information.
@@ -859,10 +859,11 @@ def perform_writeup(
     citations_text=None,
     no_writing=False,
     num_cite_rounds=20,
-    small_model="gpt-4o-2024-05-13",
-    big_model="o1-2024-12-17",
+    small_model="gpt-5-mini-2025-08-07",
+    big_model="gpt-5.1-2025-11-13",
     n_writeup_reflections=3,
     page_limit=4,
+    template_dir="ai_scientist/blank_icbinb_latex",
 ):
     pdf_file = osp.join(base_folder, f"{osp.basename(base_folder)}.pdf")
     latex_folder = osp.join(base_folder, "latex")
@@ -890,7 +891,7 @@ def perform_writeup(
         # Prepare a new fresh latex folder
         if not osp.exists(osp.join(latex_folder, "template.tex")):
             shutil.copytree(
-                "ai_scientist/blank_icbinb_latex", latex_folder, dirs_exist_ok=True
+                template_dir, latex_folder, dirs_exist_ok=True
             )
 
         writeup_file = osp.join(latex_folder, "template.tex")
@@ -992,6 +993,8 @@ def perform_writeup(
             plot_list=", ".join(plot_names),
             latex_writeup=writeup_text,
             plot_descriptions=plot_descriptions_str,
+            biology_config=biology_config_block,
+            interpretation_text=interpretation_text,
         )
 
         response, msg_history = get_response_from_llm(

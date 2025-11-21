@@ -435,7 +435,7 @@ class Journal:
         # Create evaluation prompt for LLM
         prompt = {
             "Introduction": (
-                "You are an experienced AI researcher evaluating different implementations "
+                "You are an experienced computational biology researcher evaluating different implementations "
                 "of an experiment to select the best one. You should consider all aspects "
                 "including performance metrics, training dynamics, generated plots quality."
             ),
@@ -468,7 +468,7 @@ class Journal:
 
         try:
             if cfg is None or cfg.agent.get("select_node", None) is None:
-                model = "gpt-4o"
+                model = "gpt-5.1-2025-11-13"
                 temperature = 0.3
             else:
                 model = cfg.agent.select_node.model
@@ -508,7 +508,7 @@ class Journal:
 
         prompt = {
             "Introduction": (
-                "You are an AI researcher summarizing experimental progress. "
+                "You are an computational biology researcher summarizing experimental progress. "
                 "Please analyze both successful and failed experiments to provide insights "
                 "for future improvements."
             ),
@@ -541,7 +541,7 @@ class Journal:
                 "2. Common failure patterns and pitfalls to avoid\n"
                 "3. Specific recommendations for future experiments based on both successes and failures"
             ),
-            model=model_kwargs.get("model", "gpt-4o"),
+            model=model_kwargs.get("model", "gpt-5.1-2025-11-13"),
             temperature=model_kwargs.get("temp", 0.3)
         )
 
@@ -604,7 +604,7 @@ class Journal:
         stage_summary = query(
             system_message=summary_prompt,
             user_message="Generate a comprehensive summary of the experimental findings in this stage",
-            model=cfg.agent.summary.model if cfg.agent.get("summary", None) else "gpt-4o",
+            model=cfg.agent.summary.model if cfg.agent.get("summary", None) else "gpt-5.1-2025-11-13",
             temperature=cfg.agent.summary.temp if cfg.agent.get("summary", None) else 0.3
         )
 

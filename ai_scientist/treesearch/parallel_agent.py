@@ -272,7 +272,8 @@ class MinimalAgent:
 
     @property
     def _prompt_environment(self):
-        pkgs = [
+        # General ML packages
+        ml_pkgs = [
             "numpy",
             "pandas",
             "scikit-learn",
@@ -286,11 +287,29 @@ class MinimalAgent:
             "timm",
             "albumentations",
         ]
-        random.shuffle(pkgs)
-        pkg_str = ", ".join([f"`{p}`" for p in pkgs])
+
+        # Biology-specific packages
+        bio_pkgs = [
+            "biopython",  # Sequence analysis, file format handling
+            "scipy",  # Statistical analysis, signal processing
+            "seaborn",  # Advanced statistical visualization
+            "matplotlib",  # Plotting and visualization
+            "networkx",  # Graph algorithms for pathway analysis
+            " requests",  # API calls to biological databases
+            "mygene",  # Gene annotation and ID conversion (if available)
+            "gseapy",  # Gene set enrichment analysis (if available)
+            "statsmodels",  # Statistical modeling for biological data
+            "lifelines",  # Survival analysis for clinical data (if available)
+            "scanpy",  # Single-cell analysis (if available)
+        ]
+
+        # Combine and shuffle all packages
+        all_pkgs = ml_pkgs + bio_pkgs
+        random.shuffle(all_pkgs)
+        pkg_str = ", ".join([f"`{p}`" for p in all_pkgs])
 
         env_prompt = {
-            "Installed Packages": f"Your solution can use any relevant machine learning packages such as: {pkg_str}. Feel free to use any other packages too (all packages are already installed!). For neural networks we suggest using PyTorch rather than TensorFlow."
+            "Installed Packages": f"Your solution can use any relevant machine learning and computational biology packages such as: {pkg_str}. Feel free to use any other packages too (all packages are already installed!). For neural networks we suggest using PyTorch rather than TensorFlow. For biological data analysis, leverage Biopython, NetworkX for pathways, and statistical analysis packages."
         }
         return env_prompt
 
@@ -452,13 +471,13 @@ class MinimalAgent:
 
     def _draft(self) -> Node:
         prompt: Any = {
-            "Introduction": (
-                "You are an AI researcher who is looking to publish a paper that will contribute significantly to the field."
-                "Your first task is to write a python code to implement a solid baseline based on your research idea provided below, "
-                "from data preparation to model training, as well as evaluation and visualization. "
-                "Focus on getting a simple but working implementation first, before any sophisticated improvements. "
-                "We will explore more advanced variations in later stages."
-            ),
+                "Introduction": (
+                    "You are an experienced computational biology researcher analyzing experimental results. "
+                    "You have been provided with plots from a biology modeling experiment. "
+                    "Please select 10 most relevant plots to analyze. "
+                    "For similar plots (e.g. generated samples at each epoch), select only at most 5 plots at a suitable interval of epochs."
+                    "Format your response as a list of plot paths, where each plot path includes the full path to the plot file."
+                ),
             "Research idea": self.task_desc,
             "Memory": self.memory_summary if self.memory_summary else "",
             "Instructions": {},
@@ -494,7 +513,7 @@ class MinimalAgent:
     def _debug(self, parent_node: Node) -> Node:
         prompt: Any = {
             "Introduction": (
-                "You are an experienced AI researcher. Your previous code for research experiment had a bug, so based on the information below, you should revise it in order to fix this bug. "
+                "You are an experienced computational biologymputational biology researcher. Your previous code for research experiment had a bug, so based on the information below, you should revise it in order to fix this bug. "
                 "Your response should be an implementation outline in natural language,"
                 " followed by a single markdown code block which implements the bugfix/solution."
             ),
@@ -523,7 +542,7 @@ class MinimalAgent:
     def _improve(self, parent_node: Node) -> Node:
         prompt: Any = {
             "Introduction": (
-                "You are an experienced AI researcher. You are provided with a previously developed "
+                "You are an experienced computational biology researcher. You are provided with a previously developed "
                 "implementation. Your task is to improve it based on the current experimental stage."
             ),
             "Research idea": self.task_desc,
@@ -559,7 +578,7 @@ class MinimalAgent:
     ):
         prompt: Any = {
             "Introduction": (
-                "You are an experienced AI researcher. You are provided with a previously developed "
+                "You are an experienced computational biology researcher. You are provided with a previously developed "
                 "baseline implementation. Your task is to implement hyperparameter tuning for the following idea: "
                 + hyperparam_idea.name
                 + ". "
@@ -605,7 +624,7 @@ class MinimalAgent:
     def _generate_ablation_node(self, parent_node: Node, ablation_idea: AblationIdea):
         prompt: Any = {
             "Introduction": (
-                "You are an experienced AI researcher. You are provided with a previously developed "
+                "You are an experienced computational biology researcher. You are provided with a previously developed "
                 "baseline implementation. Your task is to implement the ablation study for the following idea: "
                 + ablation_idea.name
                 + ". "
@@ -689,7 +708,7 @@ class MinimalAgent:
 
         prompt = {
             "Introduction": (
-                "You are an experienced AI researcher. "
+                "You are an experienced computational biology researcher. "
                 "You have written code for your research experiment and now need to evaluate the output of the code execution. "
                 "Analyze the execution output, determine if there were any bugs, and provide a summary of the findings. "
             ),
@@ -839,7 +858,7 @@ class MinimalAgent:
             plot_analyses += f"plot {i+1}: {plot_analysis['analysis']}\n"
 
         determine_prompt = {
-            "Introduction": "You are an AI researcher analyzing experiment results. Based on the plot analyses and feedback, determine which datasets are successfully tested. Return reasoning and the dataset names that are successfully executed, or an empty string if no datasets are successfully executed.",
+            "Introduction": "You are an computational biology researcher analyzing experiment results. Based on the plot analyses and feedback, determine which datasets are successfully tested. Return reasoning and the dataset names that are successfully executed, or an empty string if no datasets are successfully executed.",
             "Plot analyses": plot_analyses,
             "VLM feedback summary": node.vlm_feedback_summary,
             "Original plotting code": node.plot_code,
@@ -916,8 +935,8 @@ class MinimalAgent:
             # select 10 plots to analyze
             prompt_select_plots = {
                 "Introduction": (
-                    "You are an experienced AI researcher analyzing experimental results. "
-                    "You have been provided with plots from a machine learning experiment. "
+                    "You are an experienced computational biology researcher analyzing experimental results. "
+                    "You have been provided with plots from a biology modeling experiment. "
                     "Please select 10 most relevant plots to analyze. "
                     "For similar plots (e.g. generated samples at each epoch), select only at most 5 plots at a suitable interval of epochs."
                     "Format your response as a list of plot paths, where each plot path includes the full path to the plot file."
@@ -984,7 +1003,7 @@ class MinimalAgent:
             {
                 "type": "text",
                 "text": (
-                    "You are an experienced AI researcher analyzing experimental results. "
+                    "You are an experienced computational biology researcher analyzing experimental results. "
                     "You have been provided with plots from a machine learning experiment. "
                     f"This experiment is based on the following research idea: {self.task_desc}"
                     "Please analyze these plots and provide detailed insights about the results. "
@@ -1036,7 +1055,7 @@ class MinimalAgent:
         """Generate a summary of the node's experimental findings"""
         summary_prompt = {
             "Introduction": (
-                "You are an AI researcher analyzing experimental results. "
+                "You are an experienced computational biology researcher analyzing experimental results. "
                 "Please summarize the findings from this experiment iteration."
             ),
             "Research idea": self.task_desc,
@@ -1195,19 +1214,28 @@ class ParallelAgent:
         """Define eval metric to be used across all experiments"""
         prompt = {
             "Introduction": (
-                "You are an AI researcher setting up experiments. "
-                "Please propose meaningful evaluation metrics that will help analyze "
-                "the performance and characteristics of solutions for this research task."
+                "You are an computational biology researcher setting up experiments for biological modeling tasks. "
+                "Biological modeling includes areas such as protein structure prediction, drug-target interactions, "
+                "gene expression analysis, pathway modeling, and other computational biology applications. "
+                "Please propose evaluation metrics that are specifically relevant to biological modeling and analysis."
             ),
             "Research idea": self.task_desc,
             "Instructions": [
-                "Propose a single evaluation metric that would be useful for analyzing the performance of solutions for this research task.",
+                "Propose evaluation metrics that would be most appropriate for analyzing biological modeling performance.",
+                "Consider biologically relevant metrics such as:",
+                "  - Structural similarity metrics (RMSD, GDT, TM-score for protein structures)",
+                "  - Gene expression correlation metrics (Pearson correlation, MAE, RMSE)",
+                "  - Drug-target interaction metrics (AUC, precision, recall, binding affinity)",
+                "  - Sequence analysis metrics (alignment scores, conservation scores)",
+                "  - Biological pathway metrics (pathway enrichment scores, network similarity)",
+                "  - Drug discovery metrics (screening enrichment, hit rate, selectivity)",
+                "  - Systems biology metrics (network topology measures, pathway activity scores)",
+                "Choose 2-3 appropriate metrics for this specific biological modeling task that complement each other.",
                 "Note: Validation loss will be tracked separately so you don't need to include it in your response.",
-                "Format your response as a list containing:",
-                "- name: The name of the metric",
+                "Format your response as a list containing for each metric:",
+                "- name: The name of the metric (use biologically appropriate terminology)",
                 "- maximize: Whether higher values are better (true/false)",
-                "- description: A brief explanation of what the metric measures"
-                "Your list should contain only one metric.",
+                "- description: A brief explanation of what the metric measures in biological context"
             ],
         }
 
@@ -1554,7 +1582,7 @@ class ParallelAgent:
                     # Call LLM to parse data files and extract metrics
                     parse_metrics_prompt = {
                         "Introduction": (
-                            "You are an AI researcher analyzing experimental results stored in numpy files. "
+                            "You are an computational biology researcher analyzing experimental results stored in numpy files. "
                             "Write code to load and analyze the metrics from experiment_data.npy."
                         ),
                         "Context": [
@@ -1803,7 +1831,7 @@ class ParallelAgent:
 
         hyperparam_tuning_prompt = {
             "Introduction": (
-                "You are an AI researcher conducting hyperparameter tuning for baseline experiments. "
+                "You are an computational biology researcher conducting hyperparameter tuning for baseline experiments. "
                 "Based on the current implementation and previous hyperparameter tuning attempts (if any), "
                 "propose ONE new hyperparameter tuning idea to see if it improves the performance."
                 "You should first check if simply training longer (more epochs) improves the performance."
@@ -1865,7 +1893,7 @@ class ParallelAgent:
 
         ablation_prompt = {
             "Introduction": (
-                "You are an AI researcher conducting ablation studies. "
+                "You are an computational biology researcher conducting ablation studies. "
                 "Based on the current implementation and previous ablations (if any), "
                 "propose ONE new ablation study that tests a different aspect of the model."
             ),

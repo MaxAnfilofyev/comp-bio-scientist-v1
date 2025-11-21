@@ -1,35 +1,84 @@
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Dict, List, Optional, Literal, Union
 from ai_scientist.utils.token_tracker import track_token_usage
 
 import anthropic
 import backoff
 import openai
+from pydantic import BaseModel, Field, ConfigDict
+
+# Structured output schemas for AI Scientist ideation
+class SemanticScholarAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str
+
+class IdeaSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    Name: str
+    Title: str
+    short_hypothesis: str = Field(alias="Short Hypothesis")
+    related_work: str = Field(alias="Related Work")
+    Abstract: str
+    Experiments: List[str]
+    risk_factors_and_limitations: List[str] = Field(alias="Risk Factors and Limitations")
+
+class FinalizeIdeaAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    idea: IdeaSchema
+
+class AIScientistAction(BaseModel):
+    """Action schema for AI Scientist ideation system"""
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["SearchSemanticScholar", "FinalizeIdea"]
+    arguments: Union[SemanticScholarAction, FinalizeIdeaAction]
 
 MAX_NUM_TOKENS = 4096
+
+
+def get_token_parameter_name(model: str) -> str:
+    """Determine the correct token parameter name for different OpenAI models."""
+    # Newer models (GPT-5 series, O4 series, O5 models) use max_completion_tokens
+    new_models = [
+        "gpt-5-nano-2025-08-07",
+        "gpt-5-mini-2025-08-07",
+        "gpt-5.1-2025-11-13",
+        "o4-mini-deep-research-2025-06-26",
+    ]
+
+    if any(model.startswith(prefix) for prefix in ["gpt-5", "o4-", "o5-"]) or model in new_models:
+        return "max_completion_tokens"
+    else:
+        return "max_tokens"
+
+
+def get_temperature_parameter(model: str, default_temperature: float = 0.7) -> float:
+    """Determine the correct temperature value for different OpenAI models."""
+    # Newer models (GPT-5 series) only accept temperature=1.0
+    new_models = [
+        "gpt-5-nano-2025-08-07",
+        "gpt-5-mini-2025-08-07",
+        "gpt-5.1-2025-11-13",
+    ]
+
+    if any(model.startswith(prefix) for prefix in ["gpt-5"]) or model in new_models:
+        return 1.0  # Default required value for newer models
+    else:
+        return default_temperature  # Use provided temperature for older models
+
 
 AVAILABLE_LLMS = [
     "claude-3-5-sonnet-20240620",
     "claude-3-5-sonnet-20241022",
     # OpenAI models
-    "gpt-4o-mini",
-    "gpt-4o-mini-2024-07-18",
-    "gpt-4o",
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "gpt-4.1",
-    "gpt-4.1-2025-04-14",
-    "gpt-4.1-mini",
-    "gpt-4.1-mini-2025-04-14",
-    "o1",
-    "o1-2024-12-17",
-    "o1-preview-2024-09-12",
-    "o1-mini",
-    "o1-mini-2024-09-12",
-    "o3-mini",
-    "o3-mini-2025-01-31",
+    
+    "gpt-5-nano-2025-08-07",
+    "gpt-5-mini-2025-08-07",
+    "gpt-5.1-2025-11-13",
+    "o4-mini-deep-research-2025-06-26",
+   
     # DeepSeek Models
     "deepseek-coder-v2-0724",
     "deepcoder-14b",
@@ -93,6 +142,7 @@ def get_batch_responses_from_llm(
     msg_history=None,
     temperature=0.7,
     n_responses=1,
+    response_format=None,
 ) -> tuple[list[str], list[list[dict[str, Any]]]]:
     msg = prompt
     if msg_history is None:
@@ -117,14 +167,16 @@ def get_batch_responses_from_llm(
         ]
     elif "gpt" in model:
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
+        token_param = get_token_parameter_name(model)
+        adjusted_temperature = get_temperature_parameter(model, temperature)
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_message},
                 *new_msg_history,
             ],
-            temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            temperature=adjusted_temperature,
+            **{token_param: MAX_NUM_TOKENS},
             n=n_responses,
             stop=None,
             seed=0,
@@ -213,7 +265,7 @@ def get_batch_responses_from_llm(
 
 
 @track_token_usage
-def make_llm_call(client, model, temperature, system_message, prompt):
+def make_llm_call(client, model, temperature, system_message, prompt, response_format=None):
     if model.startswith("ollama/"):
         return client.chat.completions.create(
             model=model.replace("ollama/", ""),
@@ -227,18 +279,25 @@ def make_llm_call(client, model, temperature, system_message, prompt):
             stop=None,
         )
     elif "gpt" in model:
-        return client.chat.completions.create(
-            model=model,
-            messages=[
+        token_param = get_token_parameter_name(model)
+        adjusted_temperature = get_temperature_parameter(model, temperature)
+        request_params = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_message},
                 *prompt,
             ],
-            temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
-            n=1,
-            stop=None,
-            seed=0,
-        )
+            "temperature": adjusted_temperature,
+            "n": 1,
+            "stop": None,
+            "seed": 0,
+        }
+        request_params[token_param] = MAX_NUM_TOKENS
+
+        if response_format:
+            request_params["response_format"] = response_format
+
+        return client.chat.completions.create(**request_params)
     elif "o1" in model or "o3" in model:
         return client.chat.completions.create(
             model=model,
@@ -250,7 +309,7 @@ def make_llm_call(client, model, temperature, system_message, prompt):
             n=1,
             seed=0,
         )
-    
+
     else:
         raise ValueError(f"Model {model} not supported.")
 
@@ -272,6 +331,7 @@ def get_response_from_llm(
     print_debug=False,
     msg_history=None,
     temperature=0.7,
+    response_format=None,
 ) -> tuple[str, list[dict[str, Any]]]:
     msg = prompt
     if msg_history is None:
@@ -332,6 +392,7 @@ def get_response_from_llm(
             temperature,
             system_message=system_message,
             prompt=new_msg_history,
+            response_format=response_format,
         )
         content = response.choices[0].message.content
         new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
@@ -497,7 +558,9 @@ def create_client(model) -> tuple[Any, str]:
         ), model
     elif "gpt" in model:
         print(f"Using OpenAI API with model {model}.")
-        return openai.OpenAI(), model
+        return openai.OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY","")
+        ), model
     elif "o1" in model or "o3" in model:
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model

@@ -12,7 +12,18 @@ from ai_scientist.llm import (
     AVAILABLE_LLMS,
     create_client,
     get_response_from_llm,
+    AIScientistAction,
 )
+
+# Define structured output format for GPT models
+STRUCTURED_OUTPUT_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "ai_scientist_response",
+        "schema": AIScientistAction.model_json_schema(),
+        "strict": True
+    }
+}
 
 from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
 from ai_scientist.tools.base_tool import BaseTool
@@ -58,42 +69,53 @@ tool_names = [
 ]
 tool_names_str = ", ".join(tool_names)
 
-system_prompt = f"""You are an experienced AI researcher who aims to propose high-impact research ideas resembling exciting grant proposals. Feel free to propose any novel ideas or experiments; make sure they are novel. Be very creative and think out of the box. Each proposal should stem from a simple and elegant question, observation, or hypothesis about the topic. For example, they could involve very interesting and simple interventions or investigations that explore new possibilities or challenge existing assumptions. Clearly clarify how the proposal distinguishes from the existing literature.
+system_prompt = f"""You are an experienced computational biology researcher whose goal is to propose high-impact research ideas that could plausibly become strong papers in top computational biology, systems neuroscience, or quantitative biology venues.
 
-Ensure that the proposal does not require resources beyond what an academic lab could afford. These proposals should lead to papers that are publishable at top ML conferences.
+Constraints and capabilities:
+
+- You **must** work purely from:
+  - Published literature and data accessible via Semantic Scholar (through the provided tools),
+  - Publicly available datasets referenced in those works,
+  - Your own **mathematical / computational modeling, simulations, and re-analyses**.
+- You **do not** have access to:
+  - Wet-lab facilities,
+  - New animal or human experiments,
+  - Proprietary clinical datasets,
+  - Any data source beyond what can be inferred from published work accessed via Semantic Scholar.
+- Any empirical component must be limited to **re-analysis, meta-analysis, or in silico experiments** built on published results.
+
+Your task is to propose **novel, elegant, and computationally grounded** research ideas that:
+
+- Start from a simple, sharp question, observation, or hypothesis about a biological system (e.g., disease mechanisms, cellular energetics, signaling networks, population dynamics).
+- Leverage **existing publications and data** plus new modeling/analysis to challenge assumptions or reveal non-obvious structure (e.g., bifurcations, tipping points, phase transitions, scaling laws, or constraints).
+- Clearly explain how the proposal **differs from and extends** existing literature.
+- Are feasible for a  small, well-run **computational lab** with standard resources (CPUs, typical storage, no special hardware).
 
 You have access to the following tools:
 
 {tool_descriptions}
 
-Respond in the following format:
-
-ACTION:
-<The action to take, exactly one of {tool_names_str}>
-
-ARGUMENTS:
-<If ACTION is "SearchSemanticScholar", provide the search query as {{"query": "your search query"}}. If ACTION is "FinalizeIdea", provide the idea details as {{"idea": {{ ... }}}} with the IDEA JSON specified below.>
-
-If you choose to finalize your idea, provide the IDEA JSON in the arguments:
-
-IDEA JSON:
+RESPOND WITH A JSON OBJECT WITH THE FOLLOWING STRUCTURE:
 ```json
 {{
-  "idea": {{
-    "Name": "...",
-    "Title": "...",
-    "Short Hypothesis": "...",
-    "Related Work": "...",
-    "Abstract": "...",
-    "Experiments": "...",
-    "Risk Factors and Limitations": "..."
+  "action": "SearchSemanticScholar" | "FinalizeIdea",
+  "arguments": {{
+    "query": "<search query for SearchSemanticScholar>"
+  }} | {{
+    "idea": {{
+      "Name": "<short descriptor>",
+      "Title": "<catchy and informative title>",
+      "Short Hypothesis": "<concise statement>",
+      "Related Work": "<brief discussion of related work>",
+      "Abstract": "<conference format abstract>",
+      "Experiments": "<list of experiments>",
+      "Risk Factors and Limitations": "<list of risks and limitations>"
+    }}
   }}
 }}
 ```
 
-Ensure the JSON is properly formatted for automatic parsing.
-
-Note: You should perform at least one literature search before finalizing your idea to ensure it is well-informed by existing research."""
+IMPORTANT: Always respond with valid JSON that matches this exact structure. Do not include any explanatory text outside the JSON."""
 
 # Define the initial idea generation prompt
 idea_generation_prompt = """{workshop_description}
@@ -104,20 +126,29 @@ Here are the proposals that you have already generated:
 {prev_ideas_string}
 '''
 
-Begin by generating an interestingly new high-level research proposal that differs from what you have previously proposed.
+Begin by generating a **new** high-level computational biology research proposal that:
+- Differs meaningfully from what you previously proposed,
+- Can be executed with **literature-derived information + modeling/simulation only**,
+- Centers on a clear, elegant hypothesis about a biological system (e.g., neuronal energetics, disease tipping points, signaling networks, evolutionary dynamics),
+- And explicitly leverages **published data or reported summary statistics** together with new modeling.
 """
 
 # Define the reflection prompt
 idea_reflection_prompt = """Round {current_round}/{num_reflections}.
 
-In your thoughts, first carefully consider the quality, novelty, and feasibility of the proposal you just created.
-Include any other factors that you think are important in evaluating the proposal.
-Ensure the proposal is clear and concise, and the JSON is in the correct format.
-Do not make things overly complicated.
-In the next attempt, try to refine and improve your proposal.
-Stick to the spirit of the original idea unless there are glaring issues.
+In your thoughts, carefully evaluate the **computational biology** proposal you just created:
 
-If you have new information from tools, such as literature search results, incorporate them into your reflection and refine your proposal accordingly.
+- Is the core hypothesis clear, sharp, and testable **using only published data + new modeling/simulation**?
+- Is the idea genuinely **novel** relative to the literature you have seen (via Semantic Scholar)?
+- Is it feasible for a small computational lab (no wet-lab, no proprietary datasets)?
+- Are the proposed “Experiments” strictly computational (re-analysis, meta-analysis, simulations, model fitting, parameter sweeps, bifurcation analysis, etc.)?
+- Are the idea name, title, and abstract concise and coherent?
+- Is the IDEA JSON correctly formatted?
+
+If there are weaknesses (e.g., unclear novelty, missing data sources, unrealistic modeling requirements), note them explicitly and plan how to fix them in the next attempt.
+Do not make things unnecessarily complicated; prefer **simple, elegant models and questions** with high explanatory power.
+
+If you have new information from tools (e.g., Semantic Scholar search results), incorporate it into your reflection and refine the proposal accordingly.
 
 Results from your last action (if any):
 
@@ -176,76 +207,55 @@ def generate_temp_free_idea(
                     model=model,
                     system_message=system_prompt,
                     msg_history=msg_history,
+                    response_format=STRUCTURED_OUTPUT_FORMAT if "gpt" in model else None,
                 )
 
-                # Parse the LLM's response
+                # Parse the structured JSON response
+                response_json = None
                 try:
-                    # Use regular expressions to extract the components
-                    action_pattern = r"ACTION:\s*(.*?)\s*ARGUMENTS:"
-                    arguments_pattern = r"ARGUMENTS:\s*(.*?)(?:$|\nTHOUGHT:|\n$)"
+                    # Parse the JSON response
+                    response_json = json.loads(response_text.strip())
 
-                    action_match = re.search(
-                        action_pattern, response_text, re.DOTALL | re.IGNORECASE
-                    )
-                    arguments_match = re.search(
-                        arguments_pattern, response_text, re.DOTALL | re.IGNORECASE
-                    )
-
-                    if not all([action_match, arguments_match]):
-                        raise ValueError("Failed to parse the LLM response.")
-
-                    action = action_match.group(1).strip()
-                    arguments_text = arguments_match.group(1).strip()
+                    # Validate the response structure
+                    action = response_json["action"]
+                    arguments = response_json["arguments"]
                     print(f"Action: {action}")
-                    print(f"Arguments: {arguments_text}")
-
-                    # If arguments are wrapped in ```json blocks, extract the content
-                    if arguments_text.startswith("```json"):
-                        arguments_text = re.search(
-                            r"```json\s*(.*?)\s*```", arguments_text, re.DOTALL
-                        ).group(1)
+                    print(f"Arguments: {arguments}")
 
                     # Process the action and arguments
                     if action in tools_dict:
                         # It's a tool we have defined
                         tool = tools_dict[action]
-                        # Parse arguments
+                        # Use the tool with arguments
                         try:
-                            arguments_json = json.loads(arguments_text)
-                        except json.JSONDecodeError:
-                            raise ValueError(f"Invalid arguments JSON for {action}.")
-
-                        # Use the tool
-                        try:
-                            # Assuming the arguments match the parameters of the tool
-                            result = tool.use_tool(**arguments_json)
+                            result = tool.use_tool(**arguments)
                             last_tool_results = result
                         except Exception as e:
                             last_tool_results = f"Error using tool {action}: {str(e)}"
                     elif action == "FinalizeIdea":
-                        # Parse arguments
-                        try:
-                            arguments_json = json.loads(arguments_text)
-                            idea = arguments_json.get("idea")
-                            if not idea:
-                                raise ValueError("Missing 'idea' in arguments.")
+                        # Get the idea from arguments
+                        idea = arguments.get("idea")
+                        if not idea:
+                            raise ValueError("Missing 'idea' in arguments.")
 
-                            # Append the idea to the archive
-                            idea_str_archive.append(json.dumps(idea))
-                            print(f"Proposal finalized: {idea}")
-                            idea_finalized = True
-                            break
-                        except json.JSONDecodeError:
-                            raise ValueError("Invalid arguments JSON for FinalizeIdea.")
+                        # Append the idea to the archive
+                        idea_str_archive.append(json.dumps(idea))
+                        print(f"Proposal finalized: {idea}")
+                        idea_finalized = True
+                        break
                     else:
-                        print(
-                            "Invalid action. Please specify one of the available tools."
-                        )
+                        print(f"Invalid action: {action}")
                         print(f"Available actions are: {tool_names_str}")
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse JSON response: {e}")
+                    print(f"Response text was:\n{response_text}")
+                    break
+                except KeyError as e:
+                    print(f"Missing required field in response: {e}")
+                    print(f"Response JSON was: {response_json}")
+                    break
                 except Exception as e:
-                    print(
-                        f"Failed to parse LLM response. Response text:\n{response_text}"
-                    )
+                    print(f"Failed to process LLM response: {e}")
                     traceback.print_exc()
                     break  # Exit the loop if parsing fails
 
@@ -273,7 +283,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5-mini-2025-08-07",
         choices=AVAILABLE_LLMS,
         help="Model to use for AI Scientist.",
     )

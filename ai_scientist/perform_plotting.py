@@ -18,7 +18,7 @@ from ai_scientist.perform_icbinb_writeup import (
 
 MAX_FIGURES = 12
 
-AGGREGATOR_SYSTEM_MSG = f"""You are an ambitious AI researcher who is preparing final plots for a scientific paper submission.
+AGGREGATOR_SYSTEM_MSG = f"""You are an ambitious computational biology researcher who is preparing final plots for a scientific paper submission.
 You have multiple experiment summaries (baseline, research, ablation), each possibly containing references to different plots or numerical insights.
 There is also a top-level 'research_idea.md' file that outlines the overarching research direction.
 Your job is to produce ONE Python script that fully aggregates and visualizes the final results for a comprehensive research paper.

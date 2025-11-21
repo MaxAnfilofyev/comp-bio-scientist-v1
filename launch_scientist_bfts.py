@@ -2,12 +2,20 @@ import os.path as osp
 import json
 import argparse
 import shutil
-import torch
 import os
 import re
 import sys
+import subprocess
 from datetime import datetime
 from ai_scientist.llm import create_client
+
+# Optional PyTorch import - only required for GPU acceleration
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+    print("PyTorch not found - running in CPU-only mode. GPU acceleration is not available.")
 
 from contextlib import contextmanager
 from ai_scientist.treesearch.perform_experiments_bfts_with_agentmanager import (
@@ -18,6 +26,7 @@ from ai_scientist.treesearch.bfts_utils import (
     edit_bfts_config_file,
 )
 from ai_scientist.perform_plotting import aggregate_plots
+from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_icbinb_writeup import (
     perform_writeup as perform_icbinb_writeup,
@@ -45,14 +54,15 @@ def parse_arguments():
         "--writeup-type",
         type=str,
         default="icbinb",
-        choices=["normal", "icbinb"],
-        help="Type of writeup to generate (normal=8 page, icbinb=4 page)",
+        choices=["normal", "icbinb", "bioinformatics", "theoretical_biology"],
+        help="Type of writeup to generate (normal=8 page, icbinb=4 page, bioinformatics=biological template, theoretical_biology=theoretical computational biology pipeline)",
     )
     parser.add_argument(
-        "--load_ideas",
+        "--research-type",
         type=str,
-        default="ideas/i_cant_believe_its_not_better.json",
-        help="Path to a JSON file containing pregenerated ideas",
+        default="applied",
+        choices=["applied", "theoretical"],
+        help="Type of computational biology research (applied=bioinformatics, theoretical=mathematical biology modeling)",
     )
     parser.add_argument(
         "--load_code",
@@ -85,19 +95,19 @@ def parse_arguments():
     parser.add_argument(
         "--model_agg_plots",
         type=str,
-        default="o3-mini-2025-01-31",
+        default="gpt-5.1-2025-11-13",
         help="Model to use for plot aggregation",
     )
     parser.add_argument(
         "--model_writeup",
         type=str,
-        default="o1-preview-2024-09-12",
+        default="gpt-5.1-2025-11-13",
         help="Model to use for writeup",
     )
     parser.add_argument(
         "--model_citation",
         type=str,
-        default="gpt-4o-2024-11-20",
+        default="gpt-5.1-2025-11-13",
         help="Model to use for citation gathering",
     )
     parser.add_argument(
@@ -109,13 +119,13 @@ def parse_arguments():
     parser.add_argument(
         "--model_writeup_small",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5.1-2025-11-133",
         help="Smaller model to use for writeup",
     )
     parser.add_argument(
         "--model_review",
         type=str,
-        default="gpt-4o-2024-11-20",
+        default="gpt-5.1-2025-11-13",
         help="Model to use for review main text and captions",
     )
     parser.add_argument(
@@ -134,7 +144,41 @@ def parse_arguments():
 def get_available_gpus(gpu_ids=None):
     if gpu_ids is not None:
         return [int(gpu_id) for gpu_id in gpu_ids.split(",")]
-    return list(range(torch.cuda.device_count()))
+
+    # Try PyTorch first if available
+    if HAS_TORCH:
+        try:
+            return list(range(torch.cuda.device_count()))
+        except Exception as e:
+            print(f"PyTorch GPU detection failed: {e}")
+
+    # Fallback to system-level GPU detection
+    try:
+        # Try using nvidia-smi
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            gpu_lines = result.stdout.strip().split('\n')
+            # Filter out empty lines and "No devices were found" messages
+            gpu_count = len([line for line in gpu_lines if line.strip() and "No devices were found" not in line])
+            return list(range(gpu_count))
+    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Check environment variable CUDA_VISIBLE_DEVICES
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cuda_visible and cuda_visible != "NoDevFiles":
+        # Parse devices (handle comma-separated list, filter out -1)
+        devices = [d.strip() for d in cuda_visible.split(",") if d.strip() and d.strip() != "-1"]
+        return list(range(len(devices)))
+
+    # No GPUs detected - return empty list for CPU-only mode
+    return []
 
 
 def find_pdf_path_for_review(idea_dir):
@@ -194,6 +238,51 @@ if __name__ == "__main__":
 
     idea = ideas[args.idea_idx]
 
+    # Configure biology overrides for this idea/config
+    biology_overrides = {
+        "research_type": args.research_type,
+    }
+
+    # Infer biological domain and modeling framework for theoretical projects
+    try:
+        name_lower = str(idea.get("Name", "")).lower()
+        title_lower = str(idea.get("Title", "")).lower()
+        code_str = str(idea.get("Code", ""))
+    except Exception:
+        name_lower, title_lower, code_str = "", "", ""
+
+    domain = "unspecified"
+    framework = "unspecified"
+    eval_focus = "unspecified"
+    targets = {}
+
+    if args.research_type == "theoretical":
+        # Simple heuristics for domain/framework based on idea metadata and code
+        if "cooperation" in name_lower or "cooperation" in title_lower:
+            domain = "evolutionary_dynamics"
+            eval_focus = "persistence_of_cooperation"
+            targets = {
+                "primary_quantity": "frequency_of_cooperators",
+                "secondary_quantities": ["equilibria", "stability_classification"],
+            }
+
+        if "EvolutionaryModels.cooperation_model" in code_str or "GameTheoryModel" in code_str:
+            framework = "game_theory"
+        elif "DifferentialEquationModel" in code_str:
+            framework = "differential_equation"
+        elif "AgentBasedModel" in code_str:
+            framework = "agent_based"
+
+    if domain != "unspecified":
+        biology_overrides["domain"] = domain
+    if framework != "unspecified":
+        biology_overrides.setdefault("modeling", {})
+        biology_overrides["modeling"]["framework"] = framework
+    if eval_focus != "unspecified":
+        biology_overrides["eval_focus"] = eval_focus
+    if targets:
+        biology_overrides["targets"] = targets
+
     date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     idea_dir = f"experiments/{date}_{idea['Name']}_attempt_{args.attempt_id}"
     print(f"Results will be saved in {idea_dir}")
@@ -214,7 +303,7 @@ if __name__ == "__main__":
     else:
         code_path = None
 
-    idea_to_markdown(ideas[args.idea_idx], idea_path_md, code_path)
+    idea_to_markdown(ideas[args.idea_idx], idea_path_md, code_path or "")
 
     dataset_ref_code = None
     if args.add_dataset_ref:
@@ -251,8 +340,10 @@ if __name__ == "__main__":
         config_path,
         idea_dir,
         idea_path_json,
+        biology_overrides=biology_overrides,
     )
 
+    # Run the main experiment search
     perform_experiments_bfts(idea_config_path)
     experiment_results_dir = osp.join(idea_dir, "logs/0-run/experiment_results")
     if os.path.exists(experiment_results_dir):
@@ -262,7 +353,12 @@ if __name__ == "__main__":
             dirs_exist_ok=True,
         )
 
+    # Aggregate plots and then run a dedicated mathematical–biological interpretation phase
     aggregate_plots(base_folder=idea_dir, model=args.model_agg_plots)
+    interpret_biological_results(
+        base_folder=idea_dir,
+        config_path=idea_config_path,
+    )
 
     shutil.rmtree(osp.join(idea_dir, "experiment_results"))
 
@@ -284,6 +380,26 @@ if __name__ == "__main__":
                     big_model=args.model_writeup,
                     page_limit=8,
                     citations_text=citations_text,
+                )
+            elif args.writeup_type == "bioinformatics":
+                # Use bioinformatics-specific writeup for biological research
+                writeup_success = perform_icbinb_writeup(
+                    base_folder=idea_dir,
+                    small_model=args.model_writeup_small,
+                    big_model=args.model_writeup,
+                    page_limit=4,
+                    citations_text=citations_text,
+                    template_dir="ai_scientist/blank_bioinformatics_latex",
+                )
+            elif args.writeup_type == "theoretical_biology":
+                # Use theoretical biology pipeline with enhanced mathematical modeling
+                writeup_success = perform_icbinb_writeup(
+                    base_folder=idea_dir,
+                    small_model=args.model_writeup_small,
+                    big_model=args.model_writeup,
+                    page_limit=6,  # Longer for theoretical work
+                    citations_text=citations_text,
+                    template_dir="ai_scientist/blank_theoretical_biology_latex",
                 )
             else:
                 writeup_success = perform_icbinb_writeup(

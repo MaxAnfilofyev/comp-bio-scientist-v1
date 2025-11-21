@@ -1,0 +1,355 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2025,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{booktabs}
+
+% For theorems and such
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+% Custom
+\usepackage{multirow}
+\usepackage{color}
+\usepackage{colortbl}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage{xspace}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\graphicspath{{../figures/}} % To reference your generated figures, name the PNGs directly. DO NOT CHANGE THIS.
+
+\begin{filecontents}{references.bib}
+@book{goodfellow2016deep,
+  title={Deep learning},
+  author={Goodfellow, Ian and Bengio, Yoshua and Courville, Aaron and Bengio, Yoshua},
+  volume={1},
+  year={2016},
+  publisher={MIT Press}
+}
+% Theoretical computational biology references
+@inproceedings{smith1982evolution,
+  title={Evolution and the theory of games},
+  author={Smith, John Maynard},
+  booktitle={Cambridge University Press},
+  year={1982}
+}
+@inproceedings{nowak1994evolving,
+  title={Spatial games and the evolution of cooperation},
+  author={Nowak, Martin A and May, Robert M},
+  booktitle={Proceedings of the National Academy of Sciences},
+  volume={91},
+  number={11},
+  pages={4877--4881},
+  year={1994},
+  publisher={National Acad Sciences}
+}
+\end{filecontents}
+
+\title{
+%%%%%%%%%TITLE%%%%%%%%%
+TITLE HERE
+%%%%%%%%%TITLE%%%%%%%%%
+}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+
+\author{Anonymous}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+%%%%%%%%%ABSTRACT%%%%%%%%%
+This paper develops a mathematical model to investigate fundamental questions in theoretical computational biology. We formulate [biological question] and construct a computational framework that captures essential aspects of [biological system].
+
+Using [mathematical approach, e.g., differential equations, game theory, stochastic processes, agent-based modeling], we explore how [key biological mechanisms] give rise to [observed biological phenomena]. Our simulations reveal [key findings about biological dynamics/evolution/stability].
+
+This work provides theoretical insights into [biological domain] and generates testable predictions that can guide future experimental studies. The mathematical framework developed here establishes a foundation for understanding [broader biological implications].
+
+\textbf{Keywords:} theoretical computational biology, mathematical modeling, evolutionary dynamics, game theory, systems biology
+%%%%%%%%%ABSTRACT%%%%%%%%%
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+%%%%%%%%%INTRODUCTION%%%%%%%%%
+The field of theoretical computational biology bridges mathematical modeling with biological insight to address fundamental questions that are difficult or impossible to investigate through experimentation alone. This work develops a computational framework to understand [specific biological phenomenon or question].
+
+\subsection{Biological Question}
+What evolutionary and mechanistic principles allow [specific biological behavior/trait/system] to emerge and persist? This question lies at the intersection of [relevant biological subfields, e.g., evolutionary biology, systems biology, molecular biology].
+
+\subsection{Computational Approach}
+We employ [mathematical modeling framework, e.g., population genetics models, game theoretic approaches, dynamical systems, network theory] to capture the essential dynamics of [biological system]. Unlike purely descriptive models, our approach provides mechanistic explanations and generates testable predictions.
+
+Key contributions:
+\begin{itemize}
+    \item Rigorous mathematical formulation of [biological question]
+    \item Computational simulations revealing [key insights]
+    \item Theoretical predictions amenable to experimental validation
+    \item Framework extensible to related biological questions
+\end{itemize}
+%%%%%%%%%INTRODUCTION%%%%%%%%%
+
+\section{Background and Theoretical Framework}
+\label{sec:background}
+%%%%%%%%%BACKGROUND%%%%%%%%%
+\subsection{Biological Context}
+
+Understanding [biological system/process] requires considering [key biological principles, constraints, evolutionary pressures]. The complexity arises from [describe key challenges in understanding this biological system].
+
+\subsection{Mathematical Framework}
+
+We model the system using [specific mathematical approach]:
+\begin{itemize}
+    \item \textbf{Variables}: [Define key variables quantifying biological states]
+    \item \textbf{Parameters}: [Define parameters representing biological constraints/rates/interactions]
+    \item \textbf{Dynamics}: [Specify how variables change over time/space]
+    \item \textbf{Assumptions}: [Explicitly state simplifying assumptions and their justifications]
+\end{itemize}
+
+\subsection{Relationship to Existing Theory}
+
+Our approach builds on [established theoretical frameworks] while addressing [specific gaps or novel aspects]. Previous work has [summarize key insights and limitations from related theoretical studies].
+%%%%%%%%%BACKGROUND%%%%%%%%%
+
+\section{Computational Model}
+\label{sec:method}
+%%%%%%%%%METHOD%%%%%%%%%
+\subsection{Mathematical Formulation}
+
+We formulate the biological system as follows:
+
+\textbf{Governing Equations:}
+\begin{align}
+\frac{d x}{dt} &= f(x, y, \mathbf{p}) \label{eq:dynamics}\\
+\frac{d y}{dt} &= g(x, y, \mathbf{p}) \label{eq:interactions}
+\end{align}
+
+where $x(t)$ and $y(t)$ represent [biological quantities, e.g., population frequencies, molecular concentrations], and $\mathbf{p}$ denotes the parameter vector.
+
+\textbf{Equilibrium and Stability Analysis:}
+At steady state, the system satisfies [equilibrium conditions]. Stability is determined by [eigenvalue analysis or other stability criteria].
+
+\subsection{Computational Implementation}
+
+The mathematical model is implemented computationally using [software/platform]. We employ [numerical methods, e.g., ODE solvers, Monte Carlo simulation, agent-based frameworks] to explore the model's behavior across parameter space.
+
+\textbf{Simulation Protocol:}
+\begin{enumerate}
+    \item Initialize system with [initial conditions reflecting biological starting state]
+    \item Evolve dynamics using [integration method] over [time/space scales]
+    \item Record [quantities of interest for biological interpretation]
+    \item Repeat across [parameter ranges relevant to biological scenarios]
+\end{enumerate}
+
+\subsection{Statistical Analysis Framework}
+
+Following best practices for computational biology, we analyze simulation outputs using:
+\begin{itemize}
+    \item Sensitivity analysis to identify parameters controlling [biological outcome]
+    \item Robustness analysis across [biological relevant parameter ranges]
+    \item Statistical comparison of [different biological scenarios or hypotheses]
+\end{itemize}
+%%%%%%%%%METHOD%%%%%%%%%
+
+\section{Computational Experiments}
+\label{sec:experiments}
+%%%%%%%%%EXPERIMENTS%%%%%%%%%
+\subsection{Model Validation}
+
+We validate the computational model against:
+\begin{itemize}
+    \item Analytical results for simplified cases
+    \item Known biological behaviors from experimental literature
+    \item Qualitative predictions of theoretical expectations
+\end{itemize}
+
+\subsection{Exploration of Parameter Space}
+
+The computational framework enables systematic investigation of how [biological outcome] depends on [key parameters]. We perform extensive simulations across [parameter ranges informed by biological data/expectations].
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.8\textwidth]{parameter_sweep}
+\caption{Phase diagram showing [biological outcome] as a function of [key parameters]. Regions correspond to [different biological regimes].}
+\label{fig:phase_diagram}
+\end{figure}
+
+\subsection{Key Findings}
+
+Our simulations reveal:
+
+\textbf{Finding 1:} [Specific quantitative result about biological behavior]
+\begin{table}[ht]
+\caption{Dependence of [biological quantity] on [parameter]}
+\label{tab:key_results}
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Parameter Value & Biological Outcome & Statistical Significance & Biological Interpretation \\
+\midrule
+Low & [Result] & [p-value] & [Interpretation] \\
+Medium & [Result] & [p-value] & [Interpretation] \\
+High & [Result] & [p-value] & [Interpretation] \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\textbf{Finding 2:} [Additional key insight]
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.8\textwidth]{dynamics_plot}
+\caption{Time evolution of [biological quantities] under [conditions]. The model predicts [biological insight].}
+\label{fig:dynamics}
+\end{figure}
+%%%%%%%%%EXPERIMENTS%%%%%%%%%
+
+\section{Biological Interpretation and Predictions}
+\label{sec:interpretation}
+%%%%%%%%%INTERPRETATION%%%%%%%%%
+\subsection{Translation to Biology}
+
+Our computational results provide insights into [biological mechanism/process]:
+
+\textbf{Interpretation 1:} The observed [mathematical behavior] corresponds to [biological phenomenon], indicating that [biological mechanism] is sufficient to explain [observed biology].
+
+\textbf{Interpretation 2:} The parameter dependence suggests that [biological constraint] plays a critical role in determining [biological outcome].
+
+\subsection{Testable Predictions}
+
+The mathematical framework generates specific predictions for experimental validation:
+
+\begin{enumerate}
+    \item \textbf{Prediction 1:} [Quantitative prediction about biological system behavior]
+    \item \textbf{Prediction 2:} [Qualitative prediction about biological mechanism]
+    \item \textbf{Prediction 3:} [Prediction about response to perturbations]
+\end{enumerate}
+
+\subsection{Comparison with Alternative Hypotheses}
+
+Our model provides a [better/worse] explanation than [alternative models] because [specific advantages, e.g., mechanistic detail, quantitative accuracy, broader applicability].
+%%%%%%%%%INTERPRETATION%%%%%%%%%
+
+\section{Discussion}
+\label{sec:discussion}
+%%%%%%%%%DISCUSSION%%%%%%%%%
+\subsection{Significance for Biology}
+
+This work advances our theoretical understanding of [biological system/domain] by demonstrating how [mathematical principles] can give rise to [biological phenomena]. The computational approach reveals [insights that would be difficult to obtain experimentally].
+
+\subsection{Relationship to Experiment}
+
+Our theoretical predictions suggest new experimental directions in [biological subfield]. Specifically, testing [prediction] would validate or refute [aspect of the model], advancing both theoretical and experimental biology.
+
+\subsection{Limitations}
+
+The current model makes simplifying assumptions about [biological complexities not captured]. Future work should address [extensions to make model more biologically realistic].
+
+\subsection{Future Directions}
+
+The mathematical framework established here can be extended to:
+\begin{itemize}
+    \item Incorporate [additional biological details, e.g., spatial structure, molecular noise]
+    \item Address related questions in [broader biological context]
+    \item Guide experimental design for testing theoretical predictions
+\end{itemize}
+%%%%%%%%%DISCUSSION%%%%%%%%%
+
+\section{Conclusion}
+\label{sec:conclusion}
+%%%%%%%%%CONCLUSION%%%%%%%%%
+We developed a comprehensive mathematical model to investigate [biological question] through the lens of theoretical computational biology. Our computational approach successfully captured [key biological phenomena] and provided mechanistic insights into [biological mechanisms].
+
+The framework generated specific quantitative predictions that can be experimentally tested, establishing a bridge between theoretical modeling and empirical biology. This work demonstrates the power of combining rigorous mathematics with computational exploration to advance our fundamental understanding of living systems.
+%%%%%%%%%CONCLUSION%%%%%%%%%
+
+\bibliography{references}
+\bibliographystyle{iclr2025}
+
+\appendix
+
+\section*{\LARGE Supplementary Material}
+\label{sec:appendix}
+
+%%%%%%%%%APPENDIX%%%%%%%%%
+\section{Mathematical Derivations}
+\label{app:math}
+
+Detailed derivation of [key equations/results].
+
+\textbf{Equilibrium Analysis:}
+[Mathematical analysis of steady states]
+
+\textbf{Stability Conditions:}
+[Linear stability analysis]
+
+\textbf{Parameter Sensitivity:}
+[Mathematical sensitivity analysis]
+
+\section{Computational Details}
+\label{app:computation}
+
+\subsection{Implementation}
+Code implementation using [language/libraries]. Available at [repository link if applicable].
+
+\subsection{Hyperparameters and Numerical Methods}
+\begin{itemize}
+    \item Integration method: [ODE solver specifications]
+    \item Time step: [numerical values]
+    \item Convergence criteria: [stopping conditions]
+    \item Random seeds: [for reproducibility]
+\end{itemize}
+
+\subsection{Computational Resources}
+All simulations were performed on [hardware specifications] with total computation time of [estimated runtime].
+
+\section{Additional Results}
+\label{app:results}
+
+Supplementary figures showing [additional parameter sweeps, robustness analyses, etc.].
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.8\textwidth]{supp_figure1}
+\caption{Additional analysis of [biological quantity] under [conditions].}
+\label{fig:supp1}
+\end{figure}
+
+\section{Parameter Ranges and Biological Justification}
+\label{app:parameters}
+
+Detailed justification for parameter ranges used in simulations, based on [experimental data, theoretical expectations, biological literature].
+%%%%%%%%%APPENDIX%%%%%%%%%
+
+\end{document}

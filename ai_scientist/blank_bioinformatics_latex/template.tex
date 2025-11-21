@@ -1,0 +1,303 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2025,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{booktabs}
+
+% For theorems and such
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+% Custom
+\usepackage{multirow}
+\usepackage{color}
+\usepackage{colortbl}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage{xspace}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\graphicspath{{../figures/}} % To reference your generated figures, name the PNGs directly. DO NOT CHANGE THIS.
+
+\begin{filecontents}{references.bib}
+@book{goodfellow2016deep,
+  title={Deep learning},
+  author={Goodfellow, Ian and Bengio, Yoshua and Courville, Aaron and Bengio, Yoshua},
+  volume={1},
+  year={2016},
+  publisher={MIT Press}
+}
+% Add biological references
+@inproceedings{alphafold2021,
+  title={Highly accurate protein structure prediction with AlphaFold},
+  author={Jumper, John and Evans, Richard and Pritzel, Alexander and Green, Tim and Figurnov, Michael and Ronneberger, Olaf and Tunyasuvunakool, Kathryn and Bates, Russ and {\v{Z}}{\'i}dek, Augustin and Potapenko, Anna and others},
+  booktitle={Nature},
+  volume={596},
+  number={7873},
+  pages={583--589},
+  year={2021},
+  publisher={Nature Publishing Group}
+}
+\end{filecontents}
+
+\title{
+%%%%%%%%%TITLE%%%%%%%%%
+TITLE HERE
+%%%%%%%%%TITLE%%%%%%%%%
+}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+
+\author{Anonymous}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+%%%%%%%%%ABSTRACT%%%%%%%%%
+This paper presents a computational approach to understanding biological systems. Our method addresses key challenges in areas such as protein structure prediction, drug-target interactions, gene expression analysis, or systems biology modeling.
+
+\textbf{Keywords:} computational biology, machine learning, biological modeling
+%%%%%%%%%ABSTRACT%%%%%%%%%
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+%%%%%%%%%INTRODUCTION%%%%%%%%%
+Computational biology leverages machine learning and computational methods to understand biological systems and processes. This work explores novel approaches to [biological problem domain].
+
+Key contributions include:
+\begin{itemize}
+    \item Novel computational method for [specific biological problem]
+    \item Rigorous evaluation on relevant biological benchmarks
+    \item Insights into underlying biological mechanisms
+    \item Potential applications in drug discovery or biological research
+\end{itemize}
+%%%%%%%%%INTRODUCTION%%%%%%%%%
+
+\section{Related Work}
+\label{sec:related_work}
+%%%%%%%%%RELATED WORK%%%%%%%%%
+\subsection{Machine Learning in Computational Biology}
+
+Deep learning has revolutionized many areas of computational biology including protein structure prediction \citep{alphafold2021}, drug discovery \citep{drug_discovery_2021}, and gene expression analysis.
+
+\subsection{Methodological Approaches}
+
+Previous work has explored various computational approaches for similar biological problems, demonstrating the value of integrating domain knowledge with modern machine learning techniques.
+
+\subsection{Biological Benchmarks and Evaluation}
+
+Standard biological benchmarks and evaluation protocols have been established for [relevant biological domain], providing standardized evaluation frameworks.
+%%%%%%%%%RELATED WORK%%%%%%%%%
+
+\section{Background and Biological Context}
+\label{sec:background}
+%%%%%%%%%BACKGROUND%%%%%%%%%
+\subsection{Biological Problem Formulation}
+
+[Specific biological problem and its scientific context]
+
+\subsection{Computational Challenges}
+
+Key computational challenges in [biological domain] include:
+\begin{itemize}
+    \item Complex biological relationships and interactions
+    \item Limited availability of high-quality biological data
+    \item Need for interpretability and biological plausibility
+    \item Computational scalability for large biological datasets
+\end{itemize}
+
+\subsection{Existing Approaches}
+
+Current approaches to [biological problem] typically rely on [describe standard approaches].
+%%%%%%%%%BACKGROUND%%%%%%%%%
+
+\section{Method}
+\label{sec:method}
+%%%%%%%%%METHOD%%%%%%%%%
+\subsection{Problem Definition}
+
+We formulate [biological problem] as [computational formulation].
+
+\subsection{Model Architecture}
+
+Our proposed method consists of [describe architecture components].
+
+\subsubsection{Biological Constraints and Priors}
+
+To ensure biological plausibility, we incorporate [domain-specific constraints].
+
+\subsubsection{Training Strategy}
+
+We employ [training approach] optimized for biological data characteristics.
+
+\subsection{Implementation Details}
+
+The method is implemented using [software stack]. We utilize biological databases such as [relevant databases] and leverage domain-specific preprocessing techniques.
+%%%%%%%%%METHOD%%%%%%%%%
+
+\section{Experimental Setup}
+\label{sec:experimental_setup}
+%%%%%%%%%EXPERIMENTAL SETUP%%%%%%%%%
+\subsection{Datasets}
+
+We evaluate our method on standard biological benchmarks including:
+\begin{itemize}
+    \item [Dataset 1]: [Description and biological relevance]
+    \item [Dataset 2]: [Description and biological relevance]
+\end{itemize}
+
+\subsection{Baseline Methods}
+
+We compare against established methods in computational biology:
+\begin{itemize}
+    \item [Baseline 1]: [Brief description]
+    \item [Baseline 2]: [Brief description]
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+
+Following biological evaluation conventions, we use [primary metric] as our main evaluation criterion, supplemented by [secondary metrics].
+
+\subsection{Experimental Protocol}
+
+All experiments follow rigorous cross-validation procedures appropriate for biological data. Results are reported with statistical significance testing where applicable.
+%%%%%%%%%EXPERIMENTAL SETUP%%%%%%%%%
+
+\section{Results}
+\label{sec:experiments}
+%%%%%%%%%EXPERIMENTS%%%%%%%%%
+\subsection{Main Results}
+
+Our method achieves state-of-the-art performance on key biological benchmarks.
+
+\begin{table}[ht]
+\caption{Performance comparison on biological benchmarks}
+\label{tab:main_results}
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Method & Primary Metric & Secondary Metric & Biological Relevance \\
+\midrule
+Our Method & \textbf{[Best Value]} & [Value] & [Biological interpretation] \\
+Baseline 1 & [Value] & [Value] & [Biological interpretation] \\
+Baseline 2 & [Value] & [Value] & [Biological interpretation] \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\subsection{Analysis by Biological Subtype}
+
+Performance varies across different biological subtypes, indicating that our method captures biologically relevant patterns.
+
+\subsection{Ablation Studies}
+
+Ablation experiments demonstrate the importance of incorporating biological domain knowledge.
+
+% EXAMPLE FIGURE: REPLACE AND ADD YOUR OWN FIGURES / CAPTIONS
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.8\textwidth]{example-image-a}
+\caption{Biological analysis visualization. [Detailed description of biological insights]}
+\label{fig:biological_analysis}
+\end{figure}
+
+\subsection{Statistical Validation}
+
+We perform statistical tests to confirm the significance of our results, following biological data analysis best practices.
+%%%%%%%%%EXPERIMENTS%%%%%%%%%
+
+\section{Discussion}
+\label{sec:discussion}
+%%%%%%%%%DISCUSSION%%%%%%%%%
+\subsection{Biological Insights}
+
+Our model provides novel insights into [biological phenomena].
+
+\subsection{Computational Advantages}
+
+The method demonstrates improved computational efficiency and scalability for biological applications.
+
+\subsection{Limitations and Future Work}
+
+While promising, our approach has limitations including [describe limitations]. Future work will explore [potential extensions].
+
+\subsection{Biological Implications}
+
+This work contributes to the broader goal of understanding biological systems through computational methods.
+%%%%%%%%%DISCUSSION%%%%%%%%%
+
+\section{Conclusion}
+\label{sec:conclusion}
+%%%%%%%%%CONCLUSION%%%%%%%%%
+We presented a novel computational approach to [biological problem] that demonstrates [key achievements]. Our method achieves [quantitative results] while providing [qualitative biological insights].
+
+The integration of domain knowledge with modern deep learning techniques opens new avenues for computational biology research and applications in drug discovery and biological understanding.
+%%%%%%%%%CONCLUSION%%%%%%%%%
+
+\bibliography{references}
+\bibliographystyle{iclr2025}
+
+\appendix
+
+\section*{\LARGE Supplementary Material}
+\label{sec:appendix}
+
+%%%%%%%%%APPENDIX%%%%%%%%%
+\section{Additional Experimental Details}
+\label{app:experimental_details}
+
+Detailed experimental protocols, hyperparameter settings, and additional results are provided here.
+
+\section{Dataset Descriptions}
+\label{app:data_description}
+
+Complete descriptions of all biological datasets used in this study.
+
+\section{Software Implementation}
+\label{app:implementation}
+
+Full implementation details and software dependencies.
+
+\section{Computational Resources}
+\label{app:resources}
+
+Information about computational resources and runtime requirements.
+
+\section{Additional Figures and Tables}
+\label{app:figures}
+
+Supplementary visualizations and detailed results tables.
+%%%%%%%%%APPENDIX%%%%%%%%%
+
+\end{document}

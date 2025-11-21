@@ -57,6 +57,21 @@ class TokenTracker:
                 "cached": 0.55 / 1000000,  # $0.55 per 1M tokens
                 "completion": 4.4 / 1000000,  # $4.40 per 1M tokens
             },
+            "gpt-5.1-2025-11-13": {
+                "prompt": 1.25 / 1000000,  # $3.00 per 1M tokens
+                "cached": 0.125 / 1000000,  # $1.50 per 1M tokens
+                "completion": 10.0 / 1000000,  # $12.00 per 1M tokens
+                },
+            "gpt-5-mini-2025-08-07": {
+                "prompt": 0.25 / 1000000,  # $1.20 per 1M tokens
+                "cached": 0.025 / 1000000,  # $0.60 per 1M tokens
+                "completion": 2.0 / 1000000,  # $4.80 per 1M tokens
+            },
+            "gpt-5-nano-2025-08-07": {
+                "prompt": 0.05 / 1000000,  # $0.50 per 1M tokens
+                "cached": 0.005 / 1000000,  # $0.25 per 1M tokens
+                "completion": 0.4 / 1000000,  # $2.00 per 1M tokens
+            },
         }
 
     def add_tokens(

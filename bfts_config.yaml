@@ -2,8 +2,39 @@
 data_dir: "data"
 preprocess_data: False
 
-goal: null
-eval: null
+# Biological research goals - focus on computational biology discoveries
+goal: "Develop computational methods to understand biological systems. Investigate questions about molecular mechanisms, disease processes, drug discovery, evolutionary biology, and systems-level biological understanding."
+eval: "biological_discovery"
+
+biology:
+  research_type: "applied"        # "applied" (bioinformatics) or "theoretical" (mathematical modeling)
+  domain: "unspecified"           # e.g., "evolutionary_dynamics", "protein_structure"
+  phases:
+    - conceptualization
+    - modeling
+    - simulation
+    - analysis
+    - interpretation
+    - communication
+  modeling:
+    framework: "unspecified"      # "differential_equation", "agent_based", "game_theory", etc.
+    time_horizon: 100.0
+    num_time_points: 1000
+  targets:
+    primary_quantity: "unspecified"
+    secondary_quantities: []
+  eval_focus: "unspecified"
+  reproducibility:
+    require_random_seed_logging: true
+    require_environment_description: true
+    require_dataset_accessions: true
+    require_code_archive: true
+  citation_policy:
+    use_semantic_scholar: true
+    min_references: 10
+    require_dataset_citations: true
+    require_model_citations: true
+    require_software_citations: false
 
 log_dir: logs
 workspace_dir: workspaces
@@ -23,7 +54,7 @@ exec:
 generate_report: True
 # LLM settings for final report from journal
 report:
-  model: gpt-4o-2024-11-20
+  model: gpt-5-mini-2025-08-07
   temp: 1.0
 
 experiment:
@@ -54,20 +85,20 @@ agent:
 
   # LLM settings for coding
   code:
-    model: anthropic.claude-3-5-sonnet-20241022-v2:0
+    model: gpt-5-mini-2025-08-07
     temp: 1.0
     max_tokens: 12000
 
   # LLM settings for evaluating program output / tracebacks
   feedback:
-    model: gpt-4o-2024-11-20
+    model: gpt-5-mini-2025-08-07
     # gpt-4o
-    temp: 0.5
+    temp: 1.0
     max_tokens: 8192
 
   vlm_feedback:
-    model: gpt-4o-2024-11-20
-    temp: 0.5
+    model: gpt-5-mini-2025-08-07
+    temp: 1.0
     max_tokens: null
 
   search:
