@@ -9,6 +9,10 @@ from ai_scientist.tools.compartmental_sim import RunCompartmentalSimTool
 from ai_scientist.tools.sensitivity_sweep import RunSensitivitySweepTool
 from ai_scientist.tools.validation_compare import RunValidationCompareTool
 from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
+from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
+from ai_scientist.tools.claim_graph import ClaimGraphTool
+from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
+from ai_scientist.tools.claim_graph import ClaimGraphTool
 
 __all__ = [
     "SemanticScholarSearchTool",
@@ -23,4 +27,7 @@ __all__ = [
     "RunSensitivitySweepTool",
     "RunValidationCompareTool",
     "RunInterventionTesterTool",
+    "ManuscriptReaderTool",
+    "ClaimGraphTool",
+    "ClaimGraphCheckTool",
 ]

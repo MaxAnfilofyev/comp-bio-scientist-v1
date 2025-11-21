@@ -98,7 +98,7 @@ You can also place these in a local `.env` file (loaded automatically if `python
 OPENAI_API_KEY=YOUR_OPENAI_KEY_HERE
 ```
 
-## Generate Research Ideas
+## Generate Research Ideas & Run Pipelines
 
 Before running the full AI Scientist-v2 experiment pipeline, you first use the `ai_scientist/perform_ideation_temp_free.py` script to generate potential research ideas. This script uses an LLM to brainstorm and refine ideas based on a high-level topic description you provide, interacting with tools like Semantic Scholar to check for novelty.
 
@@ -124,7 +124,7 @@ Before running the full AI Scientist-v2 experiment pipeline, you first use the `
 
 This ideation step guides the AI Scientist towards specific areas of interest and produces concrete research directions to be tested in the main experimental pipeline.
 
-## Run AI Scientist-v2 Paper Generation Experiments
+## Run AI Scientist-v2 Paper Generation Experiments (Tree Search)
 
 Using the JSON file generated in the previous ideation step, you can now launch the main AI Scientist-v2 pipeline. This involves running experiments via agentic tree search, analyzing results, and generating a paper draft.
 
@@ -154,6 +154,24 @@ python launch_scientist_bfts.py \
  --model_review gpt-4o-2024-11-20 \
  --model_agg_plots o3-mini-2025-01-31 \
  --num_cite_rounds 20
+```
+
+## Tool-Driven Orchestration (Agents)
+
+For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Reviewer/Publisher), use `agents_orchestrator.py`:
+
+* Delegates tasks via tools/handoffs until the reviewer reports no gaps and a PDF exists.
+* Uses idea context (Title/Hypothesis/Abstract/Experiments/Risks) and targets the `blank_theoretical_biology_latex` template by default.
+* Enforces output conventions (artifacts in `experiment_results/`, figures in `figures/` when aggregated, PDFs at run root) and structured status files.
+* Awareness of plot aggregation (`perform_plotting.py`), modeling/stats utilities (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reader tool, and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
+
+Typical invocation:
+```bash
+python agents_orchestrator.py \
+  --load_idea ai_scientist/ideas/my_research_topic.json \
+  --idea_idx 0 \
+  --model gpt-4o-mini \
+  --max_cycles 25
 ```
 
 ### Computational biology (theoretical modeling) quick start

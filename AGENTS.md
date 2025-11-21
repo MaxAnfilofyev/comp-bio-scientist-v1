@@ -11,11 +11,11 @@ This project orchestrates multiple agent flows (ideation → experiments → int
      - `AssembleLitData`: Assemble literature data into `lit_summary.csv/json` (optional Semantic Scholar queries + local seeds).
    - Outputs: JSON idea file (Name, Title, Abstract, Short Hypothesis, Experiments, Risk Factors).
 
-2. **Experiment search (`launch_scientist_bfts.py` + tree search)**
-   - Drives code generation/debug loops to run the plan.
-   - Configuration via `bfts_config.yaml` (per-run copy in `experiments/<ts>/.../bfts_config.yaml`).
-   - Optional pre-step: `--run_lit_data_assembly` to create `experiment_results/lit_summary.csv/json`.
-   - Outputs: `logs/0-run/experiment_results/` (code, .npy, plots), `journal.json`, `unified_tree_viz.html`.
+2. **Tool-driven orchestration (`agents_orchestrator.py`)**
+   - PI agent delegates to role agents (Archivist, Modeler, Analyst, Reviewer, Publisher) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
+   - Dynamic prompts include Title/Hypothesis/Abstract/Experiments/Risks and template alignment (default `blank_theoretical_biology_latex`). Output conventions enforced (artifacts -> `experiment_results/`, figures -> `figures/` when aggregated, PDFs at run root).
+   - Each role returns structured status (status/artifacts/notes) and writes status files (e.g., `experiment_results/status_<role>.json` or appends to `tool_summary.txt`).
+   - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
 
 3. **Plot aggregation (`perform_plotting.py`)**
    - Aggregates plots from experiment results (LLM-assisted).
@@ -27,16 +27,37 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 5. **Writeup (`perform_writeup.py` / `perform_icbinb_writeup.py`)**
    - Generates PDF(s) using LaTeX templates. Outputs to the experiment root.
 
-6. **Review (`perform_llm_review.py`, `perform_vlm_review.py`)**
-   - Optional LLM/VLM review of the generated PDF and figures.
+6. **Review (`perform_llm_review.py`, `perform_vlm_review.py`, Holistic Reviewer in agents orchestrator)**
+   - Optional LLM/VLM review of the generated PDF and figures. Holistic Reviewer can read drafts (via manuscript reader) to flag gaps/citations/structure.
 
 ## Tools
 
 - **SearchSemanticScholar** (`ai_scientist/tools/semantic_scholar.py`)
   - Params: `query` (str), uses `S2_API_KEY` if set for higher limits.
 - **AssembleLitData** (`ai_scientist/tools/lit_data_assembly.py`)
-  - Params: `output_dir` (str, default `experiment_results`), `queries` (list[str]), `seed_paths` (list[str]), `max_results` (int), `use_semantic_scholar` (bool).
-  - Uses `ai_scientist/perform_lit_data_assembly.py` under the hood.
+  - Params: `output_dir` (str, default `experiment_results`), `queries` (list[str]), `seed_paths` (list[str]), `max_results` (int), `use_semantic_scholar` (bool). Uses `perform_lit_data_assembly.py`.
+- **ValidateLitSummary** (`ai_scientist/tools/lit_validator.py`)
+  - Params: `path` to lit_summary CSV/JSON; reports coverage of required fields.
+- **BuildGraphs** (`ai_scientist/tools/graph_builder.py`)
+  - Params: `n_nodes`, `output_dir`, `seed`; saves gpickle + adjacency.
+- **RunCompartmentalSimulation** (`ai_scientist/tools/compartmental_sim.py`)
+  - Params: `graph_path`, `output_dir`, `steps`, `dt`, `transport_rate`, `demand_scale`, `mitophagy_rate`, `noise_std`, `seed`.
+- **RunSensitivitySweep** (`ai_scientist/tools/sensitivity_sweep.py`)
+  - Params: `graph_path`, `output_dir`, `transport_vals`, `demand_vals`, `steps`, `dt`.
+- **RunInterventionTester** (`ai_scientist/tools/intervention_tester.py`)
+  - Params: `graph_path`, `output_dir`, `transport_vals`, `demand_vals`, `baseline_transport`, `baseline_demand`.
+- **RunValidationCompare** (`ai_scientist/tools/validation_compare.py`)
+  - Params: `lit_path`, `sim_path`; computes simple correlations.
+- **RunBiologicalModel** (`ai_scientist/tools/biological_model.py`)
+  - Params: `model_key`, `time_end`, `num_points`, `output_dir`; runs a built-in model and saves JSON.
+- **RunBiologicalPlotting** (`ai_scientist/tools/biological_plotting.py`)
+  - Params: `solution_path`, `output_dir`, `make_phase_portrait`; plots time series/phase portraits.
+- **RunBiologicalStats** (`ai_scientist/tools/biological_stats.py`)
+  - Params: `task` (`adjust_pvalues` or `enrichment`), plus required args.
+- **ReadManuscript** (`ai_scientist/tools/manuscript_reader.py`)
+  - Params: `path` to PDF or txt/md; returns extracted text.
+- **UpdateClaimGraph** (`ai_scientist/tools/claim_graph.py`)
+  - Params: `path` to claim_graph.json, `claim_id`, `claim_text`, `parent_id` (use null for thesis), `evidence` (list), `status`, `notes`; adds/updates claim entries.
 
 ## Environment and API Keys
 
@@ -65,3 +86,12 @@ python launch_scientist_bfts.py \
 ```
 
 Adjust `bfts_config.yaml` for search budget (num_workers, stage iters) and skip ML-centric steps for theoretical runs.***
+
+Agents orchestrator:
+```bash
+python agents_orchestrator.py \
+  --load_idea ai_scientist/ideas/my_idea.json \
+  --idea_idx 0 \
+  --model gpt-4o-mini \
+  --max_cycles 25
+```

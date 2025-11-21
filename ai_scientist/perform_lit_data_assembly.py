@@ -69,11 +69,11 @@ def _fetch_semantic_scholar(
         return []
 
     out: List[Dict[str, Any]] = []
-    api_key = os.environ.get("S2_API_KEY", "")
 
     for q in queries:
         try:
-            papers = search_for_papers(q, num_results=max_results, api_key=api_key)
+            # NB: current helper signature is search_for_papers(query, result_limit=10)
+            papers = search_for_papers(q, result_limit=max_results)
         except Exception as e:
             print(f"[warn] Semantic Scholar query failed for '{q}': {e}", file=sys.stderr)
             continue

@@ -4,6 +4,7 @@ backoff
 openai
 pydantic
 python-dotenv
+openai-agents
 # Viz
 matplotlib
 pypdf
