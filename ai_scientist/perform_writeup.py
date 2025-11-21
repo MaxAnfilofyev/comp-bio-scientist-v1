@@ -775,7 +775,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--big-model",
         type=str,
-        default="o1-2024-12-17",
+        default="gpt-5-mini-2025-08-07",
         choices=AVAILABLE_LLMS,
         help="Model to use for final writeup (big model).",
     )

@@ -52,19 +52,9 @@ MAX_NUM_TOKENS = 4096
 
 
 def get_token_parameter_name(model: str) -> str:
-    """Determine the correct token parameter name for different OpenAI models."""
-    # Newer models (GPT-5 series, O4 series, O5 models) use max_completion_tokens
-    new_models = [
-        "gpt-5-nano-2025-08-07",
-        "gpt-5-mini-2025-08-07",
-        "gpt-5.1-2025-11-13",
-        "o4-mini-deep-research-2025-06-26",
-    ]
-
-    if any(model.startswith(prefix) for prefix in ["gpt-5", "o4-", "o5-"]) or model in new_models:
-        return "max_completion_tokens"
-    else:
-        return "max_tokens"
+    """Determine the correct token parameter name for OpenAI Responses API payloads."""
+    # Responses API uses max_output_tokens for generation-length control.
+    return "max_output_tokens"
 
 
 def get_temperature_parameter(model: str, default_temperature: float = 0.7) -> float:
@@ -82,6 +72,31 @@ def get_temperature_parameter(model: str, default_temperature: float = 0.7) -> f
         return default_temperature  # Use provided temperature for older models
 
 
+def _format_messages_for_responses(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert legacy chat message dicts into Responses API input items."""
+    return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+
+def _extract_response_texts(response) -> list[str]:
+    """Pull assistant text outputs from a Responses API response."""
+    outputs: list[str] = []
+    if hasattr(response, "output") and response.output:
+        for item in response.output:
+            item_type = getattr(item, "type", None)
+            if item_type == "message":
+                content_chunks = []
+                for content_item in getattr(item, "content", []):
+                    if getattr(content_item, "type", None) == "output_text":
+                        content_chunks.append(content_item.text)
+                if content_chunks:
+                    outputs.append("".join(content_chunks))
+            elif item_type == "output_text":
+                outputs.append(getattr(item, "text", ""))
+    elif hasattr(response, "choices"):  # Fallback for non-Responses providers
+        outputs = [choice.message.content for choice in response.choices if hasattr(choice, "message")]
+    return outputs
+
+
 AVAILABLE_LLMS = [
     "claude-3-5-sonnet-20240620",
     "claude-3-5-sonnet-20241022",
@@ -90,7 +105,6 @@ AVAILABLE_LLMS = [
     "gpt-5-nano-2025-08-07",
     "gpt-5-mini-2025-08-07",
     "gpt-5.1-2025-11-13",
-    "o4-mini-deep-research-2025-06-26",
    
     # DeepSeek Models
     "deepseek-coder-v2-0724",
@@ -180,24 +194,28 @@ def get_batch_responses_from_llm(
         ]
     elif "gpt" in model:
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        token_param = get_token_parameter_name(model)
         adjusted_temperature = get_temperature_parameter(model, temperature)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_message},
-                *new_msg_history,
-            ],
-            temperature=adjusted_temperature,
-            **{token_param: MAX_NUM_TOKENS},
-            n=n_responses,
-            stop=None,
-            seed=0,
-        )
-        content = [r.message.content for r in response.choices]
-        new_msg_history = [
-            new_msg_history + [{"role": "assistant", "content": c}] for c in content
-        ]
+        content, new_histories = [], []
+        for _ in range(n_responses):
+            request_params = {
+                "model": model,
+                "instructions": system_message,
+                "input": _format_messages_for_responses(new_msg_history),
+                "temperature": adjusted_temperature,
+                get_token_parameter_name(model): MAX_NUM_TOKENS,
+                "seed": 0,
+            }
+            if response_format:
+                request_params["text"] = {"format": response_format}
+
+            response = client.responses.create(**request_params)
+            outputs = _extract_response_texts(response)
+            assistant_text = outputs[0] if outputs else ""
+            content.append(assistant_text)
+            new_histories.append(
+                new_msg_history + [{"role": "assistant", "content": assistant_text}]
+            )
+        new_msg_history = new_histories
     elif model == "deepseek-coder-v2-0724":
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
         response = client.chat.completions.create(
@@ -296,33 +314,17 @@ def make_llm_call(client, model, temperature, system_message, prompt, response_f
         adjusted_temperature = get_temperature_parameter(model, temperature)
         request_params = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                *prompt,
-            ],
+            "instructions": system_message,
+            "input": _format_messages_for_responses(prompt),
             "temperature": adjusted_temperature,
-            "n": 1,
-            "stop": None,
             "seed": 0,
         }
         request_params[token_param] = MAX_NUM_TOKENS
 
         if response_format:
-            request_params["response_format"] = response_format
+            request_params["text"] = {"format": response_format}
 
-        return client.chat.completions.create(**request_params)
-    elif "o1" in model or "o3" in model:
-        return client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "user", "content": system_message},
-                *prompt,
-            ],
-            temperature=1,
-            n=1,
-            seed=0,
-        )
-
+        return client.responses.create(**request_params)
     else:
         raise ValueError(f"Model {model} not supported.")
 
@@ -407,18 +409,8 @@ def get_response_from_llm(
             prompt=new_msg_history,
             response_format=response_format,
         )
-        content = response.choices[0].message.content
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-    elif "o1" in model or "o3" in model:
-        new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        response = make_llm_call(
-            client,
-            model,
-            temperature,
-            system_message=system_message,
-            prompt=new_msg_history,
-        )
-        content = response.choices[0].message.content
+        outputs = _extract_response_texts(response)
+        content = outputs[0] if outputs else ""
         new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
     elif model == "deepseek-coder-v2-0724":
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
@@ -574,9 +566,6 @@ def create_client(model) -> tuple[Any, str]:
         return openai.OpenAI(
             api_key=os.environ.get("OPENAI_API_KEY","")
         ), model
-    elif "o1" in model or "o3" in model:
-        print(f"Using OpenAI API with model {model}.")
-        return openai.OpenAI(), model
     elif model == "deepseek-coder-v2-0724":
         print(f"Using OpenAI API with {model}.")
         return (

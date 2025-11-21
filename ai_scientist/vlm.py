@@ -13,7 +13,6 @@ MAX_NUM_TOKENS = 4096
 AVAILABLE_VLMS = [
    
     "gpt-5-mini-2025-08-07",
-    "o3-mini",
 
     # Ollama models
 
@@ -73,17 +72,6 @@ def make_llm_call(client, model, temperature, system_message, prompt):
             max_tokens=MAX_NUM_TOKENS,
             n=1,
             stop=None,
-            seed=0,
-        )
-    elif "o1" in model or "o3" in model:
-        return client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "user", "content": system_message},
-                *prompt,
-            ],
-            temperature=1,
-            n=1,
             seed=0,
         )
     else:

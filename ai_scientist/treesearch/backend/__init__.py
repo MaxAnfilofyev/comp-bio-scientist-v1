@@ -46,25 +46,7 @@ def query(
         "temperature": temperature,
     }
 
-    # Handle models with beta limitations
-    # ref: https://platform.openai.com/docs/guides/reasoning/beta-limitations
-    if model.startswith("o1"):
-        if system_message and user_message is None:
-            user_message = system_message
-        elif system_message is None and user_message:
-            pass
-        elif system_message and user_message:
-            system_message["Main Instructions"] = {}
-            system_message["Main Instructions"] |= user_message
-            user_message = system_message
-        system_message = None
-        # model_kwargs["temperature"] = 0.5
-        model_kwargs["reasoning_effort"] = "high"
-        model_kwargs["max_completion_tokens"] = 100000  # max_tokens
-        # remove 'temperature' from model_kwargs
-        model_kwargs.pop("temperature", None)
-    else:
-        model_kwargs["max_tokens"] = max_tokens
+    model_kwargs["max_tokens"] = max_tokens
 
     query_func = backend_anthropic.query if "claude-" in model else backend_openai.query
     output, req_time, in_tok_count, out_tok_count, info = query_func(

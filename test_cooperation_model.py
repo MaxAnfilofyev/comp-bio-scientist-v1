@@ -6,7 +6,6 @@ Tests the evolution of cooperation model to verify the system works
 
 import numpy as np
 import sys
-import os
 
 # Add ai_scientist to path
 sys.path.append('ai_scientist')
