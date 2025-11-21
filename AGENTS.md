@@ -92,6 +92,6 @@ Agents orchestrator:
 python agents_orchestrator.py \
   --load_idea ai_scientist/ideas/my_idea.json \
   --idea_idx 0 \
-  --model gpt-4o-mini \
+  --model gpt-5o-mini \
   --max_cycles 25
 ```

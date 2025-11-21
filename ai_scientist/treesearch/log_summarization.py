@@ -1,11 +1,7 @@
 import json
 import os
-import sys
 
 from .journal import Node, Journal
-
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-sys.path.insert(0, parent_dir)
 from ai_scientist.llm import get_response_from_llm, extract_json_between_markers
 from ai_scientist.treesearch.backend import get_ai_client
 
@@ -198,8 +194,6 @@ def get_node_log(node):
 def update_summary(
     prev_summary, cur_stage_name, cur_journal, cur_summary, model, client, max_retry=5
 ):
-    good_leaf_nodes = [n for n in cur_journal.good_nodes if n.is_leaf]
-    node_infos = get_nodes_infos(good_leaf_nodes)
     prompt = stage_aggregate_prompt.format(
         prev_summary=prev_summary,
         stage_name=cur_stage_name,
@@ -445,7 +439,7 @@ if __name__ == "__main__":
     with open(ablation_summary_path, "w") as ablation_file:
         json.dump(ablation_summary, ablation_file, indent=2)
 
-    print(f"Summary reports written to files:")
+    print("Summary reports written to files:")
     print(f"- Draft summary: {draft_summary_path}")
     print(f"- Baseline summary: {baseline_summary_path}")
     print(f"- Research summary: {research_summary_path}")

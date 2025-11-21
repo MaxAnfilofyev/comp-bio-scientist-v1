@@ -1,16 +1,13 @@
 from dataclasses import dataclass
-
+import logging
+from typing import Callable
+import backoff
 import jsonschema
 from dataclasses_json import DataClassJsonMixin
 
 PromptType = str | dict | list
 FunctionCallType = dict
 OutputType = str | FunctionCallType
-
-
-import backoff
-import logging
-from typing import Callable
 
 logger = logging.getLogger("ai-scientist")
 

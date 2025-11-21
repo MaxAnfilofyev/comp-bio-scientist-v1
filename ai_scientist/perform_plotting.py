@@ -9,7 +9,6 @@ import traceback
 from rich import print
 
 from ai_scientist.llm import create_client, get_response_from_llm
-from ai_scientist.utils.token_tracker import token_tracker
 from ai_scientist.perform_icbinb_writeup import (
     load_idea_text,
     load_exp_summaries,
@@ -145,7 +144,7 @@ def aggregate_plots(
         os.remove(aggregator_script_path)
     if os.path.exists(figures_dir):
         shutil.rmtree(figures_dir)
-        print(f"Cleaned up previous figures directory")
+        print("Cleaned up previous figures directory")
 
     idea_text = load_idea_text(base_folder)
     exp_summaries = load_exp_summaries(base_folder)

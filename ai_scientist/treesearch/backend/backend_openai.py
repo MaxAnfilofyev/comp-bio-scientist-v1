@@ -3,7 +3,7 @@ import logging
 import time
 
 from .utils import FunctionSpec, OutputType, opt_messages_to_list, backoff_create
-from funcy import notnone, once, select_values
+from funcy import notnone, select_values
 import openai
 from rich import print
 

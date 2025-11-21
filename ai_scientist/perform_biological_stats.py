@@ -12,7 +12,7 @@ bioinformatics and theoretical-computational biology workflows.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence, Dict, Any, List, Tuple, Set
+from typing import Iterable, Mapping, Sequence, Dict, List, Tuple, Set
 
 import numpy as np
 from scipy.stats import fisher_exact

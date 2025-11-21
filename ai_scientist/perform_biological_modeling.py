@@ -5,17 +5,16 @@ including differential equations, agent-based models, and game theory.
 """
 
 import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import warnings
+from types import SimpleNamespace
+
 mpl_config_dir = os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
 cache_dir = os.environ.setdefault("XDG_CACHE_HOME", os.path.join(os.getcwd(), ".cache"))
 os.makedirs(mpl_config_dir, exist_ok=True)
 os.makedirs(cache_dir, exist_ok=True)
-
-import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import warnings
-from types import SimpleNamespace
 
 try:
     from scipy.integrate import solve_ivp
@@ -101,10 +100,10 @@ class DifferentialEquationModel(BiologicalModel):
 
     def epidemiology_sir(self, t, y, beta, gamma):
         """SIR epidemiological model"""
-        S, I, R = y
-        dSdt = -beta * S * I
-        dIdt = beta * S * I - gamma * I
-        dRdt = gamma * I
+        S, I_state, R = y
+        dSdt = -beta * S * I_state
+        dIdt = beta * S * I_state - gamma * I_state
+        dRdt = gamma * I_state
         return [dSdt, dIdt, dRdt]
 
     def evolutionary_game_theory(self, t, y, b, c):

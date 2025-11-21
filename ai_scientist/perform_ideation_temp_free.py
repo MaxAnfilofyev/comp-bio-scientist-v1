@@ -1,7 +1,6 @@
 import argparse
 import json
 import os.path as osp
-import re
 import traceback
 from typing import Any, Dict, List
 
@@ -15,6 +14,10 @@ from ai_scientist.llm import (
     AIScientistAction,
 )
 
+from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
+from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
+from ai_scientist.tools.base_tool import BaseTool
+
 # Define structured output format for GPT models
 STRUCTURED_OUTPUT_FORMAT = {
     "type": "json_schema",
@@ -24,10 +27,6 @@ STRUCTURED_OUTPUT_FORMAT = {
         "strict": True
     }
 }
-
-from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
-from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
-from ai_scientist.tools.base_tool import BaseTool
 
 # Create tool instances
 semantic_scholar_tool = SemanticScholarSearchTool()
@@ -265,7 +264,7 @@ def generate_temp_free_idea(
             if idea_finalized:
                 continue  # Move to the next idea
 
-        except Exception as e:
+        except Exception:
             print("Failed to generate proposal:")
             traceback.print_exc()
             continue

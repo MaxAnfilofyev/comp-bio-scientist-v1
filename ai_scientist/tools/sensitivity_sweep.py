@@ -1,7 +1,6 @@
 import csv
 from pathlib import Path
 from typing import Dict, Any, List
-import numpy as np
 import networkx as nx
 
 from ai_scientist.tools.base_tool import BaseTool

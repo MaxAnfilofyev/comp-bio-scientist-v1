@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -15,15 +16,11 @@ class LitDataAssemblyTool(BaseTool):
         name: str = "AssembleLitData",
         description: str = (
             "Assemble literature data into normalized CSV/JSON. "
-            "Provide output_dir (default experiment_results), optional seed paths, and semantic scholar queries."
+            "Provide optional seed paths and semantic scholar queries. "
+            "Outputs are always written to experiment_results/lit_summary.csv and lit_summary.json under the active run."
         ),
     ):
         parameters = [
-            {
-                "name": "output_dir",
-                "type": "str",
-                "description": "Directory to write lit_summary.csv/json (default: experiment_results).",
-            },
             {
                 "name": "queries",
                 "type": "list[str]",
@@ -47,15 +44,24 @@ class LitDataAssemblyTool(BaseTool):
         ]
         super().__init__(name, description, parameters)
 
+    def _resolve_out_dir(self) -> Path:
+        """
+        Resolve a fixed output directory for lit summaries:
+        - If AISC_EXP_RESULTS is set (by orchestrator), use it.
+        - Otherwise default to experiment_results.
+        """
+        base_env = os.environ.get("AISC_EXP_RESULTS", "")
+        out = Path(base_env) if base_env else Path("experiment_results")
+        return out
+
     def use_tool(
         self,
-        output_dir: str = "experiment_results",
         queries: List[str] | None = None,
         seed_paths: List[str] | None = None,
         max_results: int = 25,
-        use_semantic_scholar: bool = True,
+        use_semantic_scholar: bool = False,
     ) -> Dict[str, Any]:
-        out_dir = Path(output_dir)
+        out_dir = self._resolve_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "lit_summary.csv"
         json_path = out_dir / "lit_summary.json"

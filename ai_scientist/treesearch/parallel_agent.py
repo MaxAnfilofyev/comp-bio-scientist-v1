@@ -3,25 +3,18 @@ from typing import List, Optional, Set, Any, Callable, cast, Dict, Tuple
 import random
 import subprocess
 import os
-from queue import Queue
 import logging
 import humanize
-from .backend import FunctionSpec, compile_prompt_to_md, query
+from .backend import FunctionSpec, query
 from .interpreter import ExecutionResult
 from .journal import Journal, Node
-from .utils import data_preview
 from .utils.config import Config
 from .utils.metric import MetricValue, WorstMetricValue
 from .utils.response import extract_code, extract_text_up_to_code, wrap_code
-import copy
 import pickle
-from dataclasses import asdict
-from omegaconf import OmegaConf
-
 from rich import print
 from pathlib import Path
 import base64
-import sys
 
 logger = logging.getLogger("ai-scientist")
 
@@ -1452,8 +1445,7 @@ class ParallelAgent:
     ):
         """Wrapper function that creates a fresh environment for each process"""
         from .interpreter import Interpreter
-        from .journal import Node, Journal
-        from copy import deepcopy
+        from .journal import Node
         import os
         import multiprocessing
 
@@ -2199,7 +2191,7 @@ class ParallelAgent:
 
             except TimeoutError:
                 print("Worker process timed out, couldn't get the result")
-                logger.error(f"Worker process timed out, couldn't get the result")
+                logger.error("Worker process timed out, couldn't get the result")
             except Exception as e:
                 print(f"Error processing node: {str(e)}")
                 logger.error(f"Error processing node: {str(e)}")

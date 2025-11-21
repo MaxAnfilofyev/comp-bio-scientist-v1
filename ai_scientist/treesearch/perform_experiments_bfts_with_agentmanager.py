@@ -5,7 +5,6 @@ import json
 import pickle
 from . import backend
 from .journal import Journal, Node
-from .journal2report import journal2report
 from rich.columns import Columns
 from rich.console import Group
 from rich.live import Live
@@ -24,7 +23,6 @@ from rich.tree import Tree
 from .utils.config import load_task_desc, prep_agent_workspace, save_run, load_cfg
 from .agent_manager import AgentManager
 from pathlib import Path
-from .agent_manager import Stage
 from .log_summarization import overall_summarize
 
 
@@ -81,6 +79,7 @@ def perform_experiments_bfts(config_path: str):
         cfg=cfg,
         workspace_dir=Path(cfg.workspace_dir),
     )
+    interpreter = manager.interpreter
 
     prog = Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -202,13 +201,12 @@ def perform_experiments_bfts(config_path: str):
             subtitle="Press [b]Ctrl+C[/b] to stop the run",
         )
 
-    live = Live(
+    with Live(
         generate_live(manager),
         refresh_per_second=16,
         screen=True,
-    )
-
-    manager.run(exec_callback=create_exec_callback(status), step_callback=step_callback)
+    ):
+        manager.run(exec_callback=create_exec_callback(status), step_callback=step_callback)
 
     manager_pickle_path = cfg.log_dir / "manager.pkl"
     try:
@@ -249,7 +247,7 @@ def perform_experiments_bfts(config_path: str):
         with open(ablation_summary_path, "w") as ablation_file:
             json.dump(ablation_summary, ablation_file, indent=2)
 
-        print(f"Summary reports written to files:")
+        print("Summary reports written to files:")
         print(f"- Draft summary: {draft_summary_path}")
         print(f"- Baseline summary: {baseline_summary_path}")
         print(f"- Research summary: {research_summary_path}")

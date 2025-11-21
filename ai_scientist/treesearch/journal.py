@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Any
+from typing import Literal, Optional, Any, List, Dict
 import copy
 import os
 import json
@@ -295,7 +295,7 @@ class Node(DataClassJsonMixin):
         """Create a Node from a dictionary, optionally linking to journal for relationships"""
         # Remove relationship IDs from constructor data
         parent_id = data.pop("parent_id", None)
-        children = data.pop("children", [])
+        data.pop("children", [])
 
         # Handle metric conversion
         metric_data = data.pop("metric", None)

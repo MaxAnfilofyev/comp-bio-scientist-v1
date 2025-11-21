@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import traceback
 import unicodedata
-import uuid
 import tempfile
 
 from ai_scientist.llm import (
@@ -16,8 +15,6 @@ from ai_scientist.llm import (
     create_client,
     AVAILABLE_LLMS,
 )
-
-from ai_scientist.utils.token_tracker import track_token_usage
 
 from ai_scientist.tools.semantic_scholar import search_for_papers
 
@@ -742,7 +739,7 @@ def filter_experiment_summaries(exp_summaries, step_name):
     return filtered_summaries
 
 
-def gather_citations(base_folder, num_cite_rounds=20, small_model="gpt-4o-2024-05-13"):
+def gather_citations(base_folder, num_cite_rounds=20, small_model="gpt-5-mini-2025-08-07"):
     """
     Gather citations for a paper, with ability to resume from previous progress.
 
@@ -986,6 +983,8 @@ def perform_writeup(
         with open(writeup_file, "r") as f:
             writeup_text = f.read()
 
+        biology_config_block = ""
+        interpretation_text = ""
         combined_prompt = writeup_prompt.format(
             idea_text=idea_text,
             summaries=combined_summaries_str,
@@ -1210,7 +1209,7 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
             base_folder, f"{osp.basename(base_folder)}_reflection_final_page_limit.pdf"
         )
         # Compile current version before reflection
-        print(f"[green]Compiling PDF for reflection final page limit...[/green]")
+        print("[green]Compiling PDF for reflection final page limit...[/green]")
 
         print(f"reflection step {i+1}")
 
@@ -1235,7 +1234,7 @@ USE MINIMAL EDITS TO OPTIMIZE THE PAGE LIMIT USAGE."""
 
                 compile_latex(latex_folder, reflection_pdf)
             else:
-                print(f"No changes in reflection page step.")
+                print("No changes in reflection page step.")
 
         return osp.exists(reflection_pdf)
 

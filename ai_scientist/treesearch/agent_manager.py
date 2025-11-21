@@ -1,7 +1,6 @@
-from typing import List, Optional, Dict, Callable, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple
 import pickle
 from dataclasses import dataclass
-from enum import Enum, auto
 from pathlib import Path
 import logging
 from .parallel_agent import ParallelAgent
@@ -11,8 +10,6 @@ import re
 from .backend import query, FunctionSpec
 import json
 from rich import print
-from .utils.serialize import parse_markdown_to_dict
-from .utils.metric import WorstMetricValue
 
 
 logger = logging.getLogger(__name__)
@@ -633,10 +630,11 @@ Your research idea:\n\n
         except Exception as e:
             logger.error(f"Error generating sub-stage goals: {e}")
             # Provide fallback goals if LLM fails
-            return f"""
-            Sub-stage Goals:
-            Continue progress on main stage objectives while addressing current issues.
-            """
+            fallback = (
+                "Sub-stage Goals:\n"
+                "Continue progress on main stage objectives while addressing current issues."
+            )
+            return fallback, "fallback_substage"
 
     def _create_next_substage(
         self, current_substage: Stage, journal: Journal, substage_feedback: str
@@ -680,7 +678,7 @@ Your research idea:\n\n
         sub_stage_name = "first_attempt"
         num_drafts = 0
         stage_number = current_substage.stage_number + 1
-        description = f"first_attempt"
+        description = "first_attempt"
         main_stage_goal = self.main_stage_goals[main_stage_num + 1]
 
         return Stage(

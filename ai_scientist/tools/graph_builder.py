@@ -41,7 +41,6 @@ class BuildGraphsTool(BaseTool):
     def use_tool(self, n_nodes: int = 100, output_dir: str = "graphs", seed: int = 0) -> Dict[str, Any]:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        rng = random.Random(seed)
 
         outputs: Dict[str, Any] = {}
 

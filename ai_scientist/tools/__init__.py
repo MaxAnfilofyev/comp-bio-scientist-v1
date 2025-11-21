@@ -12,7 +12,6 @@ from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
 from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.claim_graph import ClaimGraphTool
 from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
-from ai_scientist.tools.claim_graph import ClaimGraphTool
 
 __all__ = [
     "SemanticScholarSearchTool",

@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Literal, Union
+from typing import Any, List, Literal, Union
 from ai_scientist.utils.token_tracker import track_token_usage
 
 import anthropic
@@ -450,7 +450,7 @@ def get_response_from_llm(
                 stop=None,
             )
             content = response.choices[0].message.content
-        except Exception as e:
+        except Exception:
             # Fallback to direct API call if OpenAI client doesn't work with HuggingFace
             import requests
             headers = {

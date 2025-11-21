@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Hashable, cast, Literal, Optional
+from typing import Hashable, cast, Optional
 
 import coolname
 import rich

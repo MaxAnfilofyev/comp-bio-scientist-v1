@@ -14,18 +14,17 @@ from __future__ import annotations
 import os
 import re
 from typing import Iterable, Sequence
-
-mpl_config_dir = os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
-cache_dir = os.environ.setdefault("XDG_CACHE_HOME", os.path.join(os.getcwd(), ".cache"))
-os.makedirs(mpl_config_dir, exist_ok=True)
-os.makedirs(cache_dir, exist_ok=True)
-
 import matplotlib
 
 # Use a non-interactive backend for batch/scripted runs
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402  (import after backend selection)
 import numpy as np
+
+mpl_config_dir = os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
+cache_dir = os.environ.setdefault("XDG_CACHE_HOME", os.path.join(os.getcwd(), ".cache"))
+os.makedirs(mpl_config_dir, exist_ok=True)
+os.makedirs(cache_dir, exist_ok=True)
 
 
 class BiologicalPlotter:

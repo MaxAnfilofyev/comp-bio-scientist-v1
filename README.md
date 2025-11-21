@@ -109,7 +109,7 @@ Before running the full AI Scientist-v2 experiment pipeline, you first use the `
     ```bash
     python ai_scientist/perform_ideation_temp_free.py \
      --workshop-file "ai_scientist/ideas/my_research_topic.md" \
-     --model gpt-4o-2024-05-13 \
+     --model gpt-5o-mini \
      --max-num-generations 20 \
      --num-reflections 5
     ```

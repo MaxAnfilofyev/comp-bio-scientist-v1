@@ -36,7 +36,7 @@ def parse_args():
     p.add_argument("--load_ideas", required=True, help="Path to pregenerated ideas JSON")
     p.add_argument("--idea_idx", type=int, default=0, help="Index of idea to use")
     p.add_argument("--attempt_id", type=int, default=0, help="Attempt id for naming output directory")
-    p.add_argument("--model", type=str, default="gpt-4o-mini", help="LLM model identifier")
+    p.add_argument("--model", type=str, default="gpt-5o-mini", help="LLM model identifier")
     p.add_argument("--max_steps", type=int, default=8, help="Max tool-calling iterations")
     return p.parse_args()
 

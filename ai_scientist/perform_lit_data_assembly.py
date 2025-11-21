@@ -125,7 +125,7 @@ def assemble_lit_data(
     queries: Optional[Iterable[str]] = None,
     local_seed_paths: Optional[Iterable[str]] = None,
     max_results: int = 25,
-    use_semantic_scholar: bool = True,
+    use_semantic_scholar: bool = False,
 ) -> Dict[str, Any]:
     """
     Assemble literature data into normalized CSV/JSON artifacts.
@@ -168,7 +168,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Assemble literature data (Semantic Scholar + local seeds) into CSV/JSON."
     )
-    parser.add_argument("--output-dir", default="experiment_results", help="Output directory for artifacts.")
+    # Fixed output location; no --output-dir to avoid stray dirs
     parser.add_argument(
         "--queries",
         nargs="*",
@@ -196,7 +196,8 @@ def main():
     )
     args = parser.parse_args()
 
-    out_dir = Path(args.output_dir)
+    base_env = os.environ.get("AISC_EXP_RESULTS", "")
+    out_dir = Path(base_env) if base_env else Path("experiment_results")
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "lit_summary.csv"
     json_path = out_dir / "lit_summary.json"

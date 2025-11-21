@@ -48,7 +48,7 @@ def exception_summary(e, working_dir, exec_file_name, format_tb_ipython):
         tb_lines = traceback.format_exception(e)
         # skip parts of stack trace in weflow code
         tb_str = "".join(
-            [l for l in tb_lines if "treesearch/" not in l and "importlib" not in l]
+            [line for line in tb_lines if "treesearch/" not in line and "importlib" not in line]
         )
 
     # replace whole path to file with just filename (to remove agent workspace dir)
