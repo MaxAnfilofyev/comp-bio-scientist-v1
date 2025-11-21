@@ -7,7 +7,7 @@ goal: "Develop computational methods to understand biological systems. Investiga
 eval: "biological_discovery"
 
 biology:
-  research_type: "applied"        # "applied" (bioinformatics) or "theoretical" (mathematical modeling)
+  research_type: "theoretical"        # "applied" (bioinformatics) or "theoretical" (mathematical modeling)
   domain: "unspecified"           # e.g., "evolutionary_dynamics", "protein_structure"
   phases:
     - conceptualization
@@ -58,7 +58,7 @@ report:
   temp: 1.0
 
 experiment:
-  num_syn_datasets: 1
+  num_syn_datasets: 0
 
 debug:
   stage4: False
@@ -69,15 +69,15 @@ agent:
   num_workers: 2
   stages:
     stage1_max_iters: 8
-    stage2_max_iters: 6
-    stage3_max_iters: 6
-    stage4_max_iters: 10
+    stage2_max_iters: 0
+    stage3_max_iters: 0
+    stage4_max_iters: 4
   # how many improvement iterations to run
   steps: 5 # if stage-specific max_iters are not provided, the agent will use this value for all stages
   # whether to instruct the agent to use CV (set to 1 to disable)
   k_fold_validation: 1
   multi_seed_eval:
-    num_seeds: 3 # should be the same as num_workers if num_workers < 3. Otherwise, set it to be 3.
+    num_seeds: 1 # should be the same as num_workers if num_workers < 3. Otherwise, set it to be 3.
   # whether to instruct the agent to generate a prediction function
   expose_prediction: False
   # whether to provide the agent with a preview of the data
@@ -102,9 +102,9 @@ agent:
     max_tokens: null
 
   search:
-    max_debug_depth: 3
-    debug_prob: 0.5
-    num_drafts: 3
+    max_debug_depth: 1
+    debug_prob: 0.2
+    num_drafts: 1
 
   # Options for summarizing findings and selecting the best node
   # If not specified, the default behavior will be used.

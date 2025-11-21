@@ -8,6 +8,13 @@ import sys
 import subprocess
 from datetime import datetime
 from ai_scientist.llm import create_client
+from ai_scientist.perform_lit_data_assembly import assemble_lit_data
+from ai_scientist.tools.graph_builder import BuildGraphsTool
+from ai_scientist.tools.compartmental_sim import RunCompartmentalSimTool
+from ai_scientist.tools.sensitivity_sweep import RunSensitivitySweepTool
+from ai_scientist.tools.lit_validator import LitSummaryValidatorTool
+from ai_scientist.tools.validation_compare import RunValidationCompareTool
+from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
 
 # Optional PyTorch import - only required for GPU acceleration
 try:
@@ -143,6 +150,28 @@ def parse_arguments():
         "--skip_review",
         action="store_true",
         help="If set, skip the review process",
+    )
+    parser.add_argument(
+        "--run_lit_data_assembly",
+        action="store_true",
+        help="If set, run literature data assembly (Semantic Scholar + local seeds) before experiments",
+    )
+    parser.add_argument(
+        "--lit_queries",
+        nargs="*",
+        default=None,
+        help="Optional override for Semantic Scholar queries used in lit data assembly",
+    )
+    parser.add_argument(
+        "--lit_seed_paths",
+        nargs="*",
+        default=None,
+        help="Optional local CSV/JSON seed files to merge in lit data assembly",
+    )
+    parser.add_argument(
+        "--run_bio_toolchain",
+        action="store_true",
+        help="If set, run biological tooling (graph build, sim, sensitivity, validation) before experiments",
     )
     return parser.parse_args()
 
@@ -340,6 +369,115 @@ if __name__ == "__main__":
     idea_path_json = osp.join(idea_dir, "idea.json")
     with open(idea_path_json, "w") as f:
         json.dump(ideas[args.idea_idx], f, indent=4)
+
+    # Optional literature data assembly before experiments
+    if args.run_lit_data_assembly:
+        lit_output_dir = osp.join(idea_dir, "experiment_results")
+        os.makedirs(lit_output_dir, exist_ok=True)
+        print("Running literature data assembly...")
+        try:
+            lit_result = assemble_lit_data(
+                output_csv=osp.join(lit_output_dir, "lit_summary.csv"),
+                output_json=osp.join(lit_output_dir, "lit_summary.json"),
+                queries=args.lit_queries,
+                local_seed_paths=args.lit_seed_paths,
+                max_results=25,
+                use_semantic_scholar=True,
+            )
+            print(f"Literature data assembly completed: {lit_result}")
+        except Exception as e:
+            print(f"Literature data assembly failed: {e}")
+
+    # Optional biological toolchain (graph build, sim, sensitivity, validation)
+    if args.run_bio_toolchain:
+        exp_results = osp.join(idea_dir, "experiment_results")
+        os.makedirs(exp_results, exist_ok=True)
+
+        # Validate literature summary if present
+        try:
+            lit_path = osp.join(exp_results, "lit_summary.json")
+            if os.path.exists(lit_path):
+                validator = LitSummaryValidatorTool()
+                report = validator.use_tool(path=lit_path)
+                print(f"Lit summary coverage: {report}")
+        except Exception as e:
+            print(f"Lit validation skipped/failed: {e}")
+
+        # Build graphs
+        graph_dir = osp.join(idea_dir, "graphs")
+        try:
+            builder = BuildGraphsTool()
+            graphs = builder.use_tool(n_nodes=120, output_dir=graph_dir, seed=0)
+            print(f"Built graphs: {graphs}")
+        except Exception as e:
+            print(f"Graph build failed: {e}")
+            graphs = {}
+
+        # Pick one graph for sims
+        graph_paths = []
+        for g in graphs.values():
+            if isinstance(g, dict) and "gpickle" in g:
+                graph_paths.append(g["gpickle"])
+
+        if graph_paths:
+            target_graph = graph_paths[0]
+            # Run compartmental sim
+            try:
+                sim_tool = RunCompartmentalSimTool()
+                sim_res = sim_tool.use_tool(
+                    graph_path=target_graph,
+                    output_dir=exp_results,
+                    steps=200,
+                    dt=0.1,
+                    transport_rate=0.05,
+                    demand_scale=0.5,
+                    mitophagy_rate=0.02,
+                    noise_std=0.0,
+                    seed=0,
+                )
+                print(f"Compartmental sim: {sim_res}")
+                sim_json = sim_res.get("output_json")
+            except Exception as e:
+                print(f"Compartmental sim failed: {e}")
+                sim_json = None
+
+            # Sensitivity sweep
+            try:
+                sweep_tool = RunSensitivitySweepTool()
+                sweep_res = sweep_tool.use_tool(
+                    graph_path=target_graph,
+                    output_dir=exp_results,
+                    transport_vals=[0.02, 0.05, 0.1],
+                    demand_vals=[0.3, 0.5, 0.7],
+                )
+                print(f"Sensitivity sweep: {sweep_res}")
+            except Exception as e:
+                print(f"Sensitivity sweep failed: {e}")
+
+            # Interventions
+            try:
+                interv_tool = RunInterventionTesterTool()
+                interv_res = interv_tool.use_tool(
+                    graph_path=target_graph,
+                    output_dir=exp_results,
+                    baseline_transport=0.05,
+                    baseline_demand=0.5,
+                )
+                print(f"Intervention tests: {interv_res}")
+            except Exception as e:
+                print(f"Intervention tests failed: {e}")
+
+            # Validation compare
+            try:
+                if sim_json and os.path.exists(osp.join(exp_results, "lit_summary.json")):
+                    val_tool = RunValidationCompareTool()
+                    val_res = val_tool.use_tool(
+                        lit_path=osp.join(exp_results, "lit_summary.json"),
+                        sim_path=sim_json,
+                    )
+                    print(f"Validation compare: {val_res}")
+            except Exception as e:
+                print(f"Validation compare failed: {e}")
 
     config_path = "bfts_config.yaml"
     idea_config_path = edit_bfts_config_file(

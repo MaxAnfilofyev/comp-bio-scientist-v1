@@ -26,14 +26,17 @@ STRUCTURED_OUTPUT_FORMAT = {
 }
 
 from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
+from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
 from ai_scientist.tools.base_tool import BaseTool
 
 # Create tool instances
 semantic_scholar_tool = SemanticScholarSearchTool()
+lit_data_tool = LitDataAssemblyTool()
 
 # Define tools at the top of the file
 tools = [
     semantic_scholar_tool,
+    lit_data_tool,
     {
         "name": "FinalizeIdea",
         "description": """Finalize your idea by providing the idea details.
