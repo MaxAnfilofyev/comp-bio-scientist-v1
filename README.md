@@ -93,6 +93,10 @@ export S2_API_KEY="YOUR_S2_KEY_HERE"
 # export AWS_SECRET_ACCESS_KEY="YOUR_AWS_SECRET_KEY"
 # export AWS_REGION_NAME="your-aws-region"
 ```
+You can also place these in a local `.env` file (loaded automatically if `python-dotenv` is installed), for example:
+```
+OPENAI_API_KEY=YOUR_OPENAI_KEY_HERE
+```
 
 ## Generate Research Ideas
 

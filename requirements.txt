@@ -3,6 +3,7 @@ anthropic
 backoff
 openai
 pydantic
+python-dotenv
 # Viz
 matplotlib
 pypdf

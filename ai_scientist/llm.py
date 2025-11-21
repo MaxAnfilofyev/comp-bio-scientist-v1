@@ -9,6 +9,19 @@ import backoff
 import openai
 from pydantic import BaseModel, Field, ConfigDict
 
+# Load API keys from a project-level .env if present so users can avoid exporting manually
+try:
+    from pathlib import Path
+    from dotenv import load_dotenv
+
+    project_root = Path(__file__).resolve().parent.parent
+    env_path = project_root / ".env"
+    # Load .env at project root; do not override already-set environment vars
+    load_dotenv(dotenv_path=env_path, override=False)
+except Exception:
+    # dotenv is optional; proceed if it is not installed
+    pass
+
 # Structured output schemas for AI Scientist ideation
 class SemanticScholarAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
