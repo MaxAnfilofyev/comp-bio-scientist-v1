@@ -1,5 +1,6 @@
 import json
 import csv
+import os
 from pathlib import Path
 from typing import Dict, Any, List
 import numpy as np
@@ -27,10 +28,23 @@ class RunValidationCompareTool(BaseTool):
         super().__init__(name, description, parameters)
 
     def use_tool(self, lit_path: str, sim_path: str) -> Dict[str, Any]:
-        lit_p = Path(lit_path)
-        sim_p = Path(sim_path)
-        if not lit_p.exists() or not sim_p.exists():
-            raise FileNotFoundError("lit_path or sim_path not found")
+        def _resolve(p: str) -> Path:
+            cand = Path(p)
+            if cand.exists():
+                return cand
+            # Try relative to env-provided locations
+            base_dir = BaseTool.resolve_output_dir(None)
+            alt = base_dir / Path(p).name
+            if alt.exists():
+                return alt
+            base_folder = Path(os.environ.get("AISC_BASE_FOLDER", ""))
+            alt2 = base_folder / Path(p).name
+            if alt2.exists():
+                return alt2
+            raise FileNotFoundError(f"path not found: {p}")
+
+        lit_p = _resolve(lit_path)
+        sim_p = _resolve(sim_path)
 
         # Load lit
         lit_records: List[Dict[str, Any]] = []

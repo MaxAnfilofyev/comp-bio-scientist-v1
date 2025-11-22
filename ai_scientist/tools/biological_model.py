@@ -66,7 +66,7 @@ class RunBiologicalModelTool(BaseTool):
         else:
             sol = solve_biological_model(model, t)
 
-        out_dir = Path(output_dir)
+        out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{model_key}_solution.json"
 

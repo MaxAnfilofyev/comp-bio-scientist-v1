@@ -158,11 +158,12 @@ python launch_scientist_bfts.py \
 
 ## Tool-Driven Orchestration (Agents)
 
-For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Reviewer/Publisher), use `agents_orchestrator.py`:
+For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpreter/Reviewer/Publisher), use `agents_orchestrator.py`:
 
 * Delegates tasks via tools/handoffs until the reviewer reports no gaps and a PDF exists.
 * Uses idea context (Title/Hypothesis/Abstract/Experiments/Risks) and targets the `blank_theoretical_biology_latex` template by default.
 * Enforces output conventions (artifacts in `experiment_results/`, figures in `figures/` when aggregated, PDFs at run root) and structured status files.
+* Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader.
 * Awareness of plot aggregation (`perform_plotting.py`), modeling/stats utilities (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reader tool, and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
 
 Typical invocation:
@@ -198,6 +199,12 @@ Sanity check the stack locally (no GPUs needed):
 python test_cooperation_model.py
 ```
 This exercises the evolutionary game-theory model and predator–prey ODEs, and saves figures to `./figures/`.
+
+Local checks for code changes (run from repo root):
+```bash
+ruff check .
+pyright
+```
 
 Once the initial experimental stage is complete, you will find a timestamped log folder inside the `experiments/` directory. Navigate to `experiments/"timestamp_ideaname"/logs/0-run/` within that folder to find the tree visualization file `unified_tree_viz.html`.
 After all experiment stages are complete, the writeup stage begins. The writeup stage typically takes about 20 to 30 minutes in total. Once it finishes, you should see `timestamp_ideaname.pdf` in the `timestamp_ideaname` folder.

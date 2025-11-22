@@ -33,13 +33,13 @@ class BuildGraphsTool(BaseTool):
     ):
         parameters = [
             {"name": "n_nodes", "type": "int", "description": "Number of nodes (default 100)"},
-            {"name": "output_dir", "type": "str", "description": "Directory to save graphs (default graphs)"},
+            {"name": "output_dir", "type": "str", "description": "Directory to save graphs (default experiment_results)"},
             {"name": "seed", "type": "int", "description": "Random seed (default 0)"},
         ]
         super().__init__(name, description, parameters)
 
-    def use_tool(self, n_nodes: int = 100, output_dir: str = "graphs", seed: int = 0) -> Dict[str, Any]:
-        out_dir = Path(output_dir)
+    def use_tool(self, n_nodes: int = 100, output_dir: str = "experiment_results", seed: int = 0) -> Dict[str, Any]:
+        out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         outputs: Dict[str, Any] = {}

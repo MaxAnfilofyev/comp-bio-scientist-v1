@@ -132,7 +132,7 @@ def run_comp_sim(
 ):
     """Runs a compartmental simulation and saves CSV data."""
     return RunCompartmentalSimTool().use_tool(
-        graph_path=graph_path or "", # Handle optional
+        graph_path=graph_path,  # Require explicit path; agent must build/provide a graph
         output_dir=_fill_output_dir(output_dir),
         steps=steps,
         dt=dt,

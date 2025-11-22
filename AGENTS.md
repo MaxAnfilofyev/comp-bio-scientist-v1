@@ -12,11 +12,17 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - Outputs: JSON idea file (Name, Title, Abstract, Short Hypothesis, Experiments, Risk Factors).
 
 2. **Tool-driven orchestration (`agents_orchestrator.py`)**
-   - PI agent delegates to role agents (Archivist, Modeler, Analyst, Reviewer, Publisher) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
+   - PI agent delegates to role agents (Archivist, Modeler, Analyst, Interpreter, Reviewer, Publisher) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
    - Dynamic prompts include Title/Hypothesis/Abstract/Experiments/Risks and template alignment (default `blank_theoretical_biology_latex`). Output conventions enforced (artifacts -> `experiment_results/`, figures -> `figures/` when aggregated, PDFs at run root).
    - Each role returns structured status (status/artifacts/notes) and writes status files (e.g., `experiment_results/status_<role>.json` or appends to `tool_summary.txt`).
    - Resuming: pass `--resume` to pick the latest folder matching the idea name, or `--base_folder <experiments/...>` to restart from a specific existing run directory without creating a new timestamped folder.
    - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
+   - Agent tool highlights:
+     - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`.
+     - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`.
+     - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
+     - Interpreter: `interpret_biological_results` wrapper for theoretical runs (`interpretation.json/md`).
+     - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`.
 
 3. **Plot aggregation (`perform_plotting.py`)**
    - Aggregates plots from experiment results (LLM-assisted).
@@ -42,11 +48,11 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - **BuildGraphs** (`ai_scientist/tools/graph_builder.py`)
   - Params: `n_nodes`, `output_dir`, `seed`; saves gpickle + adjacency.
 - **RunCompartmentalSimulation** (`ai_scientist/tools/compartmental_sim.py`)
-  - Params: `graph_path`, `output_dir`, `steps`, `dt`, `transport_rate`, `demand_scale`, `mitophagy_rate`, `noise_std`, `seed`.
+  - Params: `graph_path`, `output_dir`, `steps`, `dt`, `transport_rate`, `demand_scale`, `mitophagy_rate`, `noise_std`, `seed`. Supports `.gpickle`, `.graphml`, and `.gml` graph inputs.
 - **RunSensitivitySweep** (`ai_scientist/tools/sensitivity_sweep.py`)
-  - Params: `graph_path`, `output_dir`, `transport_vals`, `demand_vals`, `steps`, `dt`.
+  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `steps`, `dt`.
 - **RunInterventionTester** (`ai_scientist/tools/intervention_tester.py`)
-  - Params: `graph_path`, `output_dir`, `transport_vals`, `demand_vals`, `baseline_transport`, `baseline_demand`.
+  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `baseline_transport`, `baseline_demand`.
 - **RunValidationCompare** (`ai_scientist/tools/validation_compare.py`)
   - Params: `lit_path`, `sim_path`; computes simple correlations.
 - **RunBiologicalModel** (`ai_scientist/tools/biological_model.py`)
@@ -59,6 +65,8 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to PDF or txt/md; returns extracted text.
 - **UpdateClaimGraph** (`ai_scientist/tools/claim_graph.py`)
   - Params: `path` to claim_graph.json, `claim_id`, `claim_text`, `parent_id` (use null for thesis), `evidence` (list), `status`, `notes`; adds/updates claim entries.
+- **CheckClaimGraph** (`ai_scientist/tools/claim_graph_checker.py`)
+  - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 
 ## Environment and API Keys
 

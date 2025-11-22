@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
 import json
+import os
 import pickle
 from pathlib import Path
 from typing import Any, Dict
@@ -10,10 +11,37 @@ import numpy as np
 from ai_scientist.tools.base_tool import BaseTool
 
 
-def load_graph(graph_path: Path) -> nx.Graph:
+def _resolve_graph_path(p: Path) -> Path:
+    """
+    Resolve a graph file path, trying:
+    - provided path
+    - AISC_EXP_RESULTS/<name>
+    - AISC_BASE_FOLDER/<name>
+    """
+    if p.exists():
+        return p
+    name = p.name
+    env_dir = os.environ.get("AISC_EXP_RESULTS", "")
+    if env_dir:
+        cand = Path(env_dir) / name
+        if cand.exists():
+            return cand
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    if base:
+        cand = Path(base) / name
+        if cand.exists():
+            return cand
+    raise FileNotFoundError(f"Graph file not found: {p}")
+
+
+def load_graph(graph_path: Path | str) -> nx.Graph:
     """
     Load a graph from common formats used in the project.
     """
+    graph_path = Path(graph_path)
+    if graph_path.is_dir():
+        raise ValueError(f"graph_path must be a file, not a directory: {graph_path}")
+    graph_path = _resolve_graph_path(graph_path)
     suffix = graph_path.suffix.lower()
     if suffix in {".gpickle", ".pickle", ".pkl"}:
         with graph_path.open("rb") as f:
@@ -25,6 +53,15 @@ def load_graph(graph_path: Path) -> nx.Graph:
         return nx.read_graphml(graph_path)
     if suffix == ".gml":
         return nx.read_gml(graph_path)
+    if suffix in {".npz", ".npy"}:
+        # Assume adjacency matrix saved via numpy
+        arr = np.load(graph_path)
+        if isinstance(arr, np.lib.npyio.NpzFile):
+            # grab first array in the archive
+            key = arr.files[0]
+            arr = arr[key]
+        graph = nx.from_numpy_array(arr)
+        return graph
     raise ValueError(f"Unsupported graph format: {suffix}")
 
 
@@ -114,10 +151,10 @@ class RunCompartmentalSimTool(BaseTool):
 
     def use_tool(self, **kwargs) -> Dict[str, Any]:
         graph_path = kwargs.get("graph_path")
-        if graph_path is None:
-            raise ValueError("graph_path is required")
+        if graph_path is None or str(graph_path).strip() == "":
+            raise ValueError("graph_path is required (build one with BuildGraphsTool or provide a path)")
 
-        output_dir = kwargs.get("output_dir", "experiment_results")
+        output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
         steps = int(kwargs.get("steps", 200))
         dt = float(kwargs.get("dt", 0.1))
         transport_rate = float(kwargs.get("transport_rate", 0.05))
@@ -137,9 +174,8 @@ class RunCompartmentalSimTool(BaseTool):
             noise_std=noise_std,
             seed=seed,
         )
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{Path(graph_path).stem}_sim.json"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = output_dir / f"{Path(graph_path).stem}_sim.json"
         with out_path.open("w") as f:
             json.dump(result, f, indent=2)
 

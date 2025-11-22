@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 import networkx as nx
 
 from ai_scientist.tools.base_tool import BaseTool
-from ai_scientist.tools.compartmental_sim import simulate_compartmental
+from ai_scientist.tools.compartmental_sim import simulate_compartmental, load_graph
 
 
 class RunSensitivitySweepTool(BaseTool):
@@ -43,9 +43,12 @@ class RunSensitivitySweepTool(BaseTool):
     ) -> Dict[str, Any]:
         transport_vals = transport_vals or [0.02, 0.05, 0.1]
         demand_vals = demand_vals or [0.3, 0.5, 0.7]
-        G = nx.read_gpickle(graph_path)
+        gp = Path(graph_path)
+        if gp.is_dir():
+            raise ValueError(f"graph_path must be a file, not a directory: {graph_path}")
+        G = load_graph(gp)
 
-        out_dir = Path(output_dir)
+        out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / f"{Path(graph_path).stem}_sensitivity.csv"
 

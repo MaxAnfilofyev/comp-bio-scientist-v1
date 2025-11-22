@@ -44,7 +44,7 @@ class RunBiologicalPlottingTool(BaseTool):
         solution_path = kwargs.get("solution_path")
         if solution_path is None:
             raise ValueError("solution_path is required")
-        output_dir = kwargs.get("output_dir", "experiment_results")
+        output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
         make_phase_portrait = bool(kwargs.get("make_phase_portrait", True))
 
         path = Path(solution_path)
@@ -58,9 +58,8 @@ class RunBiologicalPlottingTool(BaseTool):
         data = np.array(sol.get("solutions", []))
         variables: List[str] = sol.get("variables", []) or [f"var{i}" for i in range(data.shape[1])] if data.size else []
 
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        plotter = BiologicalPlotter(figures_dir=str(out_dir))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        plotter = BiologicalPlotter(figures_dir=str(output_dir))
 
         outputs: Dict[str, Any] = {}
         if data.size:

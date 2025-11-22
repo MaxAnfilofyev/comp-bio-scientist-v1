@@ -1,4 +1,6 @@
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict, List
 
 
@@ -21,6 +23,16 @@ class BaseTool(ABC):
         self.name = name
         self.description = description
         self.parameters = parameters
+
+    @staticmethod
+    def resolve_output_dir(output_dir: str | None, default: str = "experiment_results") -> Path:
+        """
+        Resolve an output directory, preferring the orchestrator-provided env var when present.
+        Falls back to the caller-provided path, then a project-relative default.
+        """
+        env_dir = os.environ.get("AISC_EXP_RESULTS", "")
+        target = output_dir or env_dir or default
+        return Path(target)
 
     @abstractmethod
     def use_tool(self, **kwargs) -> Any:

@@ -1,10 +1,8 @@
 from pathlib import Path
 from typing import Dict, Any, List
 import json
-import networkx as nx
-
 from ai_scientist.tools.base_tool import BaseTool
-from ai_scientist.tools.compartmental_sim import simulate_compartmental
+from ai_scientist.tools.compartmental_sim import simulate_compartmental, load_graph
 
 
 class RunInterventionTesterTool(BaseTool):
@@ -41,7 +39,10 @@ class RunInterventionTesterTool(BaseTool):
     ) -> Dict[str, Any]:
         transport_vals = transport_vals or [baseline_transport * 0.5, baseline_transport, baseline_transport * 1.5]
         demand_vals = demand_vals or [baseline_demand * 0.8, baseline_demand, baseline_demand * 1.2]
-        G = nx.read_gpickle(graph_path)
+        gp = Path(graph_path)
+        if gp.is_dir():
+            raise ValueError(f"graph_path must be a file, not a directory: {graph_path}")
+        G = load_graph(gp)
 
         results = []
         # Baseline
@@ -67,7 +68,7 @@ class RunInterventionTesterTool(BaseTool):
                     }
                 )
 
-        out_dir = Path(output_dir)
+        out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{Path(graph_path).stem}_interventions.json"
         with out_path.open("w") as f:
