@@ -109,6 +109,11 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
         json.dump(manifest, f, indent=2)
     return {"manifest_path": str(manifest_path), "n_entries": len(manifest)}
 
+
+def _run_root() -> Path:
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    return Path(base) if base else Path(".")
+
 def format_list_field(data: Any) -> str:
     """Helper to format JSON lists (like Experiments) into a clean string block for LLMs."""
     if isinstance(data, list):
@@ -732,6 +737,34 @@ def write_figures_readme(content: str, filename: str = "README.md"):
 
 
 @function_tool
+def read_note(name: str = "pi_notes.md"):
+    """
+    Read a note file from the run root (e.g., pi_notes.md or user_inbox.md). Returns empty string if missing.
+    """
+    path = _run_root() / name
+    if not path.exists():
+        return {"path": str(path), "content": ""}
+    try:
+        return {"path": str(path), "content": path.read_text()}
+    except Exception as exc:
+        return {"path": str(path), "error": str(exc)}
+
+
+@function_tool
+def write_pi_notes(content: str, name: str = "pi_notes.md"):
+    """
+    Overwrite PI notes in the run root (default pi_notes.md).
+    """
+    path = _run_root() / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_text(content)
+        return {"path": str(path)}
+    except Exception as exc:
+        return {"error": str(exc), "path": str(path)}
+
+
+@function_tool
 def check_status(status_path: Optional[str] = None, glob_pattern: str = "*.status.json"):
     """
     Inspect simulation/status files. If a path is provided, return that file's JSON. Otherwise, list all matching status files under experiment_results.
@@ -1106,7 +1139,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             f"Role: Principal Investigator for project: {title}.\n"
             f"Hypothesis: {hypothesis}\n"
             "Responsibilities:\n"
-            "1. STATE CHECK: First, call 'check_project_state' to see what has been done.\n"
+            "1. STATE CHECK: First, read 'pi_notes.md' and 'user_inbox.md' (if present) via 'read_note', then call 'check_project_state' to see what has been done.\n"
             "2. DELEGATE: Handoff to specialized agents based on missing artifacts.\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
@@ -1115,7 +1148,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "   - Draft Exists -> Reviewer\n"
             "   - Validated & Ready -> Publisher\n"
             "3. ITERATE: If Reviewer finds gaps, translate them into new tasks for Modeler/Archivist.\n"
-            "4. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
+            "4. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
+            "5. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
         ),
         model=model,
         tools=[
@@ -1130,6 +1164,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             append_manifest,
             read_manifest,
             check_status,
+            read_note,
+            write_pi_notes,
             archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
             modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
