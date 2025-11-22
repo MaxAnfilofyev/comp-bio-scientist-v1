@@ -1,3 +1,4 @@
+import pickle
 import random
 import networkx as nx
 import numpy as np
@@ -44,12 +45,16 @@ class BuildGraphsTool(BaseTool):
 
         outputs: Dict[str, Any] = {}
 
+        def _write_gpickle(graph: nx.Graph, path: Path) -> None:
+            with path.open("wb") as f:
+                pickle.dump(graph, f, protocol=pickle.HIGHEST_PROTOCOL)
+
         # Binary tree (balanced)
         bin_tree = nx.balanced_tree(r=2, h=int(np.ceil(np.log2(n_nodes))) if n_nodes > 1 else 1)
         bin_tree = nx.convert_node_labels_to_integers(bin_tree)  # relabel
         bin_pkl = out_dir / f"binary_tree_{n_nodes}.gpickle"
         adj_bin = out_dir / f"binary_tree_{n_nodes}.npy"
-        nx.write_gpickle(bin_tree, bin_pkl)
+        _write_gpickle(bin_tree, bin_pkl)
         np.save(adj_bin, nx.to_numpy_array(bin_tree))
         outputs["binary_tree"] = {"gpickle": str(bin_pkl), "adjacency": str(adj_bin)}
 
@@ -58,7 +63,7 @@ class BuildGraphsTool(BaseTool):
         heavy = nx.barabasi_albert_graph(n=n_nodes, m=m, seed=seed)
         heavy_pkl = out_dir / f"heavy_tailed_{n_nodes}.gpickle"
         adj_heavy = out_dir / f"heavy_tailed_{n_nodes}.npy"
-        nx.write_gpickle(heavy, heavy_pkl)
+        _write_gpickle(heavy, heavy_pkl)
         np.save(adj_heavy, nx.to_numpy_array(heavy))
         outputs["heavy_tailed"] = {"gpickle": str(heavy_pkl), "adjacency": str(adj_heavy)}
 
@@ -66,7 +71,7 @@ class BuildGraphsTool(BaseTool):
         tree = safe_random_tree(n_nodes, seed=seed)
         tree_pkl = out_dir / f"random_tree_{n_nodes}.gpickle"
         adj_tree = out_dir / f"random_tree_{n_nodes}.npy"
-        nx.write_gpickle(tree, tree_pkl)
+        _write_gpickle(tree, tree_pkl)
         np.save(adj_tree, nx.to_numpy_array(tree))
         outputs["random_tree"] = {"gpickle": str(tree_pkl), "adjacency": str(adj_tree)}
 

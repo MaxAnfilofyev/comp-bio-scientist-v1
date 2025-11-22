@@ -2,6 +2,7 @@
 import json
 import os
 import pickle
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,20 +19,7 @@ def _resolve_graph_path(p: Path) -> Path:
     - AISC_EXP_RESULTS/<name>
     - AISC_BASE_FOLDER/<name>
     """
-    if p.exists():
-        return p
-    name = p.name
-    env_dir = os.environ.get("AISC_EXP_RESULTS", "")
-    if env_dir:
-        cand = Path(env_dir) / name
-        if cand.exists():
-            return cand
-    base = os.environ.get("AISC_BASE_FOLDER", "")
-    if base:
-        cand = Path(base) / name
-        if cand.exists():
-            return cand
-    raise FileNotFoundError(f"Graph file not found: {p}")
+    return BaseTool.resolve_input_path(str(p), allow_dir=False)
 
 
 def load_graph(graph_path: Path | str) -> nx.Graph:
@@ -146,6 +134,10 @@ class RunCompartmentalSimTool(BaseTool):
             {"name": "mitophagy_rate", "type": "float", "description": "Mitophagy rate (default 0.02)"},
             {"name": "noise_std", "type": "float", "description": "Noise std (default 0.0)"},
             {"name": "seed", "type": "int", "description": "Random seed (default 0)"},
+            {"name": "store_timeseries", "type": "bool", "description": "Store full time series (default True)"},
+            {"name": "downsample", "type": "int", "description": "Store every Nth step (default 1)"},
+            {"name": "max_elements", "type": "int", "description": "Safety limit: steps * nodes (default 5000000)"},
+            {"name": "status_path", "type": "str", "description": "Optional status json path to track run state"},
         ]
         super().__init__(name, description, parameters)
 
@@ -162,8 +154,41 @@ class RunCompartmentalSimTool(BaseTool):
         mitophagy_rate = float(kwargs.get("mitophagy_rate", 0.02))
         noise_std = float(kwargs.get("noise_std", 0.0))
         seed = int(kwargs.get("seed", 0))
+        store_timeseries = bool(kwargs.get("store_timeseries", True))
+        downsample = int(kwargs.get("downsample", 1))
+        max_elements = int(kwargs.get("max_elements", 5_000_000))
+        status_path = kwargs.get("status_path")
 
         graph = load_graph(Path(graph_path))
+        n_nodes = graph.number_of_nodes()
+        if steps * max(1, n_nodes) > max_elements:
+            raise ValueError(
+                f"Simulation too large (steps * nodes = {steps * n_nodes} > {max_elements}). "
+                "Reduce steps, downsample, or increase max_elements if intentional."
+            )
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        status_file = Path(status_path) if status_path else output_dir / f"{Path(graph_path).stem}_sim.status.json"
+        # Write running status so agents see progress
+        try:
+            with status_file.open("w") as sf:
+                json.dump(
+                    {
+                        "status": "running",
+                        "graph_path": str(graph_path),
+                        "output_dir": str(output_dir),
+                        "steps": steps,
+                        "dt": dt,
+                        "transport_rate": transport_rate,
+                        "demand_scale": demand_scale,
+                        "start_time": time.time(),
+                    },
+                    sf,
+                    indent=2,
+                )
+        except Exception:
+            pass
+
         result = simulate_compartmental(
             graph,
             steps=steps,
@@ -174,9 +199,42 @@ class RunCompartmentalSimTool(BaseTool):
             noise_std=noise_std,
             seed=seed,
         )
-        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if downsample > 1:
+            result["time"] = result["time"][::downsample]
+            result["E"] = result["E"][::downsample]
+            result["M"] = result["M"][::downsample]
+
+        if not store_timeseries:
+            result = {
+                "frac_failed": result["frac_failed"],
+                "n_nodes": result.get("n_nodes"),
+                "final_E": result["E"][-1] if result.get("E") else None,
+                "final_M": result["M"][-1] if result.get("M") else None,
+                "transport_rate": transport_rate,
+                "demand_scale": demand_scale,
+                "mitophagy_rate": mitophagy_rate,
+                "noise_std": noise_std,
+                "seed": seed,
+            }
         out_path = output_dir / f"{Path(graph_path).stem}_sim.json"
         with out_path.open("w") as f:
             json.dump(result, f, indent=2)
+
+        try:
+            with status_file.open("w") as sf:
+                json.dump(
+                    {
+                        "status": "completed",
+                        "output_json": str(out_path),
+                        "frac_failed": result.get("frac_failed"),
+                        "end_time": time.time(),
+                        "duration_sec": None,  # can be filled by caller if desired
+                    },
+                    sf,
+                    indent=2,
+                )
+        except Exception:
+            pass
 
         return {"output_json": str(out_path), "frac_failed": result["frac_failed"]}

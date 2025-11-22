@@ -3,6 +3,8 @@ import os.path as osp
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
+from types import SimpleNamespace
+from omegaconf.errors import ConfigAttributeError
 
 from ai_scientist.llm import (
     get_response_from_llm,
@@ -251,8 +253,16 @@ def interpret_biological_results(
     Returns:
         True if interpretation artifacts were successfully generated, else False.
     """
+    cfg_path = Path(config_path)
+    if not cfg_path.exists():
+        print(f"Skipping interpretation: config not found at {cfg_path}")
+        return False
     try:
-        cfg = load_cfg(Path(config_path))
+        cfg = load_cfg(cfg_path)
+    except ConfigAttributeError:
+        # Config missing optional keys (e.g., desc_file); fall back to minimal namespace
+        print(f"Config at {config_path} missing expected keys (e.g., desc_file); using minimal config.")
+        cfg = SimpleNamespace(biology=None)
     except Exception:
         print(f"Failed to load config from: {config_path}")
         print(traceback.format_exc())

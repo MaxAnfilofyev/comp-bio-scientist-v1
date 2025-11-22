@@ -28,23 +28,27 @@ class RunValidationCompareTool(BaseTool):
         super().__init__(name, description, parameters)
 
     def use_tool(self, lit_path: str, sim_path: str) -> Dict[str, Any]:
-        def _resolve(p: str) -> Path:
-            cand = Path(p)
-            if cand.exists():
-                return cand
-            # Try relative to env-provided locations
-            base_dir = BaseTool.resolve_output_dir(None)
-            alt = base_dir / Path(p).name
-            if alt.exists():
-                return alt
-            base_folder = Path(os.environ.get("AISC_BASE_FOLDER", ""))
-            alt2 = base_folder / Path(p).name
-            if alt2.exists():
-                return alt2
-            raise FileNotFoundError(f"path not found: {p}")
+        lit_p = BaseTool.resolve_input_path(lit_path, allow_dir=False)
+        sim_p = BaseTool.resolve_input_path(sim_path, allow_dir=True)
 
-        lit_p = _resolve(lit_path)
-        sim_p = _resolve(sim_path)
+        # If a directory was provided for sim_path, search for a usable JSON
+        if sim_p.is_dir():
+            candidates = sorted(sim_p.glob("*.json"))
+            if not candidates:
+                raise FileNotFoundError(f"No simulation JSONs found under directory: {sim_p}")
+            picked = None
+            for cand in candidates:
+                try:
+                    with cand.open() as f:
+                        sim_probe = json.load(f)
+                    if "frac_failed" in sim_probe:
+                        picked = cand
+                        break
+                except Exception:
+                    continue
+            if picked is None:
+                picked = candidates[0]
+            sim_p = picked
 
         # Load lit
         lit_records: List[Dict[str, Any]] = []
