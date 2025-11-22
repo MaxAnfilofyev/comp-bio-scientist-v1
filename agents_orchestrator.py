@@ -100,16 +100,13 @@ def _fill_figure_dir(output_dir: Optional[str]) -> str:
 
 def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Build a legacy metadata dict while preserving multiple annotations.
-    - Keeps type stable.
-    - Merges the latest annotation fields for quick access.
-    - Stores full annotations list when multiple are present.
+    Build a minimal legacy metadata dict without duplicating annotations.
+    - Keeps type for older consumers.
+    - Avoids copying annotation payloads (the canonical source of detail).
     """
     meta: Dict[str, Any] = {}
-    if annotations:
-        meta.update(annotations[-1])
-        if len(annotations) > 1:
-            meta["annotations"] = annotations
+    if entry_type:
+        meta["type"] = entry_type
     return meta
 
 
@@ -129,14 +126,15 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
     path = entry.get("path") or fallback_path or entry.get("name")
     if not path:
         return None
-    name = entry.get("name") or os.path.basename(path)
+    name = os.path.basename(entry.get("name") or path)
     base_type = entry.get("type")
     annotations: List[Dict[str, Any]] = []
 
     meta = entry.get("metadata")
     if isinstance(meta, dict):
         base_type = meta.get("type", base_type)
-        _add_annotation(meta, annotations)
+        if not annotations:
+            _add_annotation(meta, annotations)
         nested = meta.get("annotations")
         if isinstance(nested, list):
             for ann in nested:
@@ -146,7 +144,8 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
             if isinstance(m, dict):
                 if m.get("type") and not base_type:
                     base_type = m.get("type")
-                _add_annotation(m, annotations)
+                if not annotations:
+                    _add_annotation(m, annotations)
                 nested = m.get("annotations")
                 if isinstance(nested, list):
                     for ann in nested:
@@ -163,7 +162,9 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
         "type": base_type,
         "annotations": annotations,
     }
-    normalized["metadata"] = _build_metadata_for_compat(base_type, annotations)
+    compat_meta = _build_metadata_for_compat(base_type, annotations)
+    if compat_meta:
+        normalized["metadata"] = compat_meta
     return normalized
 
 
@@ -219,8 +220,9 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
         except Exception:
             meta = {"raw": metadata_json}
     path_str = str(target_path)
-    entry = manifest_map.get(path_str, {"name": name, "path": path_str, "type": None, "annotations": []})
-    entry["name"] = name
+    name_only = os.path.basename(name or path_str)
+    entry = manifest_map.get(path_str, {"name": name_only, "path": path_str, "type": None, "annotations": []})
+    entry["name"] = name_only
     entry_type = entry.get("type") or meta.get("type")
     annotations: List[Dict[str, Any]] = entry.get("annotations") or []
     annotation = {k: v for k, v in meta.items() if k != "type"}
@@ -228,7 +230,11 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
         annotations.append(annotation)
     entry["type"] = entry_type
     entry["annotations"] = annotations
-    entry["metadata"] = _build_metadata_for_compat(entry_type, annotations)
+    compat_meta = _build_metadata_for_compat(entry_type, annotations)
+    if compat_meta:
+        entry["metadata"] = compat_meta
+    elif "metadata" in entry:
+        entry.pop("metadata", None)
     manifest_map[path_str] = entry
     with open(manifest_path, "w") as f:
         json.dump(manifest_map, f, indent=2)
@@ -777,17 +783,18 @@ def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
 
 
 @function_tool
-def read_artifact(path: str, summary_only: bool = False):
+def read_artifact(path: str, summary_only: bool = False, head_lines: Optional[int] = None):
     """
     Resolve and read a small artifact (json/text). Use for configs/metadata, not large binaries.
-    If summary_only=True and JSON is detected, return top-level keys and basic shape info instead of full payload.
+    - summary_only=True: for large JSON, return top-level keys + types instead of full payload.
+    - head_lines: return only the first N lines/items (bypasses size guard for text/JSON).
     """
     p = BaseTool.resolve_input_path(path, allow_dir=False)
-    # Guardrail: avoid returning huge payloads
     max_bytes = 1_000_000  # ~1 MB
+
     try:
         size = p.stat().st_size
-        if size > max_bytes:
+        if size > max_bytes and head_lines is None:
             if summary_only and p.suffix.lower() == ".json":
                 with open(p) as f:
                     try:
@@ -804,15 +811,116 @@ def read_artifact(path: str, summary_only: bool = False):
                     }
             return {
                 "error": f"Artifact too large to inline ({size} bytes > {max_bytes}). "
-                         "Use summary_only=True or process via a dedicated tool."
+                         "Use summary_only=True, head_lines, or a dedicated tool."
             }
     except Exception:
-        pass
-    if p.suffix.lower() in {".json"}:
-        with open(p) as f:
-            return json.load(f)
+        size = None
+
+    suffix = p.suffix.lower()
+    if suffix == ".json":
+        try:
+            with open(p) as f:
+                data = json.load(f)
+        except Exception as exc:
+            return {"error": f"Failed to parse JSON: {exc}"}
+
+        if head_lines is not None:
+            if isinstance(data, list):
+                return {
+                    "path": str(p),
+                    "type": "json_list_head",
+                    "items": data[: head_lines],
+                    "total_items": len(data),
+                }
+            if isinstance(data, dict):
+                return {
+                    "path": str(p),
+                    "type": "json_dict_keys",
+                    "keys": list(data.keys())[: max(head_lines, 1)],
+                }
+        if summary_only and isinstance(data, dict):
+            return {k: type(v).__name__ for k, v in data.items()}
+        return data
+
+    # Text-like
+    if head_lines is not None:
+        lines: List[str] = []
+        consumed = 0
+        try:
+            with open(p, "r", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i >= head_lines:
+                        break
+                    if consumed >= max_bytes:
+                        break
+                    line = line.rstrip("\n")
+                    consumed += len(line.encode("utf-8")) + 1
+                    lines.append(line)
+            result: Dict[str, Any] = {"path": str(p), "type": "text_head", "head": lines}
+            if size is not None and consumed < size:
+                result["note"] = "truncated"
+            return result
+        except Exception as exc:
+            return {"error": str(exc)}
+
     with open(p) as f:
         return f.read()
+
+
+@function_tool
+def head_artifact(path: str, max_lines: int = 20, max_bytes: int = 200_000):
+    """
+    Return the top of a file without loading it fully. Supports text/CSV/JSON.
+    - For text/CSV: returns first max_lines lines (trimmed to max_bytes total).
+    - For JSON list: returns first items up to max_lines.
+    - For JSON dict: returns top-level keys.
+    """
+    p = BaseTool.resolve_input_path(path, allow_dir=False)
+    info: Dict[str, Any] = {"path": str(p)}
+    try:
+        size = p.stat().st_size
+        info["size_bytes"] = size
+    except Exception:
+        size = None
+
+    suffix = p.suffix.lower()
+    if suffix == ".json":
+        try:
+            with open(p) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                info["type"] = "json_list_head"
+                info["items"] = data[:max_lines]
+            elif isinstance(data, dict):
+                info["type"] = "json_dict_keys"
+                info["keys"] = list(data.keys())[: max_lines * 2]
+            else:
+                info["type"] = "json_scalar"
+                info["value"] = data
+            return info
+        except Exception as exc:
+            info["error"] = f"Failed to parse JSON: {exc}"
+            return info
+
+    # Text-like fallback (CSV, txt, md, log, yaml, etc.)
+    lines: List[str] = []
+    consumed = 0
+    try:
+        with open(p, "r", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= max_lines or consumed >= max_bytes:
+                    break
+                line = line.rstrip("\n")
+                consumed += len(line.encode("utf-8")) + 1
+                lines.append(line)
+        info["type"] = "text_head"
+        info["head"] = lines
+        if size is not None and consumed < size:
+            info["note"] = "truncated"
+        return info
+    except Exception as exc:
+        info["error"] = str(exc)
+        return info
 
 
 @function_tool
@@ -1446,6 +1554,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_path,
             list_artifacts,
             read_artifact,
+            head_artifact,
             summarize_artifact,
             reserve_output,
             append_manifest,

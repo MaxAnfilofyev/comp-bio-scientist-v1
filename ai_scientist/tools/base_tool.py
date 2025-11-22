@@ -33,14 +33,31 @@ class BaseTool(ABC):
         env_dir = os.environ.get("AISC_EXP_RESULTS", "")
         target = output_dir or env_dir or default
         p = Path(target)
-        if not p.is_absolute():
-            base = os.environ.get("AISC_BASE_FOLDER", "")
-            if base:
-                base_path = Path(base)
-                # Avoid double-prefixing if target already starts with the base folder
-                target_str = str(p)
-                if not target_str.startswith(str(base_path)) and not target_str.startswith("experiments/"):
-                    p = base_path / p
+
+        if p.is_absolute():
+            return p
+
+        exp_path = Path(env_dir) if env_dir else None
+        base = os.environ.get("AISC_BASE_FOLDER", "")
+
+        if exp_path:
+            # If the caller already pointed at the exp path (or inside it), respect it.
+            if p == exp_path or str(p).startswith(str(exp_path)):
+                return p
+            # If the caller used an experiment_results-relative prefix, lift it under the base folder.
+            if p.parts and p.parts[0] == "experiment_results":
+                if base:
+                    return Path(base) / p
+                return p
+            # Default: anchor relative paths under the experiment_results directory.
+            return exp_path / p
+
+        if base:
+            base_path = Path(base)
+            target_str = str(p)
+            if not target_str.startswith(str(base_path)) and not target_str.startswith("experiments/"):
+                return base_path / p
+
         return p
 
     @staticmethod
