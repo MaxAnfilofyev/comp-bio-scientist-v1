@@ -12,7 +12,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - Outputs: JSON idea file (Name, Title, Abstract, Short Hypothesis, Experiments, Risk Factors).
 
 2. **Tool-driven orchestration (`agents_orchestrator.py`)**
-   - PI agent delegates to role agents (Archivist, Modeler, Analyst, Interpreter, Reviewer, Publisher) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
+   - PI agent delegates to role agents (Archivist, Modeler, Analyst, Interpreter, Reviewer, Publisher, Coder) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
    - Dynamic prompts include Title/Hypothesis/Abstract/Experiments/Risks and template alignment (default `blank_theoretical_biology_latex`). Output conventions enforced (artifacts -> `experiment_results/`, figures -> `figures/` when aggregated, PDFs at run root).
    - Each role returns structured status (status/artifacts/notes) and writes status files (e.g., `experiment_results/status_<role>.json` or appends to `tool_summary.txt`).
    - Resuming: pass `--resume` to pick the latest folder matching the idea name, or `--base_folder <experiments/...>` to restart from a specific existing run directory without creating a new timestamped folder.
@@ -67,6 +67,8 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to claim_graph.json, `claim_id`, `claim_text`, `parent_id` (use null for thesis), `evidence` (list), `status`, `notes`; adds/updates claim entries.
 - **CheckClaimGraph** (`ai_scientist/tools/claim_graph_checker.py`)
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
+- **Filesystem helpers** (agents_orchestrator.py wrappers)
+  - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output`, `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`), `append_manifest`/`read_manifest`, `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`.
 
 ## Environment and API Keys
 

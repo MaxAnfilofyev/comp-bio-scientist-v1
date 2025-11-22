@@ -527,7 +527,12 @@ def write_interpretation_text(content: str, filename: str = "theory_interpretati
     """
     Convenience: save interpretation text to experiment_results/<filename> (default theory_interpretation.txt).
     """
-    return write_text_artifact(name=filename, content=content, subdir=None)
+    root = BaseTool.resolve_output_dir(None)
+    path = root / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    return {"path": str(path)}
 
 
 @function_tool
@@ -535,7 +540,12 @@ def write_figures_readme(content: str, filename: str = "README.md"):
     """
     Convenience: save a figures README under figures/ (default README.md).
     """
-    return write_text_artifact(name=filename, content=content, subdir="figures")
+    root = BaseTool.resolve_output_dir("figures")
+    path = root / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    return {"path": str(path)}
 
 
 @function_tool
