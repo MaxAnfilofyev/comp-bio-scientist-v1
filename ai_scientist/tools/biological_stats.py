@@ -63,7 +63,8 @@ class RunBiologicalStatsTool(BaseTool):
         background_ids: Iterable[str] | None = None,
         term_to_ids: Mapping[str, Iterable[str]] | None = None,
     ) -> Dict[str, Any]:
-        if task == "adjust_pvalues":
+        # Allow common aliases for BH correction
+        if task in {"adjust_pvalues", "bh_correction", "bh", "benjamini_hochberg"}:
             if pvalues is None:
                 raise ValueError("pvalues are required for adjust_pvalues")
             res = adjust_pvalues(pvalues=pvalues, alpha=alpha)

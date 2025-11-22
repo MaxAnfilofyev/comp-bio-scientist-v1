@@ -81,6 +81,9 @@ class BaseTool(ABC):
                 candidates.append(Path(base) / default_subdir / p.name)
                 candidates.append(Path(base) / p.name)
             else:
+                # If caller passed a path already starting with experiment_results, preserve it relative to base
+                if str(p).startswith("experiment_results"):
+                    candidates.append(Path(base) / p)
                 candidates.append(Path(base) / default_subdir / p)
                 candidates.append(Path(base) / p)
                 candidates.append(Path(base) / default_subdir / p.name)

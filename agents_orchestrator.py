@@ -6,7 +6,17 @@ import os.path as osp
 from pathlib import Path
 from datetime import datetime
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+try:
+    from agents.types import RunResult
+except ImportError:
+    if TYPE_CHECKING:
+        from agents.types import RunResult  # type: ignore  # noqa: F401
+    else:
+        class RunResult:  # minimal stub
+            error: Any = None
+            status: Any = None
+            output: Any = None
 
 # --- Framework Imports ---
 try:
@@ -62,6 +72,42 @@ def _fill_output_dir(output_dir: Optional[str]) -> str:
         if base and not target.startswith(base) and not target.startswith("experiments/"):
             target = os.path.join(base, target)
     return target
+
+
+def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
+    """
+    Internal helper to append to the run's manifest without invoking the tool wrapper.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    manifest_path = exp_dir / "file_manifest.json"
+    manifest: List[Dict[str, Any]] = []
+    if manifest_path.exists():
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+                if not isinstance(manifest, list):
+                    manifest = []
+        except Exception:
+            manifest = []
+
+    try:
+        target_path = BaseTool.resolve_input_path(name, allow_dir=True)
+    except FileNotFoundError:
+        if not allow_missing:
+            return {"error": f"Referenced file not found: {name}. Use reserve_output + append_manifest after creation, or set allow_missing=True if intentional."}
+        target_path = BaseTool.resolve_output_dir(None) / name
+
+    meta: Dict[str, Any] = {}
+    if metadata_json:
+        try:
+            meta = json.loads(metadata_json)
+        except Exception:
+            meta = {"raw": metadata_json}
+    entry = {"name": name, "path": str(target_path), "metadata": meta}
+    manifest.append(entry)
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    return {"manifest_path": str(manifest_path), "n_entries": len(manifest)}
 
 def format_list_field(data: Any) -> str:
     """Helper to format JSON lists (like Experiments) into a clean string block for LLMs."""
@@ -144,9 +190,10 @@ def run_comp_sim(
     store_timeseries: bool = True,
     downsample: int = 1,
     max_elements: int = 5_000_000,
+    metadata_json: Optional[str] = None,
 ):
     """Runs a compartmental simulation and saves CSV data."""
-    return RunCompartmentalSimTool().use_tool(
+    res = RunCompartmentalSimTool().use_tool(
         graph_path=graph_path,  # Require explicit path; agent must build/provide a graph
         output_dir=_fill_output_dir(output_dir),
         steps=steps,
@@ -160,15 +207,25 @@ def run_comp_sim(
         downsample=downsample,
         max_elements=max_elements,
     )
+    if metadata_json and isinstance(res, dict):
+        out = res.get("output_json")
+        if isinstance(out, str):
+            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    return res
 
 @function_tool
 def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None, make_phase_portrait: bool = True):
     """Generates plots from simulation data."""
-    return RunBiologicalPlottingTool().use_tool(
+    res = RunBiologicalPlottingTool().use_tool(
         solution_path=solution_path,
         output_dir=_fill_output_dir(output_dir),
         make_phase_portrait=make_phase_portrait,
     )
+    # Append outputs to manifest if possible
+    for k, v in res.items():
+        if isinstance(v, str) and v.endswith((".png", ".pdf", ".svg")):
+            _append_manifest_entry(name=v, metadata_json='{"type":"figure","source":"analyst"}', allow_missing=True)
+    return res
 
 @function_tool
 def read_manuscript(path: str):
@@ -201,7 +258,16 @@ def search_semantic_scholar(query: str):
 @function_tool
 def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):
     """Generate canonical graphs (binary tree, heavy-tailed, random tree)."""
-    return BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
+    res = BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
+    # Log outputs to manifest
+    for graph_type, paths in res.items():
+        for k, v in paths.items():
+            _append_manifest_entry(
+                name=v,
+                metadata_json=json.dumps({"type": "graph", "source": "modeler", "graph_type": graph_type, "format": k}),
+                allow_missing=True,
+            )
+    return res
 
 @function_tool
 def run_biological_model(
@@ -209,14 +275,20 @@ def run_biological_model(
     time_end: float = 20.0,
     num_points: int = 200,
     output_dir: Optional[str] = None,
+    metadata_json: Optional[str] = None,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
-    return RunBiologicalModelTool().use_tool(
+    res = RunBiologicalModelTool().use_tool(
         model_key=model_key,
         time_end=time_end,
         num_points=num_points,
         output_dir=_fill_output_dir(output_dir),
     )
+    if metadata_json and isinstance(res, dict):
+        out = res.get("output_json")
+        if isinstance(out, str):
+            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    return res
 
 @function_tool
 def run_sensitivity_sweep(
@@ -226,9 +298,10 @@ def run_sensitivity_sweep(
     demand_vals: Optional[List[float]] = None,
     steps: int = 150,
     dt: float = 0.1,
+    metadata_json: Optional[str] = None,
 ):
     """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
-    return RunSensitivitySweepTool().use_tool(
+    res = RunSensitivitySweepTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
         transport_vals=transport_vals,
@@ -236,6 +309,11 @@ def run_sensitivity_sweep(
         steps=steps,
         dt=dt,
     )
+    if metadata_json and isinstance(res, dict):
+        out = res.get("output_csv")
+        if isinstance(out, str):
+            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    return res
 
 @function_tool
 def run_intervention_tests(
@@ -245,9 +323,10 @@ def run_intervention_tests(
     demand_vals: Optional[List[float]] = None,
     baseline_transport: float = 0.05,
     baseline_demand: float = 0.5,
+    metadata_json: Optional[str] = None,
 ):
     """Test parameter interventions vs a baseline and report delta frac_failed."""
-    return RunInterventionTesterTool().use_tool(
+    res = RunInterventionTesterTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
         transport_vals=transport_vals,
@@ -255,11 +334,23 @@ def run_intervention_tests(
         baseline_transport=baseline_transport,
         baseline_demand=baseline_demand,
     )
+    if metadata_json and isinstance(res, dict):
+        out = res.get("output_json")
+        if isinstance(out, str):
+            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    return res
 
 @function_tool
 def run_validation_compare(lit_path: str, sim_path: str):
     """Correlate lit_summary metrics with simulation frac_failed."""
-    return RunValidationCompareTool().use_tool(lit_path=lit_path, sim_path=sim_path)
+    res = RunValidationCompareTool().use_tool(lit_path=lit_path, sim_path=sim_path)
+    if isinstance(res, dict):
+        _append_manifest_entry(
+            name="validation_compare.json",
+            metadata_json=json.dumps({"type": "validation", "source": "analyst", "lit_path": lit_path, "sim_path": sim_path}),
+            allow_missing=True,
+        )
+    return res
 
 @function_tool
 def run_biological_stats(
@@ -447,6 +538,77 @@ def read_artifact(path: str, summary_only: bool = False):
 
 
 @function_tool
+def summarize_artifact(path: str, max_lines: int = 5):
+    """
+    Return a lightweight summary of a file without loading full contents.
+    Supports: .json (keys), .csv (first lines), .npy/.npz (shape/keys), .gpickle (nodes/edges), .txt (head).
+    """
+    p = BaseTool.resolve_input_path(path, allow_dir=False)
+    info: Dict[str, Any] = {"path": str(p)}
+    try:
+        size = p.stat().st_size
+        info["size_bytes"] = size
+    except Exception:
+        pass
+
+    suffix = p.suffix.lower()
+    try:
+        if suffix in {".json"}:
+            with open(p) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                info["type"] = "json"
+                info["keys"] = list(data.keys())[:20]
+            elif isinstance(data, list):
+                info["type"] = "json_array"
+                info["length"] = len(data)
+                if data and isinstance(data[0], dict):
+                    info["first_keys"] = list(data[0].keys())[:20]
+        elif suffix in {".csv"}:
+            info["type"] = "csv"
+            lines = []
+            with open(p) as f:
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        break
+                    lines.append(line.rstrip("\n"))
+            info["head"] = lines
+        elif suffix in {".npy", ".npz"}:
+            import numpy as np  # type: ignore
+            arr = np.load(p, allow_pickle=True)
+            # np.savez returns an NpzFile; otherwise numpy array
+            if hasattr(arr, "files"):
+                info["type"] = "npz"
+                info["keys"] = list(arr.files)
+                if arr.files:
+                    key = arr.files[0]
+                    info["first_array_shape"] = np.shape(arr[key])
+            else:
+                info["type"] = "npy"
+                info["shape"] = np.shape(arr)
+        elif suffix in {".gpickle", ".pkl", ".pickle"}:
+            import networkx as nx  # type: ignore
+            G = nx.read_gpickle(p)  # type: ignore[attr-defined]
+            info["type"] = "gpickle_graph"
+            info["nodes"] = G.number_of_nodes()
+            info["edges"] = G.number_of_edges()
+        elif suffix in {".txt", ".md"}:
+            info["type"] = "text"
+            lines = []
+            with open(p) as f:
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        break
+                    lines.append(line.rstrip("\n"))
+            info["head"] = lines
+        else:
+            info["type"] = "unknown"
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
+@function_tool
 def reserve_output(name: str, subdir: Optional[str] = None):
     """
     Return a canonical output path under experiment_results (or a subdir) without creating it.
@@ -465,36 +627,18 @@ def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missin
     Pass metadata as a JSON string (e.g., '{"type":"figure","source":"analyst"}').
     Creates the manifest file if missing.
     """
+    return _append_manifest_entry(name=name, metadata_json=metadata_json, allow_missing=allow_missing)
+
+
+def _read_manifest_entries() -> List[Dict[str, Any]]:
+    """Helper to read manifest entries without tool wrapper."""
     exp_dir = BaseTool.resolve_output_dir(None)
     manifest_path = exp_dir / "file_manifest.json"
-    manifest: List[Dict[str, Any]] = []
-    if manifest_path.exists():
-        try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-                if not isinstance(manifest, list):
-                    manifest = []
-        except Exception:
-            manifest = []
-    # Resolve the referenced file; if missing and allow_missing is False, return an error.
-    try:
-        target_path = BaseTool.resolve_input_path(name, allow_dir=True)
-    except FileNotFoundError:
-        if not allow_missing:
-            return {"error": f"Referenced file not found: {name}. Use reserve_output + append_manifest after creation, or set allow_missing=True if intentional."}
-        target_path = BaseTool.resolve_output_dir(None) / name
-
-    meta: Dict[str, Any] = {}
-    if metadata_json:
-        try:
-            meta = json.loads(metadata_json)
-        except Exception:
-            meta = {"raw": metadata_json}
-    entry = {"name": name, "path": str(target_path), "metadata": meta}
-    manifest.append(entry)
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-    return {"manifest_path": str(manifest_path), "n_entries": len(manifest)}
+    if not manifest_path.exists():
+        return []
+    with open(manifest_path) as f:
+        data = json.load(f)
+    return data if isinstance(data, list) else []
 
 
 @function_tool
@@ -502,24 +646,73 @@ def read_manifest():
     """Read the run's file manifest if present (experiment_results/file_manifest.json)."""
     exp_dir = BaseTool.resolve_output_dir(None)
     manifest_path = exp_dir / "file_manifest.json"
-    if not manifest_path.exists():
-        return {"manifest_path": str(manifest_path), "entries": []}
-    with open(manifest_path) as f:
-        data = json.load(f)
-    return {"manifest_path": str(manifest_path), "entries": data}
+    return {"manifest_path": str(manifest_path), "entries": _read_manifest_entries()}
+
+
+def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = None, metadata_json: Optional[str] = None) -> Dict[str, Any]:
+    root = BaseTool.resolve_output_dir(subdir or None)
+    # Normalize common nested paths (e.g., figures/figures, graphs/graphs)
+    norm_name = name
+    for dup in ("figures/figures/", "graphs/graphs/", "derived/derived/", "processed/processed/"):
+        if norm_name.startswith(dup):
+            norm_name = norm_name[len(dup) - len(dup.split('/')[-1]) - 1 :]  # strip duplicate prefix
+    # If name already starts with figures/ or graphs/ and we're writing into those roots, strip the prefix
+    if subdir == "figures" and norm_name.startswith("figures/"):
+        norm_name = norm_name[len("figures/") :]
+    if subdir in ("graphs", "derived", "processed") and norm_name.startswith(f"{subdir}/"):
+        norm_name = norm_name[len(f"{subdir}/") :]
+
+    path = root / norm_name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if str(path).lower().endswith(".pdf"):
+        # Minimal PDF writer: single-page, Helvetica 10pt, text laid out top-down.
+        lines = content.splitlines()
+        x, y = 50, 750
+        line_height = 14
+        content_lines: list[str] = []
+        for line in lines:
+            if y < 50:
+                break  # single-page fallback
+            escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            content_lines.append(f"BT /F1 10 Tf {x} {y} Td ({escaped}) Tj ET")
+            y -= line_height
+        stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+
+        objects: list[bytes] = []
+        objects.append(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n")
+        objects.append(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
+        objects.append(b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n")
+        objects.append(f"4 0 obj << /Length {len(stream)} >> stream\n".encode() + stream + b"\nendstream\nendobj\n")
+        objects.append(b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
+
+        pdf_parts = [b"%PDF-1.4\n"]
+        offsets: list[int] = []
+        for obj in objects:
+            offsets.append(sum(len(p) for p in pdf_parts))
+            pdf_parts.append(obj)
+        xref_start = sum(len(p) for p in pdf_parts)
+        pdf_parts.append(b"xref\n0 6\n0000000000 65535 f \n")
+        for off in offsets:
+            pdf_parts.append(f"{off:010d} 00000 n \n".encode())
+        pdf_parts.append(b"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n")
+        pdf_parts.append(f"{xref_start}\n".encode())
+        pdf_parts.append(b"%%EOF\n")
+
+        path.write_bytes(b"".join(pdf_parts))
+    else:
+        with open(path, "w") as f:
+            f.write(content)
+    if metadata_json:
+        _append_manifest_entry(name=str(path), metadata_json=metadata_json, allow_missing=True)
+    return {"path": str(path)}
 
 
 @function_tool
-def write_text_artifact(name: str, content: str, subdir: Optional[str] = None):
+def write_text_artifact(name: str, content: str, subdir: Optional[str] = None, metadata_json: Optional[str] = None):
     """
     Write text content to a file under the run (default experiment_results or a subdir) and return its path.
     """
-    root = BaseTool.resolve_output_dir(subdir or None)
-    path = root / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
-    return {"path": str(path)}
+    return _write_text_artifact_raw(name=name, content=content, subdir=subdir, metadata_json=metadata_json)
 
 
 @function_tool
@@ -527,12 +720,7 @@ def write_interpretation_text(content: str, filename: str = "theory_interpretati
     """
     Convenience: save interpretation text to experiment_results/<filename> (default theory_interpretation.txt).
     """
-    root = BaseTool.resolve_output_dir(None)
-    path = root / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
-    return {"path": str(path)}
+    return _write_text_artifact_raw(name=filename, content=content, subdir=None, metadata_json='{"type":"interpretation","source":"interpreter"}')
 
 
 @function_tool
@@ -540,12 +728,7 @@ def write_figures_readme(content: str, filename: str = "README.md"):
     """
     Convenience: save a figures README under figures/ (default README.md).
     """
-    root = BaseTool.resolve_output_dir("figures")
-    path = root / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
-    return {"path": str(path)}
+    return _write_text_artifact_raw(name=filename, content=content, subdir="figures", metadata_json='{"type":"readme","source":"analyst"}')
 
 
 @function_tool
@@ -567,6 +750,32 @@ def check_status(status_path: Optional[str] = None, glob_pattern: str = "*.statu
         except Exception as exc:
             statuses.append({"path": str(m), "error": str(exc)})
     return {"root": str(root), "matches": statuses}
+
+
+@function_tool
+def get_artifact_index(max_entries: int = 2000):
+    """
+    Build a lightweight index of artifacts under experiment_results and include manifest entries if present.
+    """
+    root = BaseTool.resolve_output_dir(None)
+    manifest = _read_manifest_entries()
+    files: List[Dict[str, Any]] = []
+    try:
+        count = 0
+        for p in root.rglob("*"):
+            if p.is_file():
+                rel = str(p.relative_to(root))
+                try:
+                    size = p.stat().st_size
+                except Exception:
+                    size = None
+                files.append({"path": rel, "suffix": p.suffix.lower(), "size": size})
+                count += 1
+                if count >= max_entries:
+                    break
+    except Exception as exc:
+        return {"root": str(root), "manifest": manifest, "error": f"index failed: {exc}"}
+    return {"root": str(root), "manifest": manifest, "files": files}
 
 
 @function_tool
@@ -596,11 +805,19 @@ def coder_create_python(file_path: str, content: str):
     if not base:
         raise ValueError("AISC_BASE_FOLDER is not set; cannot determine safe write location.")
     base_path = Path(base).resolve()
-    target = (base_path / file_path).resolve()
-    try:
-        target.relative_to(base_path)
-    except Exception:
-        raise ValueError(f"Refusing to write outside run folder: {target}")
+    fp = Path(file_path)
+    # Resolve relative paths against CWD to detect if they already include the base folder
+    if not fp.is_absolute():
+        fp = (Path.cwd() / fp).resolve()
+    # If the provided path is already inside the base, use it; otherwise anchor to base_path
+    if fp.is_relative_to(base_path):
+        target = fp
+    else:
+        target = (base_path / file_path).resolve()
+        try:
+            target.relative_to(base_path)
+        except Exception:
+            raise ValueError(f"Refusing to write outside run folder: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w") as f:
         f.write(content)
@@ -613,6 +830,33 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     Constructs the agents with strict context partitioning.
     """
     common_settings = ModelSettings(tool_choice="auto")
+    role_max_turns = 40  # cap for sub-agent turn depth when invoked as a tool
+
+    async def extract_run_output(run_result: RunResult) -> str:
+        """
+        Custom extractor to return a concise summary for sub-agent tool calls.
+        Includes status/error if present and the final message text.
+        """
+        parts: List[str] = []
+        # Guard against different RunResult shapes (object or dict-like)
+        err = getattr(run_result, "error", None)
+        if err is None and hasattr(run_result, "get"):
+            err = run_result.get("error", None)  # type: ignore
+        if err:
+            parts.append(f"error: {err}")
+
+        status_val = getattr(run_result, "status", None)
+        if status_val is None and hasattr(run_result, "get"):
+            status_val = run_result.get("status", None)  # type: ignore
+        if status_val:
+            parts.append(f"status: {status_val}")
+
+        out = getattr(run_result, "output", None)
+        if out is None and hasattr(run_result, "get"):
+            out = run_result.get("output", None)  # type: ignore
+        if out:
+            parts.append(str(out))
+        return "\n".join(parts) if parts else ""
     
     # Extract richer context from Idea JSON and format lists for Prompt ingestion
     title = idea.get('Title', 'Project')
@@ -677,8 +921,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         tools=[
             get_run_paths,
             resolve_path,
+            get_artifact_index,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
@@ -709,8 +955,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         tools=[
             get_run_paths,
             resolve_path,
+            get_artifact_index,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
@@ -743,8 +991,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         tools=[
             get_run_paths,
             resolve_path,
+            get_artifact_index,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
@@ -774,8 +1024,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         tools=[
             get_run_paths,
             resolve_path,
+            get_artifact_index,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
@@ -835,6 +1087,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_path,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
@@ -872,17 +1125,18 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_path,
             list_artifacts,
             read_artifact,
+            summarize_artifact,
             reserve_output,
             append_manifest,
             read_manifest,
             check_status,
-            archivist.as_tool(tool_name="archivist", tool_description="Search literature."),
-            modeler.as_tool(tool_name="modeler", tool_description="Run simulations."),
-            analyst.as_tool(tool_name="analyst", tool_description="Create figures."),
-            coder.as_tool(tool_name="coder", tool_description="Write/update helper code in run folder."),
-            interpreter.as_tool(tool_name="interpreter", tool_description="Generate theoretical interpretation."),
-            publisher.as_tool(tool_name="publisher", tool_description="Write and compile text."),
-            reviewer.as_tool(tool_name="reviewer", tool_description="Critique the draft."),
+            archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
+            modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            coder.as_tool(tool_name="coder", tool_description="Write/update helper code in run folder.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            interpreter.as_tool(tool_name="interpreter", tool_description="Generate theoretical interpretation.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            publisher.as_tool(tool_name="publisher", tool_description="Write and compile text.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            reviewer.as_tool(tool_name="reviewer", tool_description="Critique the draft.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
         ],
         model_settings=ModelSettings(tool_choice="required"),
     )

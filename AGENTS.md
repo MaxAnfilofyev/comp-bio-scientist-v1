@@ -69,6 +69,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 - **Filesystem helpers** (agents_orchestrator.py wrappers)
   - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output`, `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`), `append_manifest`/`read_manifest`, `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`.
+- **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 
 ## Environment and API Keys
 

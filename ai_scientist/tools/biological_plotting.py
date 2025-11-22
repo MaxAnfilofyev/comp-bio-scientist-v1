@@ -59,6 +59,8 @@ class RunBiologicalPlottingTool(BaseTool):
             if not candidates:
                 raise FileNotFoundError(f"No solution JSON found under directory: {path}")
             path = candidates[0]
+        if path.suffix.lower() != ".json":
+            raise ValueError(f"run_biological_plotting expects a JSON solution file; got {path.suffix} at {path}")
 
         with path.open() as f:
             sol = json.load(f)

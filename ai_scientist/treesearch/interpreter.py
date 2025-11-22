@@ -250,7 +250,7 @@ class Interpreter:
         assert state[0] == "state:ready", state
         start_time = time.time()
 
-        # this flag indicates that the child ahs exceeded the time limit and an interrupt was sent
+        # this flag indicates that the child has exceeded the time limit and an interrupt was sent
         # if the child process dies without this flag being set, it's an unexpected termination
         child_in_overtime = False
 
