@@ -1,8 +1,4 @@
-"""
-Agents-SDK orchestrator with a PI agent that delegates to role agents (tools/handoffs)
-until the Holistic Reviewer reports no gaps.
-"""
-
+# pyright: reportMissingImports=false
 import argparse
 import json
 import os
@@ -10,69 +6,106 @@ import os.path as osp
 from datetime import datetime
 import asyncio
 from typing import Any, Dict, List, Optional
+
+# --- Framework Imports ---
 try:
     from dotenv import load_dotenv
-except Exception:
+except ImportError:
     load_dotenv = None
 
 from agents import Agent, Runner, function_tool, ModelSettings
 
-# Wrap existing tools with function_tool adapters
+# --- Underlying Tool Imports ---
 from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
 from ai_scientist.tools.lit_validator import LitSummaryValidatorTool
-from ai_scientist.tools.graph_builder import BuildGraphsTool
 from ai_scientist.tools.compartmental_sim import RunCompartmentalSimTool
-from ai_scientist.tools.sensitivity_sweep import RunSensitivitySweepTool
-from ai_scientist.tools.validation_compare import RunValidationCompareTool
-from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
-from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.biological_plotting import RunBiologicalPlottingTool
+from ai_scientist.tools.biological_model import RunBiologicalModelTool
+from ai_scientist.tools.sensitivity_sweep import RunSensitivitySweepTool
+from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
+from ai_scientist.tools.validation_compare import RunValidationCompareTool
+from ai_scientist.tools.biological_stats import RunBiologicalStatsTool
+from ai_scientist.tools.graph_builder import BuildGraphsTool
+from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
 from ai_scientist.tools.claim_graph import ClaimGraphTool
 from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
-from ai_scientist.perform_biological_interpretation import interpret_biological_results
+from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.perform_writeup import perform_writeup
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
+from ai_scientist.perform_biological_interpretation import interpret_biological_results
 
+# --- Configuration & Helpers ---
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Agents orchestrator with PI and role agents.")
-    p.add_argument("--load_idea", required=True, help="Path to idea JSON (single idea object).")
-    p.add_argument("--idea_idx", type=int, default=0, help="Index if the idea file contains a list of ideas.")
+    p = argparse.ArgumentParser(description="ADCRT: Argument-Driven Computational Research Team")
+    p.add_argument("--load_idea", required=True, help="Path to idea JSON.")
     p.add_argument("--model", default="gpt-5-mini-2025-08-07", help="LLM model id.")
-    p.add_argument("--max_cycles", type=int, default=25, help="Max PI cycles (or stop earlier if reviewer says 'no gaps' and PDF exists).")
-    p.add_argument("--timeout", type=float, default=180.0, help="Max seconds to wait for a full run before aborting.")
-    p.add_argument(
-        "--input",
-        default="Begin planning and execution for this project. Identify next actions and delegate.",
-        help="Initial input message to the PI agent.",
-    )
+    p.add_argument("--max_cycles", type=int, default=30, help="Max Orchestrator turns.")
+    p.add_argument("--timeout", type=float, default=1800.0, help="Timeout in seconds (default: 30 mins).") 
+    p.add_argument("--base_folder", default=None, help="Existing experiment directory to restart from (overrides timestamped creation).")
+    p.add_argument("--resume", action="store_true", help="Don't overwrite existing experiment folder.")
+    p.add_argument("--idea_idx", type=int, default=0, help="Index if the idea file contains a list of ideas.")
+    p.add_argument("--input", default=None, help="Initial input message to the PI agent.")
     return p.parse_args()
 
-
-# Simple masker to avoid logging full keys
-def _mask_token(tok: str) -> str:
-    if not tok:
-        return ""
-    if len(tok) <= 8:
-        return tok
-    return f"{tok[:4]}...{tok[-4:]}"
-
-
-# Tool adapters with explicit schemas
 def _fill_output_dir(output_dir: Optional[str]) -> str:
+    # Helper to default to environment variable if not passed by agent
     return output_dir or os.environ.get("AISC_EXP_RESULTS", "experiment_results")
 
+def format_list_field(data: Any) -> str:
+    """Helper to format JSON lists (like Experiments) into a clean string block for LLMs."""
+    if isinstance(data, list):
+        return "\n".join([f"- {item}" for item in data])
+    return str(data)
+
+# --- Tool Definitions (Wrappers for Agents SDK) ---
+
+@function_tool
+def check_project_state(base_folder: str) -> str:
+    """
+    Reads the project state to see what artifacts exist. 
+    Creates the folder structure if it does not exist.
+    """
+    status_msg = "Folder existed"
+    
+    # Auto-creation logic
+    if not os.path.exists(base_folder):
+        try:
+            os.makedirs(base_folder, exist_ok=True)
+            # Also create the standard subfolder to save the agents a step
+            exp_results = os.path.join(base_folder, "experiment_results")
+            os.makedirs(exp_results, exist_ok=True)
+            status_msg = f"Created new directory: {base_folder}"
+        except Exception as e:
+            return json.dumps({"error": f"Failed to create folder {base_folder}: {str(e)}"})
+        
+    exists = os.listdir(base_folder)
+    exp_results = os.path.join(base_folder, "experiment_results")
+    artifacts = os.listdir(exp_results) if os.path.exists(exp_results) else []
+    
+    return json.dumps({
+        "status_message": status_msg,
+        "root_files": exists,
+        "artifacts": artifacts,
+        "has_lit_review": "lit_summary.json" in artifacts,
+        "has_data": any(x.endswith('.csv') for x in artifacts),
+        "has_plots": any(x.endswith('.png') for x in artifacts),
+        "has_draft": "manuscript.pdf" in exists or "manuscript.tex" in exists
+    })
+
+@function_tool
+def log_strategic_pivot(reason: str, new_plan: str):
+    """Logs a major change in direction to the system logs."""
+    print(f"\n[STRATEGIC PIVOT] {reason}\nPlan: {new_plan}\n")
+    return "Pivot logged."
 
 @function_tool
 def assemble_lit_data(
     queries: Optional[List[str]] = None,
     seed_paths: Optional[List[str]] = None,
     max_results: int = 25,
-    use_semantic_scholar: bool = False,
+    use_semantic_scholar: bool = True,
 ):
+    """Searches for literature and creates a lit_summary."""
     return LitDataAssemblyTool().use_tool(
         queries=queries,
         seed_paths=seed_paths,
@@ -80,20 +113,14 @@ def assemble_lit_data(
         use_semantic_scholar=use_semantic_scholar,
     )
 
-
 @function_tool
 def validate_lit_summary(path: str):
+    """Validates the structure of the literature summary."""
     return LitSummaryValidatorTool().use_tool(path=path)
-
-
-@function_tool
-def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):
-    return BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
-
 
 @function_tool
 def run_comp_sim(
-    graph_path: str,
+    graph_path: Optional[str] = None, # Optional because tool might auto-gen
     output_dir: Optional[str] = None,
     steps: int = 200,
     dt: float = 0.1,
@@ -103,8 +130,9 @@ def run_comp_sim(
     noise_std: float = 0.0,
     seed: int = 0,
 ):
+    """Runs a compartmental simulation and saves CSV data."""
     return RunCompartmentalSimTool().use_tool(
-        graph_path=graph_path,
+        graph_path=graph_path or "", # Handle optional
         output_dir=_fill_output_dir(output_dir),
         steps=steps,
         dt=dt,
@@ -115,6 +143,62 @@ def run_comp_sim(
         seed=seed,
     )
 
+@function_tool
+def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None, make_phase_portrait: bool = True):
+    """Generates plots from simulation data."""
+    return RunBiologicalPlottingTool().use_tool(
+        solution_path=solution_path,
+        output_dir=_fill_output_dir(output_dir),
+        make_phase_portrait=make_phase_portrait,
+    )
+
+@function_tool
+def read_manuscript(path: str):
+    """Reads the PDF or text of the manuscript."""
+    return ManuscriptReaderTool().use_tool(path=path)
+
+@function_tool
+def run_writeup_task(
+    base_folder: Optional[str] = None,
+    page_limit: int = 8
+):
+    """Compiles the manuscript using the theoretical biology template."""
+    base_folder = base_folder or os.environ.get("AISC_BASE_FOLDER", "")
+    ok = perform_writeup(
+        base_folder=base_folder,
+        no_writing=False,
+        num_cite_rounds=10,
+        small_model="gpt-4o-mini", 
+        big_model="gpt-4o",
+        n_writeup_reflections=2,
+        page_limit=page_limit,
+    )
+    return {"success": ok}
+
+@function_tool
+def search_semantic_scholar(query: str):
+    """Directly search Semantic Scholar for papers."""
+    return SemanticScholarSearchTool().use_tool(query=query)
+
+@function_tool
+def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):
+    """Generate canonical graphs (binary tree, heavy-tailed, random tree)."""
+    return BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
+
+@function_tool
+def run_biological_model(
+    model_key: str = "cooperation_evolution",
+    time_end: float = 20.0,
+    num_points: int = 200,
+    output_dir: Optional[str] = None,
+):
+    """Run a built-in biological ODE/replicator model and save JSON results."""
+    return RunBiologicalModelTool().use_tool(
+        model_key=model_key,
+        time_end=time_end,
+        num_points=num_points,
+        output_dir=_fill_output_dir(output_dir),
+    )
 
 @function_tool
 def run_sensitivity_sweep(
@@ -125,6 +209,7 @@ def run_sensitivity_sweep(
     steps: int = 150,
     dt: float = 0.1,
 ):
+    """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
     return RunSensitivitySweepTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
@@ -133,12 +218,6 @@ def run_sensitivity_sweep(
         steps=steps,
         dt=dt,
     )
-
-
-@function_tool
-def run_validation_compare(lit_path: str, sim_path: str):
-    return RunValidationCompareTool().use_tool(lit_path=lit_path, sim_path=sim_path)
-
 
 @function_tool
 def run_intervention_tests(
@@ -149,6 +228,7 @@ def run_intervention_tests(
     baseline_transport: float = 0.05,
     baseline_demand: float = 0.5,
 ):
+    """Test parameter interventions vs a baseline and report delta frac_failed."""
     return RunInterventionTesterTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
@@ -158,61 +238,50 @@ def run_intervention_tests(
         baseline_demand=baseline_demand,
     )
 
+@function_tool
+def run_validation_compare(lit_path: str, sim_path: str):
+    """Correlate lit_summary metrics with simulation frac_failed."""
+    return RunValidationCompareTool().use_tool(lit_path=lit_path, sim_path=sim_path)
 
 @function_tool
-def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None, make_phase_portrait: bool = True):
-    return RunBiologicalPlottingTool().use_tool(
-        solution_path=solution_path,
-        output_dir=_fill_output_dir(output_dir),
-        make_phase_portrait=make_phase_portrait,
-    )
-
-
-@function_tool
-def run_interpretation(base_folder: Optional[str] = None, config_path: Optional[str] = None, model: str = "gpt-5-mini"):
-    base_folder = base_folder or os.environ.get("AISC_BASE_FOLDER", "")
-    config_path = config_path or os.environ.get("AISC_CONFIG_PATH", "")
-    ok = interpret_biological_results(base_folder=base_folder, config_path=config_path, model=model)
-    return {"success": ok}
-
-
-@function_tool
-def run_writeup(
-    base_folder: Optional[str] = None,
-    model_writeup_small: str = "gpt-5-mini-2025-08-07",
-    model_writeup: str = "gpt-5.1-2025-11-13",
-    page_limit: int = 8,
+def run_biological_stats(
+    task: str,
+    pvalues: Optional[List[float]] = None,
+    alpha: float = 0.05,
+    test_ids: Optional[List[str]] = None,
+    background_ids: Optional[List[str]] = None,
+    term_to_ids_json: Optional[str] = None,
 ):
-    base_folder = base_folder or os.environ.get("AISC_BASE_FOLDER", "")
-    ok = perform_writeup(
-        base_folder=base_folder,
-        no_writing=False,
-        num_cite_rounds=20,
-        small_model=model_writeup_small,
-        big_model=model_writeup,
-        n_writeup_reflections=3,
-        page_limit=page_limit,
+    """Run BH correction or enrichment analysis. term_to_ids_json: JSON mapping term -> [ids]."""
+    term_to_ids: Optional[Dict[str, List[str]]] = None
+    if term_to_ids_json:
+        try:
+            term_to_ids = json.loads(term_to_ids_json)
+        except Exception as exc:
+            raise ValueError(f"term_to_ids_json must be JSON mapping term -> [ids]; got error: {exc}") from exc
+    return RunBiologicalStatsTool().use_tool(
+        task=task,
+        pvalues=pvalues,
+        alpha=alpha,
+        test_ids=test_ids,
+        background_ids=background_ids,
+        term_to_ids=term_to_ids,
     )
-    return {"success": ok}
-
-
-@function_tool
-def read_manuscript(path: str):
-    return ManuscriptReaderTool().use_tool(path=path)
-
 
 @function_tool
 def update_claim_graph(
-    path: str,
-    claim_id: str,
-    claim_text: str,
+    path: Optional[str] = None,
+    claim_id: str = "thesis",
+    claim_text: str = "",
     parent_id: Optional[str] = None,
     support: Optional[List[str]] = None,
     status: str = "unlinked",
     notes: str = "",
 ):
+    """Add or update a claim entry with support references."""
+    claim_path = path or os.path.join(os.environ.get("AISC_BASE_FOLDER", ""), "claim_graph.json")
     return ClaimGraphTool().use_tool(
-        path=path,
+        path=claim_path,
         claim_id=claim_id,
         claim_text=claim_text,
         parent_id=parent_id,
@@ -221,175 +290,193 @@ def update_claim_graph(
         notes=notes,
     )
 
+@function_tool
+def check_claim_graph(path: Optional[str] = None):
+    """Check claim_graph.json for claims lacking supporting evidence."""
+    claim_path = path or os.path.join(os.environ.get("AISC_BASE_FOLDER", ""), "claim_graph.json")
+    return ClaimGraphCheckTool().use_tool(path=claim_path)
 
 @function_tool
-def check_claim_graph(path: str):
-    return ClaimGraphCheckTool().use_tool(path=path)
+def interpret_biology(base_folder: Optional[str] = None, config_path: Optional[str] = None):
+    """Generate interpretation.json/md for theoretical biology runs."""
+    return {
+        "success": interpret_biological_results(
+            base_folder=base_folder or os.environ.get("AISC_BASE_FOLDER", ""),
+            config_path=config_path or os.environ.get("AISC_CONFIG_PATH", ""),
+        )
+    }
 
+# --- Agent Definitions ---
 
-def build_agents(model: str, idea: Dict[str, Any]):
-    idea_title = idea.get("Title", "the project")
-    idea_hyp = idea.get("Short Hypothesis", "")
-    idea_abs = idea.get("Abstract", "")
-    idea_exps = idea.get("Experiments", [])
-    idea_risks = idea.get("Risk Factors and Limitations", [])
+def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
+    """
+    Constructs the agents with strict context partitioning.
+    """
+    common_settings = ModelSettings(tool_choice="auto")
+    
+    # Extract richer context from Idea JSON and format lists for Prompt ingestion
+    title = idea.get('Title', 'Project')
+    abstract = idea.get('Abstract', '')
+    hypothesis = idea.get('Short Hypothesis', 'None')
+    related_work = idea.get('Related Work', 'None provided.')
+    
+    experiments_plan = format_list_field(idea.get('Experiments', []))
+    risk_factors = format_list_field(idea.get('Risk Factors and Limitations', []))
 
-    compact_exps = "; ".join(idea_exps) if isinstance(idea_exps, list) else str(idea_exps)
-    compact_risks = "; ".join(idea_risks) if isinstance(idea_risks, list) else str(idea_risks)
-
-    # Sub-agents
-    common_settings = ModelSettings(tool_choice="auto", request_timeout=30)
-
+    # 1. The Archivist (Scope: Literature & Claims)
     archivist = Agent(
         name="Archivist",
         instructions=(
-            f"You are the senior literature curator for '{idea_title}'. Gather and normalize literature on the project's topic. "
-            "Use lit tools. Save lit_summary.csv/json with fields: region, axon_length, branch_order, "
-            "node_degree, transport_rate, mitophagy_rate, atp_diffusion_time, calcium_energy_cost. "
-            "If Semantic Scholar or any lookup fails or returns nothing, still write lit_summary.csv/json with at least one stub row "
-            "containing the claim text and support='TBD' so downstream analysis can proceed; do not block or retry indefinitely. "
-            "Return structured status (status/artifacts/notes) and write it to experiment_results/status_archivist.json (or append to tool_summary.txt). "
-            f"Context: {idea_abs}"
+            f"Role: Senior Literature Curator.\n"
+            f"Goal: Verify novelty of '{title}' and map claims to citations.\n"
+            f"Context: {abstract}\n"
+            f"Related Work to Consider: {related_work}\n"
+            "Directives:\n"
+            "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
+            "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
+            "3. Output 'lit_summary.json' to experiment_results/.\n"
+            "4. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations."
         ),
         model=model,
-        model_settings=common_settings,
-        tools=[assemble_lit_data, validate_lit_summary],
+        tools=[assemble_lit_data, validate_lit_summary, search_semantic_scholar, update_claim_graph],
+        model_settings=common_settings
     )
+
+    # 2. The Modeler (Scope: Python & Simulation)
     modeler = Agent(
         name="Modeler",
         instructions=(
-            f"You are the senior computational modeler for '{idea_title}'. Build canonical graphs and run compartmental simulations/sweeps/"
-            "interventions relevant to the hypothesis. Use deterministic seeds. Save graphs to graphs/, outputs to "
-            "experiment_results/. "
-            "Use modeling/stats utilities when helpful (perform_biological_modeling.py, perform_biological_stats.py). "
-            "If plots are needed, coordinate with Analyst/Publisher to target the blank_theoretical_biology_latex structure (Abstract, Intro, Model/Methods, Results with figures, Discussion, References) at ai_scientist/blank_theoretical_biology_latex/. "
-            "Return structured status (status/artifacts/notes) and write it to experiment_results/status_modeler.json (or append to tool_summary.txt). "
-            f"Context: {idea_abs}"
+            f"Role: Computational Biologist.\n"
+            f"Goal: Execute simulations for '{title}'.\n"
+            f"Hypothesis: {hypothesis}\n"
+            f"Experimental Plan:\n{experiments_plan}\n"
+            "Directives:\n"
+            "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
+            "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
+            "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
+            "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
+            "5. Save raw outputs to experiment_results/."
         ),
         model=model,
-        model_settings=common_settings,
-        tools=[build_graphs, run_comp_sim, run_sensitivity_sweep, run_intervention_tests],
+        tools=[build_graphs, run_biological_model, run_comp_sim, run_sensitivity_sweep, run_intervention_tests], 
+        model_settings=common_settings
     )
+
+    # 3. The Analyst (Scope: Visualization & Validation)
     analyst = Agent(
         name="Analyst",
         instructions=(
-            f"You are the senior scientific visualization/analysis expert for '{idea_title}', producing publication-quality plots (SVG/PNG) for venues like PLOS Computational Biology. "
-            "Compare simulations vs lit_summary, compute correlations/effect sizes, produce clear, well-labeled figures. Save artifacts to experiment_results/. "
-            "Use plot aggregation if helpful (perform_plotting.py) and stats utilities (perform_biological_stats.py). "
-            "Coordinate with Publisher to align figures with the blank_theoretical_biology_latex sections (Abstract, Intro, Model/Methods, Results with figures, Discussion, References) at ai_scientist/blank_theoretical_biology_latex/. "
-            "Write concise, informative captions when producing plots. Place final figures in figures/ when using plot aggregation; otherwise keep plots in experiment_results/."
-            "Return structured status (status/artifacts/notes) and write it to experiment_results/status_analyst.json (or append to tool_summary.txt). "
-            f"Context: {idea_abs}"
+            "Role: Scientific Visualization Expert.\n"
+            "Goal: Convert simulation data into PLOS-quality figures.\n"
+            "Directives:\n"
+            "1. Read data from experiment_results/.\n"
+            "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
+            "3. Generate PNG/SVG files using 'run_biological_plotting'.\n"
+            "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment."
         ),
         model=model,
-        model_settings=common_settings,
-        tools=[run_validation_compare, run_biological_plotting],
+        tools=[run_biological_plotting, run_validation_compare, run_biological_stats],
+        model_settings=common_settings
     )
+
+    # 4. The Reviewer (Scope: Logic & Completeness)
     reviewer = Agent(
-        name="HolisticReviewer",
+        name="Reviewer",
         instructions=(
-            f"You are the senior holistic reviewer for '{idea_title}'. Review artifacts (lit_summary, sims, sweeps, plots, text). "
-            "Trace claims/theses to supporting evidence: either generated analyses (figures/tables/formulae) or cited prior work. "
-            "Check novelty/significance framing, Methods reproducibility (parameters, code availability), correct inline citations/bibliography, and structural completeness (Abstract, Intro, Methods, Results, Discussion). "
-            "Ensure alignment with the target template (blank_theoretical_biology_latex at ai_scientist/blank_theoretical_biology_latex/), including well-placed figures/tables and natbib citations. "
-            "If other templates are used (blank_bioinformatics_latex or blank_icbinb_latex), ensure structure/citations match. "
-            "In Discussion, ensure coverage of: main finding/mechanism, relation to literature, translational relevance, limitations/future directions. "
-            "Verify outputs follow conventions (figures in figures/ if aggregated, data/artifacts in experiment_results/), and that natbib citation style from the template dirs is respected. "
-            "Use the manuscript reader tool to inspect current and previous drafts (PDF or text) to spot dropped claims or missing citations that should be reinstated."
-            "Flag contradictions, missing support, missing/incorrect citations, or structural gaps in a 'gaps' list; respond 'no gaps' only when clear. "
-            "Return structured status (status/artifacts/notes) and write it to experiment_results/status_reviewer.json (or append to tool_summary.txt). "
-            f"Experiments plan: {compact_exps} Risks: {compact_risks}"
+            "Role: Holistic Reviewer (Reviewer #2).\n"
+            "Goal: Identify logical gaps and structural flaws.\n"
+            f"Risk Factors & Limitations to Check:\n{risk_factors}\n"
+            "Directives:\n"
+            "1. Read the manuscript draft using 'read_manuscript'.\n"
+            "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
+            "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
+            "4. If gaps exist, report them clearly to the PI.\n"
+            "5. Only report 'NO GAPS' if the PDF validates completely."
         ),
         model=model,
-        model_settings=common_settings,
-        tools=[read_manuscript, update_claim_graph, check_claim_graph],
+        tools=[read_manuscript, check_claim_graph, run_biological_stats],
+        model_settings=common_settings
     )
+
+    # 5. The Interpreter (Scope: Theoretical Interpretation)
+    interpreter = Agent(
+        name="Interpreter",
+        instructions=(
+            "Role: Mathematical–Biological Interpreter.\n"
+            "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
+            "Directives:\n"
+            "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
+            "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
+            "3. If interpretation fails, report the error clearly."
+        ),
+        model=model,
+        tools=[interpret_biology],
+        model_settings=common_settings,
+    )
+
+    # 6. The Publisher (Scope: LaTeX & Compilation)
     publisher = Agent(
         name="Publisher",
         instructions=(
-            f"You are the senior production editor for '{idea_title}'. When artifacts are ready, run interpretation/writeup for theoretical biology. "
-            "Ensure formatting, clarity, and completeness. Target the blank_theoretical_biology_latex structure (Abstract, Intro, Model/Methods, Results with figures, Discussion, References) located at ai_scientist/blank_theoretical_biology_latex/. "
-            "Use provided LaTeX deps (natbib, fancyhdr), plot aggregation (perform_plotting.py) if helpful, and consider other templates if specified (blank_bioinformatics_latex, blank_icbinb_latex). "
-            "Ensure all prior-knowledge claims are cited inline and the References list is complete (natbib citation style from the template dirs). "
-            "Ensure figures are numbered with clear captions; include Analyst captions or refine them as needed. "
-            "Note code/data paths and parameter dumps for reproducibility. Save PDFs to the run root; keep data/artifacts in experiment_results/ and figures in figures/ when aggregated. Use the experiments plan and risks for alignment. "
-            "Return structured status (status/artifacts/notes) and write it to experiment_results/status_publisher.json (or append to tool_summary.txt). "
-            f"Plan: {compact_exps} Risks: {compact_risks}"
+            "Role: Production Editor.\n"
+            "Goal: Compile final PDF.\n"
+            "Directives:\n"
+            "1. Target the 'blank_theoretical_biology_latex' template.\n"
+            "2. Integrate 'lit_summary.json' and figures into the text.\n"
+            "3. Ensure compile success. Debug LaTeX errors autonomously."
         ),
         model=model,
-        model_settings=common_settings,
-        tools=[run_interpretation, run_writeup],
+        tools=[run_writeup_task],
+        model_settings=common_settings
     )
 
-    # PI orchestrator with handoffs
+    # 7. The PI (Scope: Strategy & Handoffs)
     pi = Agent(
         name="PI",
         instructions=(
-            f"You are the senior PI for '{idea_title}'. Hypothesis: {idea_hyp}. "
-            f"Abstract: {idea_abs} Experiments: {compact_exps} Risks: {compact_risks}. "
-            "Plan and delegate tasks to close gaps. Always delegate via a tool call each turn (no free-text-only turns). "
-            "Your first action MUST be calling the archivist tool; if Semantic Scholar is unreliable, pass use_semantic_scholar=False so it still writes lit_summary.csv/json (even if empty) in experiment_results/. "
-            "If literature retrieval fails, instruct the archivist to record remembered claims with support='TBD' in lit_summary so analysis can continue; the reviewer will later flag these for real evidence or claim revision. "
-            "After that, continue delegating via tools only. Ensure claims are backed by analyses or cited prior work and citations are correct. Keep everyone aligned to the target template (blank_theoretical_biology_latex at ai_scientist/blank_theoretical_biology_latex/) with figures/tables and natbib citations. "
-            "If other templates are required (blank_bioinformatics_latex, blank_icbinb_latex), direct Publisher accordingly. "
-            "Enforce output conventions: figures in figures/ when using plot aggregation, data/artifacts in experiment_results/, PDFs at run root, natbib citation style. Ensure reproducibility notes (code/data paths, params) are captured. "
-            "For each delegation, pass a clear task and work_dir (e.g., experiment_results/), require structured status back, and ensure the agent writes status_*.json (or appends to tool_summary.txt). "
-            "Call sub-agents as tools. Once the reviewer reports no gaps, call the Publisher to run interpretation/writeup (target blank_theoretical_biology_latex sections: Abstract, Intro, Model/Methods, Results with figures, Discussion, References) and confirm a PDF exists before stopping."
+            f"Role: Principal Investigator for project: {title}.\n"
+            f"Hypothesis: {hypothesis}\n"
+            "Responsibilities:\n"
+            "1. STATE CHECK: First, call 'check_project_state' to see what has been done.\n"
+            "2. DELEGATE: Handoff to specialized agents based on missing artifacts.\n"
+            "   - Missing Lit Review -> Archivist\n"
+            "   - Missing Data -> Modeler\n"
+            "   - Missing Plots -> Analyst\n"
+            "   - Theoretical Interpretation -> Interpreter\n"
+            "   - Draft Exists -> Reviewer\n"
+            "   - Validated & Ready -> Publisher\n"
+            "3. ITERATE: If Reviewer finds gaps, translate them into new tasks for Modeler/Archivist.\n"
+            "4. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
         ),
         model=model,
         tools=[
-            archivist.as_tool(tool_name="archivist", tool_description="Literature assembly/validation."),
-            modeler.as_tool(tool_name="modeler", tool_description="Graphs, simulations, sweeps."),
-            analyst.as_tool(tool_name="analyst", tool_description="Validation compare, plotting."),
-            reviewer.as_tool(tool_name="reviewer", tool_description="Holistic gap check (uses manuscript reader, claim graph)."),
-            publisher.as_tool(tool_name="publisher", tool_description="Interpretation/writeup."),
+            check_project_state,
+            log_strategic_pivot,
+            archivist.as_tool(tool_name="archivist", tool_description="Search literature."),
+            modeler.as_tool(tool_name="modeler", tool_description="Run simulations."),
+            analyst.as_tool(tool_name="analyst", tool_description="Create figures."),
+            interpreter.as_tool(tool_name="interpreter", tool_description="Generate theoretical interpretation."),
+            publisher.as_tool(tool_name="publisher", tool_description="Write and compile text."),
+            reviewer.as_tool(tool_name="reviewer", tool_description="Critique the draft."),
         ],
-        model_settings=ModelSettings(tool_choice="required", request_timeout=30),
+        model_settings=ModelSettings(tool_choice="required"),
     )
+
     return pi
 
+# --- Main Execution Block ---
 
 def main():
     args = parse_args()
-
-    # Load .env early to ensure OPENAI_API_KEY (and others) are set, overriding any lower-priority defaults.
-    file_key = None
-    if load_dotenv is not None:
-        load_dotenv(dotenv_path=".env", override=True)
-        # Force OPENAI_API_KEY from .env to override anything else if present there.
-        try:
-            from dotenv import dotenv_values
-            env_vals = dotenv_values(".env")
-            if env_vals.get("OPENAI_API_KEY"):
-                # Strip whitespace to avoid accidental trailing newlines/spaces
-                file_key = env_vals["OPENAI_API_KEY"].strip()
-                os.environ["OPENAI_API_KEY"] = file_key
-        except Exception:
-            file_key = None
-    # Validate that the env key matches .env (if provided)
-    env_key = os.environ.get("OPENAI_API_KEY", "")
-    if file_key and env_key != file_key:
-        raise SystemExit(
-            f"[error] OPENAI_API_KEY mismatch: shell/env key {_mask_token(env_key)} "
-            f"does not match .env key {_mask_token(file_key)}. "
-            "Ensure .env holds the correct key and rerun."
-        )
-    # Preflight API key check
-    if OpenAI is not None:
-        try:
-            print(f"[preflight] Using OPENAI_API_KEY={_mask_token(env_key)}", flush=True)
-            client = OpenAI(timeout=15)
-            _resp =  client.responses.create(
-                model="gpt-5-nano-2025-08-07",
-                messages=[{"role": "user", "content": "ping"}],
-                max_output_tokens=5,
-            )
-            print("[preflight] OpenAI chat check succeeded", flush=True)
-        except Exception as e:
-            raise SystemExit(f"[error] OpenAI API check failed: {e}")
-
+    
+    # Load Env
+    if load_dotenv:
+        load_dotenv(override=True)
+    
+    # Load Idea
     with open(args.load_idea) as f:
         idea_data = json.load(f)
+    
     if isinstance(idea_data, list):
         if args.idea_idx < 0 or args.idea_idx >= len(idea_data):
             raise IndexError(f"idea_idx {args.idea_idx} out of range for {len(idea_data)} ideas")
@@ -399,54 +486,83 @@ def main():
     else:
         raise ValueError("Idea file must contain a JSON object or a list of objects")
 
-    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    base_folder = f"experiments/{date}_{idea['Name']}_agents"
+    # Setup Directories
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    base_folder = args.base_folder
+
+    if base_folder:
+        if not os.path.exists(base_folder):
+            raise FileNotFoundError(f"--base_folder '{base_folder}' does not exist")
+        print(f"Restarting from existing folder: {base_folder}")
+    else:
+        base_folder = f"experiments/{timestamp}_{idea.get('Name', 'Project')}"
+        
+        # Handle resume
+        if args.resume:
+            # Simple logic: look for the most recent folder matching the name
+            parent_dir = "experiments"
+            if os.path.exists(parent_dir):
+                candidates = sorted([d for d in os.listdir(parent_dir) if idea.get('Name', 'Project') in d])
+                if candidates:
+                    base_folder = os.path.join(parent_dir, candidates[-1])
+                    print(f"Resuming from: {base_folder}")
+
+    # Note: Directory creation is also handled in check_project_state, 
+    # but we verify here for initial context setup.
     os.makedirs(base_folder, exist_ok=True)
     exp_results = osp.join(base_folder, "experiment_results")
     os.makedirs(exp_results, exist_ok=True)
 
-    # Save idea
-    with open(osp.join(base_folder, "idea.json"), "w") as f:
-        json.dump(idea, f, indent=2)
-
-    # Set env defaults for tools
+    # Environment Variables for Tools
     os.environ["AISC_EXP_RESULTS"] = exp_results
     os.environ["AISC_BASE_FOLDER"] = base_folder
     os.environ["AISC_CONFIG_PATH"] = osp.join(base_folder, "bfts_config.yaml")
 
-    pi = build_agents(model=args.model, idea=idea)
-
-    context: Dict[str, Any] = {
-        "base_folder": base_folder,
-        "exp_results": exp_results,
-        "idea": idea,
-        "config_path": osp.join(base_folder, "bfts_config.yaml"),  # optional
+    # Directories Dict for Agent Context
+    dirs = {
+        "base": base_folder,
+        "results": exp_results
     }
 
-    print(f"Running agents orchestrator for {idea['Name']} into {base_folder}")
+    # Initialize Team
+    pi_agent = build_team(args.model, idea, dirs)
 
-    async def run_agents_async():
-        print("[orchestrator] starting Runner.run", flush=True)
-        res = await Runner.run(pi, input=args.input, context=context, max_turns=args.max_cycles)
-        print("[orchestrator] Runner.run completed", flush=True)
-        return res
+    print(f"🧪 Launching ADCRT for '{idea.get('Title', 'Project')}'...")
+    print(f"📂 Context: {base_folder}")
+
+    # Input Prompt
+    if args.input:
+        initial_prompt = args.input
+    else:
+        initial_prompt = (
+            f"Begin project '{idea.get('Name', 'Project')}'. \n"
+            f"Current working directory is: {base_folder}\n"
+            "Assess current state via check_project_state and begin delegation."
+        )
+
+    # Execution with Robust Timeout
+    async def run_lab():
+        return await Runner.run(
+            pi_agent, 
+            input=initial_prompt, 
+            context={"work_dir": base_folder}, 
+            max_turns=args.max_cycles
+        )
 
     try:
-        result = asyncio.run(asyncio.wait_for(run_agents_async(), timeout=args.timeout))
-        status_text = str(result)
-        print("Done.")
+        result = asyncio.run(asyncio.wait_for(run_lab(), timeout=args.timeout))
+        print("✅ Experiment Cycle Completed.")
+        # Log result
+        with open(osp.join(base_folder, "run_log.txt"), "w") as f:
+            f.write(str(result))
     except asyncio.TimeoutError:
-        status_text = f"Timed out after {args.timeout}s without completing Runner.run"
-        print(f"[warning] {status_text}")
-
-    # Persist the final runner output so we have a trace even if agents/tools produced no files.
-    try:
-        with open(osp.join(base_folder, "runner_output.txt"), "w") as f:
-            f.write(status_text)
-    except Exception:
-        pass
-    print("Done.")
-
+        print(f"❌ Timeout reached ({args.timeout}s). System halted safely.")
+        print("   Check 'experiment_results' for partial artifacts.")
+    except Exception as e:
+        print(f"❌ Critical Error: {e}")
+        # Dump error to log
+        with open(osp.join(base_folder, "error_log.txt"), "w") as f:
+            f.write(str(e))
 
 if __name__ == "__main__":
     main()

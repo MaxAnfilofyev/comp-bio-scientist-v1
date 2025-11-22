@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 import matplotlib
 
 # Use a non-interactive backend for batch/scripted runs
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402  (import after backend selection)
+from matplotlib.figure import Figure
 import numpy as np
+from numpy.typing import NDArray
 
 mpl_config_dir = os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
 cache_dir = os.environ.setdefault("XDG_CACHE_HOME", os.path.join(os.getcwd(), ".cache"))
@@ -44,7 +46,7 @@ class BiologicalPlotter:
         stem = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
         return stem or "figure"
 
-    def _save_fig(self, fig: plt.Figure, filename: str | None) -> str:
+    def _save_fig(self, fig: Figure, filename: str | None) -> str:
         stem = self._sanitize_filename(filename or "figure")
         path = os.path.join(self.figures_dir, f"{stem}.png")
         fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -85,8 +87,8 @@ class BiologicalPlotter:
 
     def plot_phase_portrait(
         self,
-        x: Sequence[float],
-        y: Sequence[float],
+        x: Sequence[float] | NDArray[np.floating[Any]],
+        y: Sequence[float] | NDArray[np.floating[Any]],
         title: str = "Phase Portrait",
         xlabel: str = "Variable 1",
         ylabel: str = "Variable 2",

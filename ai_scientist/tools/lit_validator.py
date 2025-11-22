@@ -29,7 +29,10 @@ class LitSummaryValidatorTool(BaseTool):
         ]
         super().__init__(name, description, parameters)
 
-    def use_tool(self, path: str) -> Dict[str, Any]:
+    def use_tool(self, **kwargs: Any) -> Dict[str, Any]:
+        path = kwargs.get("path")
+        if path is None:
+            raise ValueError("path is required")
         p = Path(path)
         if not p.exists():
             raise FileNotFoundError(f"File not found: {path}")

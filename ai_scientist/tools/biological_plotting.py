@@ -1,5 +1,6 @@
+# pyright: reportMissingImports=false
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 import json
 import numpy as np
 
@@ -39,12 +40,13 @@ class RunBiologicalPlottingTool(BaseTool):
         ]
         super().__init__(name, description, parameters)
 
-    def use_tool(
-        self,
-        solution_path: str,
-        output_dir: str = "experiment_results",
-        make_phase_portrait: bool = True,
-    ) -> Dict[str, Any]:
+    def use_tool(self, **kwargs: Any) -> Dict[str, Any]:
+        solution_path = kwargs.get("solution_path")
+        if solution_path is None:
+            raise ValueError("solution_path is required")
+        output_dir = kwargs.get("output_dir", "experiment_results")
+        make_phase_portrait = bool(kwargs.get("make_phase_portrait", True))
+
         path = Path(solution_path)
         if not path.exists():
             raise FileNotFoundError(f"Solution file not found: {solution_path}")

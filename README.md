@@ -171,7 +171,8 @@ python agents_orchestrator.py \
   --load_idea ai_scientist/ideas/my_research_topic.json \
   --idea_idx 0 \
   --model gpt-4o-mini \
-  --max_cycles 25
+  --max_cycles 25 \
+  --base_folder experiments/20251121_1801_axonal_arbor_percolation  # optional: restart from existing folder
 ```
 
 ### Computational biology (theoretical modeling) quick start

@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.perform_lit_data_assembly import assemble_lit_data
@@ -54,17 +54,16 @@ class LitDataAssemblyTool(BaseTool):
         out = Path(base_env) if base_env else Path("experiment_results")
         return out
 
-    def use_tool(
-        self,
-        queries: List[str] | None = None,
-        seed_paths: List[str] | None = None,
-        max_results: int = 25,
-        use_semantic_scholar: bool = False,
-    ) -> Dict[str, Any]:
+    def use_tool(self, **kwargs: Any) -> Dict[str, Any]:
         out_dir = self._resolve_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "lit_summary.csv"
         json_path = out_dir / "lit_summary.json"
+
+        queries: List[str] | None = kwargs.get("queries")
+        seed_paths: List[str] | None = kwargs.get("seed_paths")
+        max_results = int(kwargs.get("max_results", 25))
+        use_semantic_scholar = bool(kwargs.get("use_semantic_scholar", False))
 
         result = assemble_lit_data(
             output_csv=str(csv_path),

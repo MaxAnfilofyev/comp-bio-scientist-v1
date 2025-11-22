@@ -15,6 +15,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - PI agent delegates to role agents (Archivist, Modeler, Analyst, Reviewer, Publisher) via tools/handoffs until the reviewer reports no gaps and a PDF exists.
    - Dynamic prompts include Title/Hypothesis/Abstract/Experiments/Risks and template alignment (default `blank_theoretical_biology_latex`). Output conventions enforced (artifacts -> `experiment_results/`, figures -> `figures/` when aggregated, PDFs at run root).
    - Each role returns structured status (status/artifacts/notes) and writes status files (e.g., `experiment_results/status_<role>.json` or appends to `tool_summary.txt`).
+   - Resuming: pass `--resume` to pick the latest folder matching the idea name, or `--base_folder <experiments/...>` to restart from a specific existing run directory without creating a new timestamped folder.
    - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
 
 3. **Plot aggregation (`perform_plotting.py`)**
@@ -53,7 +54,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - **RunBiologicalPlotting** (`ai_scientist/tools/biological_plotting.py`)
   - Params: `solution_path`, `output_dir`, `make_phase_portrait`; plots time series/phase portraits.
 - **RunBiologicalStats** (`ai_scientist/tools/biological_stats.py`)
-  - Params: `task` (`adjust_pvalues` or `enrichment`), plus required args.
+  - Params: `task` (`adjust_pvalues` or `enrichment`), plus required args. For enrichment, pass `term_to_ids_json` (JSON string mapping term -> [ids]) to avoid schema issues.
 - **ReadManuscript** (`ai_scientist/tools/manuscript_reader.py`)
   - Params: `path` to PDF or txt/md; returns extracted text.
 - **UpdateClaimGraph** (`ai_scientist/tools/claim_graph.py`)
@@ -93,5 +94,6 @@ python agents_orchestrator.py \
   --load_idea ai_scientist/ideas/my_idea.json \
   --idea_idx 0 \
   --model gpt-5o-mini \
-  --max_cycles 25
+  --max_cycles 25 \
+  --base_folder experiments/20251121_1801_axonal_arbor_percolation  # optional: restart from existing folder
 ```
