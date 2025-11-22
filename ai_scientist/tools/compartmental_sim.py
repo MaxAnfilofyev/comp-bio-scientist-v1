@@ -138,6 +138,9 @@ class RunCompartmentalSimTool(BaseTool):
             {"name": "downsample", "type": "int", "description": "Store every Nth step (default 1)"},
             {"name": "max_elements", "type": "int", "description": "Safety limit: steps * nodes (default 5000000)"},
             {"name": "status_path", "type": "str", "description": "Optional status json path to track run state"},
+            {"name": "export_arrays", "type": "bool", "description": "Also write failure_matrix.npy/time_vector.npy/nodes_order.txt (default False)"},
+            {"name": "failure_threshold", "type": "float", "description": "Failure threshold for export_arrays (default 0.2)"},
+            {"name": "export_output_dir", "type": "str", "description": "Optional output dir for exported arrays (default sim folder)"},
         ]
         super().__init__(name, description, parameters)
 
@@ -158,6 +161,9 @@ class RunCompartmentalSimTool(BaseTool):
         downsample = int(kwargs.get("downsample", 1))
         max_elements = int(kwargs.get("max_elements", 5_000_000))
         status_path = kwargs.get("status_path")
+        export_arrays = bool(kwargs.get("export_arrays", False))
+        failure_threshold = float(kwargs.get("failure_threshold", 0.2))
+        export_output_dir = kwargs.get("export_output_dir") or output_dir
 
         graph = load_graph(Path(graph_path))
         n_nodes = graph.number_of_nodes()
@@ -228,6 +234,7 @@ class RunCompartmentalSimTool(BaseTool):
                         "status": "completed",
                         "output_json": str(out_path),
                         "frac_failed": result.get("frac_failed"),
+                        "export_arrays": export_arrays,
                         "end_time": time.time(),
                         "duration_sec": None,  # can be filled by caller if desired
                     },
@@ -237,4 +244,18 @@ class RunCompartmentalSimTool(BaseTool):
         except Exception:
             pass
 
-        return {"output_json": str(out_path), "frac_failed": result["frac_failed"]}
+        export_result = None
+        if export_arrays:
+            try:
+                from ai_scientist.tools.sim_postprocess import export_sim_timeseries
+
+                export_result = export_sim_timeseries(
+                    sim_json_path=out_path,
+                    graph_path=graph_path,
+                    output_dir=export_output_dir,
+                    failure_threshold=failure_threshold,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                export_result = {"error": f"export_arrays failed: {exc}"}
+
+        return {"output_json": str(out_path), "frac_failed": result["frac_failed"], "exported": export_result}

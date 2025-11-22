@@ -39,6 +39,8 @@ from ai_scientist.tools.validation_compare import RunValidationCompareTool
 from ai_scientist.tools.biological_stats import RunBiologicalStatsTool
 from ai_scientist.tools.graph_builder import BuildGraphsTool
 from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
+from ai_scientist.tools.sim_postprocess import SimPostprocessTool
+from ai_scientist.tools.graph_diagnostics import GraphDiagnosticsTool
 from ai_scientist.tools.claim_graph import ClaimGraphTool
 from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
 from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
@@ -519,6 +521,36 @@ def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None
     )
     _append_figures_from_result(res, '{"type":"figure","source":"analyst"}')
     return res
+
+@function_tool
+def sim_postprocess(
+    sim_json_path: str,
+    output_dir: Optional[str] = None,
+    graph_path: Optional[str] = None,
+    failure_threshold: float = 0.2,
+):
+    """Convert sim.json into failure_matrix.npy, time_vector.npy, and nodes_order.txt."""
+    return SimPostprocessTool().use_tool(
+        sim_json_path=sim_json_path,
+        output_dir=_fill_output_dir(output_dir),
+        graph_path=graph_path,
+        failure_threshold=failure_threshold,
+    )
+
+@function_tool
+def graph_diagnostics(
+    graph_path: str,
+    output_dir: Optional[str] = None,
+    make_plots: bool = True,
+    max_nodes_for_layout: int = 2000,
+):
+    """Compute graph stats and optionally degree/layout plots."""
+    return GraphDiagnosticsTool().use_tool(
+        graph_path=graph_path,
+        output_dir=_fill_output_dir(output_dir),
+        make_plots=make_plots,
+        max_nodes_for_layout=max_nodes_for_layout,
+    )
 
 @function_tool
 def read_manuscript(path: str):
@@ -1335,7 +1367,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
-            "6. Before calling 'append_manifest', ask if the artifact adds new value (new file or materially new analysis). Log only when yes, with name + metadata/description."
+            "6. If downstream needs arrays (failure_matrix.npy/time_vector/nodes_order), call 'sim_postprocess' or set export_arrays=True when running sims.\n"
+            "7. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + metadata/description."
         ),
         tools=[
             get_run_paths,
@@ -1352,6 +1385,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             build_graphs,
             run_biological_model,
             run_comp_sim,
+            sim_postprocess,
             run_sensitivity_sweep,
             run_intervention_tests,
         ], 
@@ -1369,7 +1403,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs (lit, sims, morphologies) to avoid path errors.\n"
             "1. Read data from experiment_results/.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
-            "3. Generate PNG/SVG files using 'run_biological_plotting'.\n"
+            "3. Generate PNG/SVG files using 'run_biological_plotting'. Use 'sim_postprocess' if you need failure_matrix/time_vector/node order from sim.json before plotting.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description."
         ),
@@ -1388,8 +1422,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_biological_plotting,
             run_validation_compare,
             run_biological_stats,
+            sim_postprocess,
             write_figures_readme,
             write_text_artifact,
+            graph_diagnostics,
         ],
         model=model,
         settings=common_settings,
@@ -1534,6 +1570,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             f"Role: Principal Investigator for project: {title}.\n"
             f"Hypothesis: {hypothesis}\n"
             "Responsibilities:\n"
+            "0. Agents are stateless tools with a hard ~40-turn budget (including their tool calls). Do NOT send 'prepare' or 'wait until X' tasks. Delegate small, end-to-end units with concrete paths; if a job is large, split it into multiple invocations (e.g., one per batch of sims/plots) and ask the agent to persist outputs plus a brief status note to user_inbox.md/pi_notes.md before returning. You may spawn multiple parallel calls to the same role if that speeds work, as long as each request is end-to-end and self-contained. If you already know the relevant file paths or artifact names, include them in the prompt to save turn budget.\n"
             "1. STATE CHECK: First, read 'pi_notes.md' and 'user_inbox.md' (if present) via 'read_note', then call 'check_project_state' to see what has been done.\n"
             "2. DELEGATE: Handoff to specialized agents based on missing artifacts.\n"
             "   - Missing Lit Review -> Archivist\n"

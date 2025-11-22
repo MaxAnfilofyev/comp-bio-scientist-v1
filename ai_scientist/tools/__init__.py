@@ -6,6 +6,8 @@ from ai_scientist.tools.biological_stats import RunBiologicalStatsTool
 from ai_scientist.tools.lit_validator import LitSummaryValidatorTool
 from ai_scientist.tools.graph_builder import BuildGraphsTool
 from ai_scientist.tools.compartmental_sim import RunCompartmentalSimTool
+from ai_scientist.tools.sim_postprocess import SimPostprocessTool
+from ai_scientist.tools.graph_diagnostics import GraphDiagnosticsTool
 from ai_scientist.tools.sensitivity_sweep import RunSensitivitySweepTool
 from ai_scientist.tools.validation_compare import RunValidationCompareTool
 from ai_scientist.tools.intervention_tester import RunInterventionTesterTool
@@ -23,6 +25,8 @@ __all__ = [
     "LitSummaryValidatorTool",
     "BuildGraphsTool",
     "RunCompartmentalSimTool",
+    "SimPostprocessTool",
+    "GraphDiagnosticsTool",
     "RunSensitivitySweepTool",
     "RunValidationCompareTool",
     "RunInterventionTesterTool",
