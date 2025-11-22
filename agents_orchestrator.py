@@ -6,7 +6,8 @@ import os.path as osp
 from pathlib import Path
 from datetime import datetime
 import asyncio
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+import shutil
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 try:
     from agents.types import RunResult
 except ImportError:
@@ -116,6 +117,15 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
     """
     Normalize a manifest entry to the new path-keyed shape with annotations.
     """
+
+    def _add_annotation(raw: Any, annotations_list: List[Dict[str, Any]]):
+        """Keep only meaningful annotation fields and avoid recursive growth."""
+        if not isinstance(raw, dict):
+            return
+        cleaned = {k: v for k, v in raw.items() if k not in {"type", "annotations"}}
+        if cleaned and cleaned not in annotations_list:
+            annotations_list.append(cleaned)
+
     path = entry.get("path") or fallback_path or entry.get("name")
     if not path:
         return None
@@ -126,23 +136,26 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
     meta = entry.get("metadata")
     if isinstance(meta, dict):
         base_type = meta.get("type", base_type)
-        annot = {k: v for k, v in meta.items() if k != "type"}
-        if annot:
-            annotations.append(annot)
+        _add_annotation(meta, annotations)
+        nested = meta.get("annotations")
+        if isinstance(nested, list):
+            for ann in nested:
+                _add_annotation(ann, annotations)
     elif isinstance(meta, list):
         for m in meta:
             if isinstance(m, dict):
                 if m.get("type") and not base_type:
                     base_type = m.get("type")
-                annot = {k: v for k, v in m.items() if k != "type"}
-                if annot:
-                    annotations.append(annot)
+                _add_annotation(m, annotations)
+                nested = m.get("annotations")
+                if isinstance(nested, list):
+                    for ann in nested:
+                        _add_annotation(ann, annotations)
 
     existing_annotations = entry.get("annotations")
     if isinstance(existing_annotations, list):
         for ann in existing_annotations:
-            if isinstance(ann, dict) and ann not in annotations:
-                annotations.append(ann)
+            _add_annotation(ann, annotations)
 
     normalized = {
         "name": name,
@@ -222,6 +235,24 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
     return {"manifest_path": str(manifest_path), "n_entries": len(manifest_map)}
 
 
+def _append_artifact_from_result(result: Any, key: str, metadata_json: Optional[str], allow_missing: bool = True):
+    """Append manifest entry when a result dict contains a path under key."""
+    if not metadata_json or not isinstance(result, dict):
+        return
+    out = result.get(key)
+    if isinstance(out, str):
+        _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=allow_missing)
+
+
+def _append_figures_from_result(result: Any, metadata_json: Optional[str]):
+    """Append figure outputs found in a result dict."""
+    if not metadata_json or not isinstance(result, dict):
+        return
+    for _, v in result.items():
+        if isinstance(v, str) and v.endswith((".png", ".pdf", ".svg")):
+            _append_manifest_entry(name=v, metadata_json=metadata_json, allow_missing=True)
+
+
 def _run_root() -> Path:
     base = os.environ.get("AISC_BASE_FOLDER", "")
     return Path(base) if base else Path(".")
@@ -231,6 +262,133 @@ def format_list_field(data: Any) -> str:
     if isinstance(data, list):
         return "\n".join([f"- {item}" for item in data])
     return str(data)
+
+
+def _render_pdf_or_markdown(path: Path, content: str) -> Tuple[Path, Optional[str]]:
+    """Write PDF via pandoc if available; otherwise fall back to Markdown with a warning."""
+    warning: Optional[str] = None
+    try:
+        import pypandoc  # type: ignore
+
+        if shutil.which("pandoc"):
+            pypandoc.convert_text(
+                content,
+                "pdf",
+                format="md",
+                outputfile=str(path),
+                extra_args=["--pdf-engine=pdflatex", "--standalone", "-V", "geometry:margin=1in"],
+            )
+            return path, None
+        warning = "pandoc not found; saved Markdown fallback instead of PDF."
+    except Exception as exc:
+        warning = f"PDF generation failed ({exc}); saved Markdown fallback."
+
+    fallback = path.with_suffix(".md")
+    fallback.write_text(content, encoding="utf-8")
+    return fallback, warning
+
+
+def _run_cli_tool(tool_name: str, args: str = "") -> Any:
+    """Run a CLI tool in the current cwd if available; otherwise return a clear message."""
+    cwd = os.getcwd()
+    if not shutil.which(tool_name):
+        return f"{tool_name} not found in PATH."
+    cmd = f"cd {cwd} && {tool_name} {args}".strip()
+    try:
+        return os.popen(cmd).read()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _report_capabilities() -> Dict[str, Any]:
+    """Report availability of key tools used by the orchestrator."""
+    tools = {name: bool(shutil.which(name)) for name in ("pandoc", "pdflatex", "ruff", "pyright")}
+    return {"tools": tools, "pdf_engine_ready": tools.get("pandoc") and tools.get("pdflatex")}
+
+
+def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
+    """Small factory to keep Agent construction consistent."""
+    return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
+
+
+async def extract_run_output(run_result: RunResult) -> str:
+    """Concise summary for sub-agent tool calls (status/error + final message + tool preview)."""
+    parts: List[str] = []
+    err = getattr(run_result, "error", None)
+    if err is None and hasattr(run_result, "get"):
+        err = run_result.get("error", None)  # type: ignore
+    if err:
+        parts.append(f"error: {err}")
+
+    status_val = getattr(run_result, "status", None)
+    if status_val is None and hasattr(run_result, "get"):
+        status_val = run_result.get("status", None)  # type: ignore
+    if status_val:
+        parts.append(f"status: {status_val}")
+
+    candidate_fields = ["final_output", "output", "final_message", "content", "message"]
+    out: Any = None
+    for field in candidate_fields:
+        out = getattr(run_result, field, None)
+        if out is None and hasattr(run_result, "get"):
+            out = run_result.get(field, None)  # type: ignore
+        if out:
+            break
+
+    if not out and hasattr(run_result, "messages"):
+        msgs = getattr(run_result, "messages")
+        try:
+            if isinstance(msgs, list) and msgs:
+                last = msgs[-1]
+                out = getattr(last, "content", None) if not isinstance(last, dict) else last.get("content")
+        except Exception:
+            pass
+
+    if not out and hasattr(run_result, "raw_responses"):
+        try:
+            raw = getattr(run_result, "raw_responses")
+            if isinstance(raw, list) and raw:
+                last = raw[-1]
+                out = getattr(last, "content", None) or getattr(last, "text", None)
+        except Exception:
+            pass
+
+    if not out and hasattr(run_result, "new_items"):
+        try:
+            new_items = getattr(run_result, "new_items")
+            if isinstance(new_items, list) and new_items:
+                last_item = new_items[-1]
+                if hasattr(last_item, "content"):
+                    out = f"last_item: {getattr(last_item, 'content')}"
+                elif hasattr(last_item, "tool_name"):
+                    out = f"last_tool: {getattr(last_item, 'tool_name')}({getattr(last_item, 'tool_input', '')})"
+        except Exception:
+            pass
+
+    if out:
+        parts.append(str(out))
+
+    try:
+        ni = getattr(run_result, "new_items", None)
+        if isinstance(ni, list) and ni:
+            tool_names: List[str] = []
+            for item in ni:
+                if hasattr(item, "tool_name"):
+                    tool_names.append(getattr(item, "tool_name"))
+                elif isinstance(item, dict) and "tool_name" in item:
+                    tool_names.append(str(item["tool_name"]))
+            if tool_names:
+                preview = ", ".join(tool_names[:6])
+                tail = "..." if len(tool_names) > 6 else ""
+                parts.append(f"tools_called: {preview}{tail} (n_new_items={len(ni)})")
+            else:
+                parts.append(f"n_new_items={len(ni)}")
+    except Exception:
+        pass
+
+    if not parts:
+        return str(run_result)
+    return "\n".join(parts)
 
 # --- Tool Definitions (Wrappers for Agents SDK) ---
 
@@ -340,10 +498,7 @@ def run_comp_sim(
         downsample=downsample,
         max_elements=max_elements,
     )
-    if metadata_json and isinstance(res, dict):
-        out = res.get("output_json")
-        if isinstance(out, str):
-            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    _append_artifact_from_result(res, "output_json", metadata_json)
     return res
 
 @function_tool
@@ -356,10 +511,7 @@ def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None
         make_phase_portrait=make_phase_portrait,
         make_combined_svg=True,
     )
-    # Append outputs to manifest if possible
-    for k, v in res.items():
-        if isinstance(v, str) and v.endswith((".png", ".pdf", ".svg")):
-            _append_manifest_entry(name=v, metadata_json='{"type":"figure","source":"analyst"}', allow_missing=True)
+    _append_figures_from_result(res, '{"type":"figure","source":"analyst"}')
     return res
 
 @function_tool
@@ -419,10 +571,7 @@ def run_biological_model(
         num_points=num_points,
         output_dir=_fill_output_dir(output_dir),
     )
-    if metadata_json and isinstance(res, dict):
-        out = res.get("output_json")
-        if isinstance(out, str):
-            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    _append_artifact_from_result(res, "output_json", metadata_json)
     return res
 
 @function_tool
@@ -444,10 +593,7 @@ def run_sensitivity_sweep(
         steps=steps,
         dt=dt,
     )
-    if metadata_json and isinstance(res, dict):
-        out = res.get("output_csv")
-        if isinstance(out, str):
-            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    _append_artifact_from_result(res, "output_csv", metadata_json)
     return res
 
 @function_tool
@@ -469,10 +615,7 @@ def run_intervention_tests(
         baseline_transport=baseline_transport,
         baseline_demand=baseline_demand,
     )
-    if metadata_json and isinstance(res, dict):
-        out = res.get("output_json")
-        if isinstance(out, str):
-            _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=True)
+    _append_artifact_from_result(res, "output_json", metadata_json)
     return res
 
 @function_tool
@@ -861,46 +1004,16 @@ def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = No
     path = root / norm_name
     path.parent.mkdir(parents=True, exist_ok=True)
     if str(path).lower().endswith(".pdf"):
-        # Minimal PDF writer: single-page, Helvetica 10pt, text laid out top-down.
-        lines = content.splitlines()
-        x, y = 50, 750
-        line_height = 14
-        content_lines: list[str] = []
-        for line in lines:
-            if y < 50:
-                break  # single-page fallback
-            escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-            content_lines.append(f"BT /F1 10 Tf {x} {y} Td ({escaped}) Tj ET")
-            y -= line_height
-        stream = "\n".join(content_lines).encode("latin-1", errors="replace")
-
-        objects: list[bytes] = []
-        objects.append(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n")
-        objects.append(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
-        objects.append(b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n")
-        objects.append(f"4 0 obj << /Length {len(stream)} >> stream\n".encode() + stream + b"\nendstream\nendobj\n")
-        objects.append(b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
-
-        pdf_parts = [b"%PDF-1.4\n"]
-        offsets: list[int] = []
-        for obj in objects:
-            offsets.append(sum(len(p) for p in pdf_parts))
-            pdf_parts.append(obj)
-        xref_start = sum(len(p) for p in pdf_parts)
-        pdf_parts.append(b"xref\n0 6\n0000000000 65535 f \n")
-        for off in offsets:
-            pdf_parts.append(f"{off:010d} 00000 n \n".encode())
-        pdf_parts.append(b"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n")
-        pdf_parts.append(f"{xref_start}\n".encode())
-        pdf_parts.append(b"%%EOF\n")
-
-        path.write_bytes(b"".join(pdf_parts))
+        path, warning = _render_pdf_or_markdown(path, content)
     else:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     if metadata_json:
         _append_manifest_entry(name=str(path), metadata_json=metadata_json, allow_missing=True)
-    return {"path": str(path)}
+    result: Dict[str, Any] = {"path": str(path)}
+    if "warning" in locals() and warning:  # type: ignore[name-defined]
+        result["warning"] = warning
+    return result
 
 
 @function_tool
@@ -1011,19 +1124,13 @@ def get_artifact_index(max_entries: int = 2000):
 @function_tool
 def run_ruff():
     """Run ruff check . from repo root and return output (non-fatal if missing)."""
-    try:
-        return os.popen("cd /Users/maxa/AI-Scientist-v2 && ruff check .").read()
-    except Exception as exc:
-        return {"error": str(exc)}
+    return _run_cli_tool("ruff", "check .")
 
 
 @function_tool
 def run_pyright():
     """Run pyright from repo root and return output (non-fatal if missing)."""
-    try:
-        return os.popen("cd /Users/maxa/AI-Scientist-v2 && pyright").read()
-    except Exception as exc:
-        return {"error": str(exc)}
+    return _run_cli_tool("pyright")
 
 
 @function_tool
@@ -1061,98 +1168,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     """
     common_settings = ModelSettings(tool_choice="auto")
     role_max_turns = 40  # cap for sub-agent turn depth when invoked as a tool
-
-    async def extract_run_output(run_result: RunResult) -> str:
-        """
-        Custom extractor to return a concise summary for sub-agent tool calls.
-        Includes status/error if present and the final message text.
-        """
-        parts: List[str] = []
-        # Guard against different RunResult shapes (object or dict-like)
-        err = getattr(run_result, "error", None)
-        if err is None and hasattr(run_result, "get"):
-            err = run_result.get("error", None)  # type: ignore
-        if err:
-            parts.append(f"error: {err}")
-
-        status_val = getattr(run_result, "status", None)
-        if status_val is None and hasattr(run_result, "get"):
-            status_val = run_result.get("status", None)  # type: ignore
-        if status_val:
-            parts.append(f"status: {status_val}")
-
-        # Grab the final message from the sub-agent. Agents SDKs sometimes expose
-        # different fields, so probe a few common ones before falling back.
-        candidate_fields = ["final_output", "output", "final_message", "content", "message"]
-        out: Any = None
-        for field in candidate_fields:
-            out = getattr(run_result, field, None)
-            if out is None and hasattr(run_result, "get"):
-                out = run_result.get(field, None)  # type: ignore
-            if out:
-                break
-
-        # If the result carries messages, surface the last content to avoid empty tool output.
-        if not out and hasattr(run_result, "messages"):
-            msgs = getattr(run_result, "messages")
-            try:
-                if isinstance(msgs, list) and msgs:
-                    last = msgs[-1]
-                    out = getattr(last, "content", None) if not isinstance(last, dict) else last.get("content")
-            except Exception:
-                pass
-
-        # Streaming/agent SDKs often keep raw_responses; grab the last text to help debug max_turns.
-        if not out and hasattr(run_result, "raw_responses"):
-            try:
-                raw = getattr(run_result, "raw_responses")
-                if isinstance(raw, list) and raw:
-                    last = raw[-1]
-                    out = getattr(last, "content", None) or getattr(last, "text", None)
-            except Exception:
-                pass
-
-        # As a final hint, capture the last new_item (e.g., last tool call) if available.
-        if not out and hasattr(run_result, "new_items"):
-            try:
-                new_items = getattr(run_result, "new_items")
-                if isinstance(new_items, list) and new_items:
-                    last_item = new_items[-1]
-                    # Try a few common shapes
-                    if hasattr(last_item, "content"):
-                        out = f"last_item: {getattr(last_item, 'content')}"
-                    elif hasattr(last_item, "tool_name"):
-                        out = f"last_tool: {getattr(last_item, 'tool_name')}({getattr(last_item, 'tool_input', '')})"
-            except Exception:
-                pass
-
-        if out:
-            parts.append(str(out))
-
-        # Summarize tool calls so the PI sees what ran before max_turns.
-        try:
-            ni = getattr(run_result, "new_items", None)
-            if isinstance(ni, list) and ni:
-                tool_names: List[str] = []
-                for item in ni:
-                    if hasattr(item, "tool_name"):
-                        tool_names.append(getattr(item, "tool_name"))
-                    elif isinstance(item, dict) and "tool_name" in item:
-                        tool_names.append(str(item["tool_name"]))
-                if tool_names:
-                    preview = ", ".join(tool_names[:6])
-                    tail = "..." if len(tool_names) > 6 else ""
-                    parts.append(f"tools_called: {preview}{tail} (n_new_items={len(ni)})")
-                else:
-                    parts.append(f"n_new_items={len(ni)}")
-        except Exception:
-            pass
-
-        # Never return an empty string; fall back to repr to expose something to the caller.
-        if not parts:
-            return str(run_result)
-        return "\n".join(parts)
-    
     # Extract richer context from Idea JSON and format lists for Prompt ingestion
     title = idea.get('Title', 'Project')
     abstract = idea.get('Abstract', '')
@@ -1163,7 +1178,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     risk_factors = format_list_field(idea.get('Risk Factors and Limitations', []))
 
     # 1. The Archivist (Scope: Literature & Claims)
-    archivist = Agent(
+    archivist = _make_agent(
         name="Archivist",
         instructions=(
             f"Role: Senior Literature Curator.\n"
@@ -1178,7 +1193,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (name + metadata/description).\n"
             "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1194,11 +1208,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             search_semantic_scholar,
             update_claim_graph,
         ],
-        model_settings=common_settings
+        model=model,
+        settings=common_settings,
     )
 
     # 2. The Modeler (Scope: Python & Simulation)
-    modeler = Agent(
+    modeler = _make_agent(
         name="Modeler",
         instructions=(
             f"Role: Computational Biologist.\n"
@@ -1214,7 +1229,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "5. Save raw outputs to experiment_results/.\n"
             "6. Before calling 'append_manifest', ask if the artifact adds new value (new file or materially new analysis). Log only when yes, with name + metadata/description."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1233,11 +1247,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_sensitivity_sweep,
             run_intervention_tests,
         ], 
-        model_settings=common_settings
+        model=model,
+        settings=common_settings,
     )
 
     # 3. The Analyst (Scope: Visualization & Validation)
-    analyst = Agent(
+    analyst = _make_agent(
         name="Analyst",
         instructions=(
             "Role: Scientific Visualization Expert.\n"
@@ -1250,7 +1265,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1269,11 +1283,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             write_figures_readme,
             write_text_artifact,
         ],
-        model_settings=common_settings
+        model=model,
+        settings=common_settings,
     )
 
     # 4. The Reviewer (Scope: Logic & Completeness)
-    reviewer = Agent(
+    reviewer = _make_agent(
         name="Reviewer",
         instructions=(
             "Role: Holistic Reviewer (Reviewer #2).\n"
@@ -1288,7 +1303,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
             "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1306,11 +1320,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_biological_stats,
             write_text_artifact,
         ],
-        model_settings=common_settings
+        model=model,
+        settings=common_settings,
     )
 
     # 5. The Interpreter (Scope: Theoretical Interpretation)
-    interpreter = Agent(
+    interpreter = _make_agent(
         name="Interpreter",
         instructions=(
             "Role: Mathematical–Biological Interpreter.\n"
@@ -1323,7 +1338,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "4. Use 'write_text_artifact' to save interpretations (e.g., theory_interpretation.txt) under experiment_results/.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1342,11 +1356,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_status,
             interpret_biology,
         ],
-        model_settings=common_settings,
+        model=model,
+        settings=common_settings,
     )
 
     # 6. The Coder (Scope: Utility Code & Tooling)
-    coder = Agent(
+    coder = _make_agent(
         name="Coder",
         instructions=(
             "Role: Utility Engineer.\n"
@@ -1358,7 +1373,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Prefer small, dependency-light snippets; avoid large libraries or network access.\n"
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1372,11 +1386,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_ruff,
             run_pyright,
         ],
-        model_settings=common_settings,
+        model=model,
+        settings=common_settings,
     )
 
     # 6. The Publisher (Scope: LaTeX & Compilation)
-    publisher = Agent(
+    publisher = _make_agent(
         name="Publisher",
         instructions=(
             "Role: Production Editor.\n"
@@ -1386,7 +1401,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
             "3. Ensure compile success. Debug LaTeX errors autonomously."
         ),
-        model=model,
         tools=[
             get_run_paths,
             resolve_path,
@@ -1401,7 +1415,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_status,
             run_writeup_task,
         ],
-        model_settings=common_settings
+        model=model,
+        settings=common_settings,
     )
 
     # 7. The PI (Scope: Strategy & Handoffs)
@@ -1504,6 +1519,12 @@ def main():
     os.environ["AISC_EXP_RESULTS"] = exp_results
     os.environ["AISC_BASE_FOLDER"] = base_folder
     os.environ["AISC_CONFIG_PATH"] = osp.join(base_folder, "bfts_config.yaml")
+
+    # Surface tool availability so PDF/analysis fallbacks are explicit
+    caps = _report_capabilities()
+    print(f"🛠️  Tool availability: pandoc={caps['tools'].get('pandoc')}, pdflatex={caps['tools'].get('pdflatex')}, "
+          f"ruff={caps['tools'].get('ruff')}, pyright={caps['tools'].get('pyright')}, "
+          f"pdf_engine_ready={caps['pdf_engine_ready']}")
 
     # Directories Dict for Agent Context
     dirs = {
