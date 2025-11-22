@@ -37,6 +37,11 @@ class RunBiologicalPlottingTool(BaseTool):
                 "type": "bool",
                 "description": "Whether to create a 2D phase portrait if two variables are present.",
             },
+            {
+                "name": "downsample",
+                "type": "int",
+                "description": "Use every Nth timepoint for plotting (default 1).",
+            },
         ]
         super().__init__(name, description, parameters)
 
@@ -46,17 +51,47 @@ class RunBiologicalPlottingTool(BaseTool):
             raise ValueError("solution_path is required")
         output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
         make_phase_portrait = bool(kwargs.get("make_phase_portrait", True))
+        downsample = int(kwargs.get("downsample", 1))
 
-        path = Path(solution_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Solution file not found: {solution_path}")
+        path = BaseTool.resolve_input_path(solution_path, allow_dir=True)
+        if path.is_dir():
+            candidates = sorted(path.glob("*.json"))
+            if not candidates:
+                raise FileNotFoundError(f"No solution JSON found under directory: {path}")
+            path = candidates[0]
 
         with path.open() as f:
             sol = json.load(f)
 
         time = np.array(sol.get("time", []))
-        data = np.array(sol.get("solutions", []))
-        variables: List[str] = sol.get("variables", []) or [f"var{i}" for i in range(data.shape[1])] if data.size else []
+        solutions = sol.get("solutions")
+        data = np.array(solutions) if solutions is not None else np.array([])
+        variables: List[str] = sol.get("variables", []) or []
+
+        # Fallback: if 'solutions' missing, try E/M matrices and aggregate
+        if data.size == 0 and "E" in sol:
+            E = np.array(sol.get("E", []))
+            M = np.array(sol.get("M", []))
+            if E.ndim == 2:
+                mean_E = E.mean(axis=1)
+                series = [mean_E]
+                labels = ["mean_E"]
+                if M.ndim == 2 and M.shape[0] == E.shape[0]:
+                    mean_M = M.mean(axis=1)
+                    series.append(mean_M)
+                    labels.append("mean_M")
+                data = np.vstack(series).T  # shape (T, n_series)
+                variables = labels
+            else:
+                data = np.array([])
+
+        if downsample > 1:
+            time = time[::downsample]
+            if data.size:
+                data = data[::downsample]
+
+        if data.size and not variables:
+            variables = [f"var{i}" for i in range(data.shape[1])]
 
         output_dir.mkdir(parents=True, exist_ok=True)
         plotter = BiologicalPlotter(figures_dir=str(output_dir))
