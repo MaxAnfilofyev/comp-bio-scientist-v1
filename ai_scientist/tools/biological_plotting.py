@@ -38,6 +38,11 @@ class RunBiologicalPlottingTool(BaseTool):
                 "description": "Whether to create a 2D phase portrait if two variables are present.",
             },
             {
+                "name": "make_combined_svg",
+                "type": "bool",
+                "description": "Whether to emit a combined SVG embedding time-series and phase images.",
+            },
+            {
                 "name": "downsample",
                 "type": "int",
                 "description": "Use every Nth timepoint for plotting (default 1).",
@@ -51,6 +56,7 @@ class RunBiologicalPlottingTool(BaseTool):
             raise ValueError("solution_path is required")
         output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
         make_phase_portrait = bool(kwargs.get("make_phase_portrait", True))
+        make_combined_svg = bool(kwargs.get("make_combined_svg", False))
         downsample = int(kwargs.get("downsample", 1))
 
         path = BaseTool.resolve_input_path(solution_path, allow_dir=True)
@@ -121,5 +127,31 @@ class RunBiologicalPlottingTool(BaseTool):
                     filename=f"{Path(solution_path).stem}_phase",
                 )
                 outputs["phase_portrait"] = pp_path
+
+            if make_combined_svg and "time_series" in outputs:
+                try:
+                    import base64
+                    ts_file = Path(outputs["time_series"])
+                    pp_file = Path(outputs.get("phase_portrait", ""))
+                    svg_name = f"{Path(solution_path).stem}_timeseries_phase.svg"
+                    svg_path = output_dir / svg_name
+                    svg_lines = [
+                        "<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='600'>",
+                        "  <rect width='100%' height='100%' fill='white'/>",
+                    ]
+                    def _embed_image(img_path: Path, x: int) -> str:
+                        data = base64.b64encode(img_path.read_bytes()).decode("ascii")
+                        return f"  <image href='data:image/png;base64,{data}' x='{x}' y='0' width='600' height='600'/>"
+                    svg_lines.append(_embed_image(ts_file, 0))
+                    if pp_file.exists():
+                        svg_lines.append(_embed_image(pp_file, 600))
+                    svg_lines.append(
+                        f"  <text x='20' y='20' font-size='14' fill='black'>{Path(solution_path).stem}: timeseries (left) and phase (right)</text>"
+                    )
+                    svg_lines.append("</svg>")
+                    svg_path.write_text("\n".join(svg_lines))
+                    outputs["combined_svg"] = str(svg_path)
+                except Exception:
+                    pass
 
         return outputs

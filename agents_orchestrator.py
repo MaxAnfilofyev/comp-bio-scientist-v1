@@ -74,21 +74,123 @@ def _fill_output_dir(output_dir: Optional[str]) -> str:
     return target
 
 
+def _fill_figure_dir(output_dir: Optional[str]) -> str:
+    """
+    Resolve a figure output dir, preferring the run-root figures/ folder.
+    - If explicit absolute path is provided, use it.
+    - If path contains 'experiment_results/figures' or is just 'figures', normalize to <base>/figures.
+    - Otherwise, fall back to the normal output resolution.
+    """
+    base = os.environ.get("AISC_BASE_FOLDER")
+    if output_dir is None:
+        if base:
+            return os.path.join(base, "figures")
+        return "figures"
+    if os.path.isabs(output_dir):
+        return output_dir
+    if "experiment_results/figures" in output_dir or output_dir.strip("/").startswith("figures"):
+        if base:
+            # Strip leading experiment_results/figures or figures/
+            tail = output_dir.split("figures", 1)[-1].lstrip("/ ")
+            return os.path.join(base, "figures", tail) if tail else os.path.join(base, "figures")
+        return "figures"
+    return _fill_output_dir(output_dir)
+
+
+def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build a legacy metadata dict while preserving multiple annotations.
+    - Keeps type stable.
+    - Merges the latest annotation fields for quick access.
+    - Stores full annotations list when multiple are present.
+    """
+    meta: Dict[str, Any] = {}
+    if annotations:
+        meta.update(annotations[-1])
+        if len(annotations) > 1:
+            meta["annotations"] = annotations
+    return meta
+
+
+def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Normalize a manifest entry to the new path-keyed shape with annotations.
+    """
+    path = entry.get("path") or fallback_path or entry.get("name")
+    if not path:
+        return None
+    name = entry.get("name") or os.path.basename(path)
+    base_type = entry.get("type")
+    annotations: List[Dict[str, Any]] = []
+
+    meta = entry.get("metadata")
+    if isinstance(meta, dict):
+        base_type = meta.get("type", base_type)
+        annot = {k: v for k, v in meta.items() if k != "type"}
+        if annot:
+            annotations.append(annot)
+    elif isinstance(meta, list):
+        for m in meta:
+            if isinstance(m, dict):
+                if m.get("type") and not base_type:
+                    base_type = m.get("type")
+                annot = {k: v for k, v in m.items() if k != "type"}
+                if annot:
+                    annotations.append(annot)
+
+    existing_annotations = entry.get("annotations")
+    if isinstance(existing_annotations, list):
+        for ann in existing_annotations:
+            if isinstance(ann, dict) and ann not in annotations:
+                annotations.append(ann)
+
+    normalized = {
+        "name": name,
+        "path": path,
+        "type": base_type,
+        "annotations": annotations,
+    }
+    normalized["metadata"] = _build_metadata_for_compat(base_type, annotations)
+    return normalized
+
+
+def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    Load manifest as a path-keyed dict, tolerating the legacy list format.
+    """
+    if not manifest_path.exists():
+        return {}
+    try:
+        with open(manifest_path) as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    manifest_map: Dict[str, Dict[str, Any]] = {}
+    if isinstance(data, dict):
+        for key, val in data.items():
+            if isinstance(val, dict):
+                norm = _normalize_manifest_entry(val, fallback_path=key)
+                if norm:
+                    manifest_map[norm["path"]] = norm
+        return manifest_map
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                norm = _normalize_manifest_entry(item)
+                if norm:
+                    manifest_map[norm["path"]] = norm
+    return manifest_map
+
+
 def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
     """
     Internal helper to append to the run's manifest without invoking the tool wrapper.
     """
     exp_dir = BaseTool.resolve_output_dir(None)
     manifest_path = exp_dir / "file_manifest.json"
-    manifest: List[Dict[str, Any]] = []
-    if manifest_path.exists():
-        try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-                if not isinstance(manifest, list):
-                    manifest = []
-        except Exception:
-            manifest = []
+    manifest_map = _load_manifest_map(manifest_path)
 
     try:
         target_path = BaseTool.resolve_input_path(name, allow_dir=True)
@@ -103,11 +205,21 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
             meta = json.loads(metadata_json)
         except Exception:
             meta = {"raw": metadata_json}
-    entry = {"name": name, "path": str(target_path), "metadata": meta}
-    manifest.append(entry)
+    path_str = str(target_path)
+    entry = manifest_map.get(path_str, {"name": name, "path": path_str, "type": None, "annotations": []})
+    entry["name"] = name
+    entry_type = entry.get("type") or meta.get("type")
+    annotations: List[Dict[str, Any]] = entry.get("annotations") or []
+    annotation = {k: v for k, v in meta.items() if k != "type"}
+    if annotation and annotation not in annotations:
+        annotations.append(annotation)
+    entry["type"] = entry_type
+    entry["annotations"] = annotations
+    entry["metadata"] = _build_metadata_for_compat(entry_type, annotations)
+    manifest_map[path_str] = entry
     with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-    return {"manifest_path": str(manifest_path), "n_entries": len(manifest)}
+        json.dump(manifest_map, f, indent=2)
+    return {"manifest_path": str(manifest_path), "n_entries": len(manifest_map)}
 
 
 def _run_root() -> Path:
@@ -144,14 +256,30 @@ def check_project_state(base_folder: str) -> str:
     exists = os.listdir(base_folder)
     exp_results = os.path.join(base_folder, "experiment_results")
     artifacts = os.listdir(exp_results) if os.path.exists(exp_results) else []
-    
+    # Include files in subdirectories for richer signals (png/svg/pdf/csv, lit summary)
+    has_plots = False
+    has_data = any(x.endswith('.csv') for x in artifacts)
+    has_lit_review = "lit_summary.json" in artifacts or "lit_summary.csv" in artifacts
+    if os.path.exists(exp_results):
+        for root, dirs, files in os.walk(exp_results):
+            for f in files:
+                lf = f.lower()
+                if lf.endswith((".png", ".svg", ".pdf")):
+                    has_plots = True
+                if lf.endswith(".csv"):
+                    has_data = True
+                if lf in {"lit_summary.json", "lit_summary.csv"}:
+                    has_lit_review = True
+            if has_plots and has_data and has_lit_review:
+                break
+
     return json.dumps({
         "status_message": status_msg,
         "root_files": exists,
         "artifacts": artifacts,
-        "has_lit_review": "lit_summary.json" in artifacts,
-        "has_data": any(x.endswith('.csv') for x in artifacts),
-        "has_plots": any(x.endswith('.png') for x in artifacts),
+        "has_lit_review": has_lit_review,
+        "has_data": has_data,
+        "has_plots": has_plots,
         "has_draft": "manuscript.pdf" in exists or "manuscript.tex" in exists
     })
 
@@ -221,10 +349,12 @@ def run_comp_sim(
 @function_tool
 def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None, make_phase_portrait: bool = True):
     """Generates plots from simulation data."""
+    out_dir = _fill_figure_dir(output_dir)
     res = RunBiologicalPlottingTool().use_tool(
         solution_path=solution_path,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=out_dir,
         make_phase_portrait=make_phase_portrait,
+        make_combined_svg=True,
     )
     # Append outputs to manifest if possible
     for k, v in res.items():
@@ -639,11 +769,72 @@ def _read_manifest_entries() -> List[Dict[str, Any]]:
     """Helper to read manifest entries without tool wrapper."""
     exp_dir = BaseTool.resolve_output_dir(None)
     manifest_path = exp_dir / "file_manifest.json"
-    if not manifest_path.exists():
-        return []
-    with open(manifest_path) as f:
-        data = json.load(f)
-    return data if isinstance(data, list) else []
+    manifest_map = _load_manifest_map(manifest_path)
+    entries = list(manifest_map.values())
+    entries.sort(key=lambda e: e.get("path", ""))
+    return entries
+
+
+@function_tool
+def read_manifest_entry(path_or_name: str):
+    """
+    Read a single manifest entry by path key or filename (basename).
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    manifest_path = exp_dir / "file_manifest.json"
+    manifest_map = _load_manifest_map(manifest_path)
+    if not manifest_map:
+        return {"error": "Manifest empty or missing", "path": str(manifest_path)}
+
+    # Exact path match first
+    entry = manifest_map.get(path_or_name)
+    if entry:
+        return {"path": path_or_name, "entry": entry}
+
+    # Fallback: match by basename
+    matches = []
+    for p, e in manifest_map.items():
+        if os.path.basename(p) == path_or_name:
+            matches.append({"path": p, "entry": e})
+    if matches:
+        return {"matches": matches}
+    return {"error": "Not found", "path_or_name": path_or_name}
+
+
+@function_tool
+def check_manifest():
+    """
+    Validate manifest entries: report missing files, entries lacking type, and duplicate basenames.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    manifest_path = exp_dir / "file_manifest.json"
+    manifest_map = _load_manifest_map(manifest_path)
+    if not manifest_map:
+        return {"error": "Manifest empty or missing", "path": str(manifest_path)}
+
+    missing = []
+    missing_type = []
+    by_name: Dict[str, list[str]] = {}
+    for path, entry in manifest_map.items():
+        try:
+            exists = Path(path).exists()
+        except Exception:
+            exists = False
+        if not exists:
+            missing.append(path)
+        if not entry.get("type"):
+            missing_type.append(path)
+        name = entry.get("name") or os.path.basename(path)
+        by_name.setdefault(name, []).append(path)
+
+    duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+    return {
+        "manifest_path": str(manifest_path),
+        "n_entries": len(manifest_map),
+        "missing_files": missing,
+        "missing_type": missing_type,
+        "duplicate_names": duplicates,
+    }
 
 
 @function_tool
@@ -733,7 +924,13 @@ def write_figures_readme(content: str, filename: str = "README.md"):
     """
     Convenience: save a figures README under figures/ (default README.md).
     """
-    return _write_text_artifact_raw(name=filename, content=content, subdir="figures", metadata_json='{"type":"readme","source":"analyst"}')
+    # Force figures root
+    return _write_text_artifact_raw(
+        name=os.path.join("figures", filename),
+        content=content,
+        subdir=None,
+        metadata_json='{"type":"readme","source":"analyst"}',
+    )
 
 
 @function_tool
@@ -884,12 +1081,77 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         if status_val:
             parts.append(f"status: {status_val}")
 
-        out = getattr(run_result, "output", None)
-        if out is None and hasattr(run_result, "get"):
-            out = run_result.get("output", None)  # type: ignore
+        # Grab the final message from the sub-agent. Agents SDKs sometimes expose
+        # different fields, so probe a few common ones before falling back.
+        candidate_fields = ["final_output", "output", "final_message", "content", "message"]
+        out: Any = None
+        for field in candidate_fields:
+            out = getattr(run_result, field, None)
+            if out is None and hasattr(run_result, "get"):
+                out = run_result.get(field, None)  # type: ignore
+            if out:
+                break
+
+        # If the result carries messages, surface the last content to avoid empty tool output.
+        if not out and hasattr(run_result, "messages"):
+            msgs = getattr(run_result, "messages")
+            try:
+                if isinstance(msgs, list) and msgs:
+                    last = msgs[-1]
+                    out = getattr(last, "content", None) if not isinstance(last, dict) else last.get("content")
+            except Exception:
+                pass
+
+        # Streaming/agent SDKs often keep raw_responses; grab the last text to help debug max_turns.
+        if not out and hasattr(run_result, "raw_responses"):
+            try:
+                raw = getattr(run_result, "raw_responses")
+                if isinstance(raw, list) and raw:
+                    last = raw[-1]
+                    out = getattr(last, "content", None) or getattr(last, "text", None)
+            except Exception:
+                pass
+
+        # As a final hint, capture the last new_item (e.g., last tool call) if available.
+        if not out and hasattr(run_result, "new_items"):
+            try:
+                new_items = getattr(run_result, "new_items")
+                if isinstance(new_items, list) and new_items:
+                    last_item = new_items[-1]
+                    # Try a few common shapes
+                    if hasattr(last_item, "content"):
+                        out = f"last_item: {getattr(last_item, 'content')}"
+                    elif hasattr(last_item, "tool_name"):
+                        out = f"last_tool: {getattr(last_item, 'tool_name')}({getattr(last_item, 'tool_input', '')})"
+            except Exception:
+                pass
+
         if out:
             parts.append(str(out))
-        return "\n".join(parts) if parts else ""
+
+        # Summarize tool calls so the PI sees what ran before max_turns.
+        try:
+            ni = getattr(run_result, "new_items", None)
+            if isinstance(ni, list) and ni:
+                tool_names: List[str] = []
+                for item in ni:
+                    if hasattr(item, "tool_name"):
+                        tool_names.append(getattr(item, "tool_name"))
+                    elif isinstance(item, dict) and "tool_name" in item:
+                        tool_names.append(str(item["tool_name"]))
+                if tool_names:
+                    preview = ", ".join(tool_names[:6])
+                    tail = "..." if len(tool_names) > 6 else ""
+                    parts.append(f"tools_called: {preview}{tail} (n_new_items={len(ni)})")
+                else:
+                    parts.append(f"n_new_items={len(ni)}")
+        except Exception:
+            pass
+
+        # Never return an empty string; fall back to repr to expose something to the caller.
+        if not parts:
+            return str(run_result)
+        return "\n".join(parts)
     
     # Extract richer context from Idea JSON and format lists for Prompt ingestion
     title = idea.get('Title', 'Project')
@@ -925,6 +1187,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_output,
             append_manifest,
             read_manifest,
+            read_manifest_entry,
+            check_manifest,
             assemble_lit_data,
             validate_lit_summary,
             search_semantic_scholar,
@@ -948,7 +1212,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
-            "6. Log any new or newly analyzed artifacts with 'append_manifest' (name + metadata/description)."
+            "6. Before calling 'append_manifest', ask if the artifact adds new value (new file or materially new analysis). Log only when yes, with name + metadata/description."
         ),
         model=model,
         tools=[
@@ -961,6 +1225,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_output,
             append_manifest,
             read_manifest,
+            read_manifest_entry,
+            check_manifest,
             build_graphs,
             run_biological_model,
             run_comp_sim,
@@ -982,7 +1248,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
             "3. Generate PNG/SVG files using 'run_biological_plotting'.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
-            "5. Log any new or newly analyzed artifacts with 'append_manifest' (name + metadata/description)."
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description."
         ),
         model=model,
         tools=[
@@ -995,6 +1261,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_output,
             append_manifest,
             read_manifest,
+            read_manifest_entry,
+            check_manifest,
             run_biological_plotting,
             run_validation_compare,
             run_biological_stats,
@@ -1018,7 +1286,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
-            "6. If you create or newly analyze artifacts, log them with 'append_manifest' (name + metadata/description)."
+            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value."
         ),
         model=model,
         tools=[
@@ -1031,6 +1299,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_output,
             append_manifest,
             read_manifest,
+            read_manifest_entry,
+            check_manifest,
             read_manuscript,
             check_claim_graph,
             run_biological_stats,
@@ -1051,7 +1321,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
             "3. If interpretation fails, report the error clearly.\n"
             "4. Use 'write_text_artifact' to save interpretations (e.g., theory_interpretation.txt) under experiment_results/.\n"
-            "5. Log any new or newly analyzed artifacts with 'append_manifest' (name + metadata/description)."
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description."
         ),
         model=model,
         tools=[
@@ -1064,6 +1334,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_output,
             append_manifest,
             read_manifest,
+            read_manifest_entry,
+            check_manifest,
             write_text_artifact,
             write_interpretation_text,
             write_figures_readme,

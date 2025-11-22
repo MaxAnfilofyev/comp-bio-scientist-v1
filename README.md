@@ -56,6 +56,11 @@ conda install conda-forge::chktex
 
 # Install Python package requirements
 pip install -r requirements.txt
+
+# If you upgrade NetworkX to >=3.5, gpickle helpers fall back to plain pickle
+# loading (NetworkX removed read_gpickle). No extra action is required.
+# If matplotlib emits cache-permissions warnings on macOS, set MPLCONFIGDIR to a
+# writable folder (e.g., export MPLCONFIGDIR=$HOME/.config/matplotlib).
 ```
 
 Installation usually takes no more than one hour.
@@ -163,7 +168,8 @@ For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpre
 * Delegates tasks via tools/handoffs until the reviewer reports no gaps and a PDF exists.
 * Uses idea context (Title/Hypothesis/Abstract/Experiments/Risks) and targets the `blank_theoretical_biology_latex` template by default.
 * Enforces output conventions (artifacts in `experiment_results/`, figures in `figures/` when aggregated, PDFs at run root) and structured status files.
-* Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`), Coder (`coder_create_python`, `run_ruff`, `run_pyright` for quick lint/type checks), plus shared helpers (`get_run_paths`, `resolve_path`, `list_artifacts`, `read_artifact` w/ summary mode, `reserve_output`, `write_text_artifact` + conveniences, `append_manifest`/`read_manifest`, `check_status`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader.
+* Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`), Coder (`coder_create_python`, `run_ruff`, `run_pyright` for quick lint/type checks), plus shared helpers (`get_run_paths`, `resolve_path`, `list_artifacts`, `read_artifact` w/ summary mode, `reserve_output`, `write_text_artifact` + conveniences, `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader. Manifest is path-keyed; use `read_manifest_entry`/`check_manifest` to inspect before logging new artifacts.
+* Robust PI visibility: when sub-agents (Modeler/Analyst/etc.) hit `max_turns` or return sparse text, the orchestrator now surfaces their final message plus a summary of tool calls (`tools_called: ...`) so the PI sees what actually ran.
 * Awareness of plot aggregation (`perform_plotting.py`), modeling/stats utilities (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reader tool, and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
 
 Typical invocation:
