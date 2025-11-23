@@ -1,0 +1,22 @@
+{
+  "state_schema_version": "1.0",
+  "description": "Standard layout for per-compartment simulation outputs.",
+  "npz_file": "per_compartment.npz",
+  "required_arrays": [
+    "binary_states",
+    "continuous_states",
+    "time"
+  ],
+  "sidecars": {
+    "node_index_map": "node_index_map.json",
+    "topology_summary": "topology_summary.json"
+  },
+  "status_values": [
+    "ok",
+    "missing_source",
+    "schema_error",
+    "corrupt",
+    "no_morphology"
+  ],
+  "notes": "binary_states is uint8 [time, nodes]; continuous_states is float [time, nodes, vars]; node_index_map is a list of {index, node_id}; topology_summary includes N, leaf_count, mean_depth, max_depth, total_path_length, binary_shape, continuous_shape."
+}

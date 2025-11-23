@@ -4,12 +4,18 @@ import os
 import pickle
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple, Union
 
 import networkx as nx
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+
+
+STATE_SCHEMA_VERSION = "1.0"
+_PER_COMPARTMENT_FILENAME = "per_compartment.npz"
+_NODE_INDEX_MAP_FILENAME = "node_index_map.json"
+_TOPOLOGY_SUMMARY_FILENAME = "topology_summary.json"
 
 
 def _resolve_graph_path(p: Path) -> Path:
@@ -53,6 +59,100 @@ def load_graph(graph_path: Path | str) -> nx.Graph:
     raise ValueError(f"Unsupported graph format: {suffix}")
 
 
+def _compute_topology_metrics(graph: nx.Graph, nodes: List[Any]) -> Dict[str, Any]:
+    """Compute simple topology metrics with graceful fallback."""
+    metrics: Dict[str, Union[int, float, str]] = {
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "status": "ok",
+        "N": len(nodes),
+    }
+    try:
+        degrees = [graph.degree(n) for n in nodes]
+        metrics["leaf_count"] = int(sum(1 for d in degrees if d == 1))
+        metrics["mean_depth"] = 0.0
+        metrics["max_depth"] = 0.0
+        metrics["total_path_length"] = 0.0
+        if nodes:
+            root = nodes[0]
+            lengths = nx.single_source_shortest_path_length(graph, root)
+            depths = [lengths.get(n, 0) for n in nodes]
+            if depths:
+                metrics["mean_depth"] = float(np.mean(depths))
+                metrics["max_depth"] = float(np.max(depths))
+                metrics["total_path_length"] = float(np.sum(list(lengths.values())))
+    except Exception as exc:
+        metrics["status"] = "no_morphology"
+        metrics["notes"] = f"failed to compute topology metrics: {exc}"
+        metrics.setdefault("leaf_count", 0)
+        metrics.setdefault("mean_depth", 0.0)
+        metrics.setdefault("max_depth", 0.0)
+        metrics.setdefault("total_path_length", 0.0)
+    return metrics
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+
+
+def write_per_compartment_outputs(
+    output_dir: Path,
+    binary_states: np.ndarray,
+    continuous_states: np.ndarray,
+    time_vector: np.ndarray,
+    node_index_map: List[Dict[str, Any]],
+    topology_metrics: Dict[str, Any],
+    status: str = "ok",
+) -> Dict[str, Any]:
+    """
+    Standardized writer for per-compartment outputs (binary + continuous + mapping + topology summary).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    npz_path = output_dir / _PER_COMPARTMENT_FILENAME
+    map_path = output_dir / _NODE_INDEX_MAP_FILENAME
+    topo_path = output_dir / _TOPOLOGY_SUMMARY_FILENAME
+
+    payload_status = status
+    try:
+        tmp_npz = npz_path.with_suffix(npz_path.suffix + ".tmp")
+        np.savez_compressed(
+            tmp_npz,
+            binary_states=binary_states.astype(np.uint8),
+            continuous_states=continuous_states.astype(np.float32),
+            time=time_vector.astype(np.float32),
+        )
+        os.replace(tmp_npz, npz_path)
+    except Exception as exc:
+        payload_status = "corrupt"
+        topology_metrics = {**topology_metrics, "notes": f"npz write failed: {exc}"}
+
+    try:
+        _atomic_write_json(map_path, {"state_schema_version": STATE_SCHEMA_VERSION, "node_index_map": node_index_map})
+    except Exception:
+        payload_status = payload_status if payload_status != "ok" else "corrupt"
+
+    topology_payload = {
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "status": payload_status,
+        **topology_metrics,
+        "binary_shape": list(binary_states.shape),
+        "continuous_shape": list(continuous_states.shape),
+    }
+    try:
+        _atomic_write_json(topo_path, topology_payload)
+    except Exception:
+        pass
+
+    return {
+        "per_compartment_npz": str(npz_path),
+        "node_index_map": str(map_path),
+        "topology_summary": str(topo_path),
+        "status": payload_status,
+    }
+
+
 def simulate_compartmental(
     G: nx.Graph,
     steps: int = 200,
@@ -62,7 +162,8 @@ def simulate_compartmental(
     mitophagy_rate: float = 0.02,
     noise_std: float = 0.0,
     seed: int = 0,
-) -> Dict[str, Any]:
+    return_arrays: bool = False,
+) -> Union[Dict[str, Any], Tuple[Dict[str, Any], np.ndarray, np.ndarray]]:
     """
     Minimal compartmental simulation on a graph with E (energy) and M (mitochondrial capacity).
     Not biophysically detailed; intended as a placeholder for agent-driven refinement.
@@ -102,13 +203,16 @@ def simulate_compartmental(
     m_arr = np.array(m_hist)
     frac_failed = float(np.mean(e_arr[-1] < 0.2))
 
-    return {
+    result: Dict[str, Any] = {
         "time": (np.arange(steps) * dt).tolist(),
         "E": e_arr.tolist(),
         "M": m_arr.tolist(),
         "frac_failed": frac_failed,
         "n_nodes": n,
     }
+    if return_arrays:
+        return result, e_arr, m_arr
+    return result
 
 
 class RunCompartmentalSimTool(BaseTool):
@@ -121,7 +225,7 @@ class RunCompartmentalSimTool(BaseTool):
         name: str = "RunCompartmentalSimulation",
         description: str = (
             "Run a simple E/M compartmental simulation on a graph (.gpickle/.graphml/.gml). "
-            "Saves JSON with time, E/M trajectories, frac_failed."
+            "Saves JSON with time, E/M trajectories, frac_failed. Writes per_compartment.npz + topology summary for downstream analyses."
         ),
     ):
         parameters = [
@@ -141,6 +245,7 @@ class RunCompartmentalSimTool(BaseTool):
             {"name": "export_arrays", "type": "bool", "description": "Also write failure_matrix.npy/time_vector.npy/nodes_order.txt (default False)"},
             {"name": "failure_threshold", "type": "float", "description": "Failure threshold for export_arrays (default 0.2)"},
             {"name": "export_output_dir", "type": "str", "description": "Optional output dir for exported arrays (default sim folder)"},
+            {"name": "write_per_compartment", "type": "bool", "description": "Write per_compartment.npz + node_index_map + topology summary (default True)"},
         ]
         super().__init__(name, description, parameters)
 
@@ -195,7 +300,7 @@ class RunCompartmentalSimTool(BaseTool):
         except Exception:
             pass
 
-        result = simulate_compartmental(
+        sim_result, e_arr, m_arr = simulate_compartmental(
             graph,
             steps=steps,
             dt=dt,
@@ -204,12 +309,20 @@ class RunCompartmentalSimTool(BaseTool):
             mitophagy_rate=mitophagy_rate,
             noise_std=noise_std,
             seed=seed,
+            return_arrays=True,
         )
 
         if downsample > 1:
-            result["time"] = result["time"][::downsample]
-            result["E"] = result["E"][::downsample]
-            result["M"] = result["M"][::downsample]
+            e_arr = e_arr[::downsample]
+            m_arr = m_arr[::downsample]
+            sim_result["time"] = sim_result["time"][::downsample]
+            sim_result["E"] = e_arr.tolist()
+            sim_result["M"] = m_arr.tolist()
+        else:
+            sim_result["E"] = e_arr.tolist()
+            sim_result["M"] = m_arr.tolist()
+
+        result = sim_result
 
         if not store_timeseries:
             result = {
@@ -245,6 +358,25 @@ class RunCompartmentalSimTool(BaseTool):
             pass
 
         export_result = None
+        per_compartment_output = bool(kwargs.get("write_per_compartment", True))
+        per_comp_status: Dict[str, Any] = {}
+        if per_compartment_output:
+            time_arr = np.array(sim_result["time"], dtype=float)
+            binary_states = (e_arr < failure_threshold).astype(np.uint8)
+            continuous_states = np.stack([e_arr, m_arr], axis=-1)
+            nodes = list(graph.nodes())
+            node_index_map = [{"index": i, "node_id": str(n)} for i, n in enumerate(nodes)]
+            topology_metrics = _compute_topology_metrics(graph, nodes)
+            per_comp_status = write_per_compartment_outputs(
+                output_dir=Path(export_output_dir),
+                binary_states=binary_states,
+                continuous_states=continuous_states,
+                time_vector=time_arr,
+                node_index_map=node_index_map,
+                topology_metrics=topology_metrics,
+                status=topology_metrics.get("status", "ok"),
+            )
+
         if export_arrays:
             try:
                 from ai_scientist.tools.sim_postprocess import export_sim_timeseries
@@ -258,4 +390,9 @@ class RunCompartmentalSimTool(BaseTool):
             except Exception as exc:  # pragma: no cover - defensive
                 export_result = {"error": f"export_arrays failed: {exc}"}
 
-        return {"output_json": str(out_path), "frac_failed": result["frac_failed"], "exported": export_result}
+        return {
+            "output_json": str(out_path),
+            "frac_failed": result["frac_failed"],
+            "exported": export_result,
+            "per_compartment": per_comp_status or None,
+        }

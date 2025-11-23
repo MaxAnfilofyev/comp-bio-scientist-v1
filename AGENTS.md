@@ -69,6 +69,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 - **Filesystem helpers** (agents_orchestrator.py wrappers)
   - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output`, `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`), `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`, `get_artifact_index` (manifest + experiment_results index), `summarize_artifact` (lightweight heads/shapes). Output-producing helpers can auto-log to the manifest when metadata is provided (e.g., write_text_artifact, plotting/sim tools). Manifest is path-keyed; prefer checking with `read_manifest_entry`/`check_manifest` before logging.
+  - `read_npy_artifact` (safely load small .npy arrays to JSON-friendly data; returns shape/dtype or full data if under size limits; errors for large or pickled arrays).
   - Graph loaders accept `.gpickle` even on NetworkX>=3.5 via a pickle fallback (upstream removed `read_gpickle`).
 - **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 

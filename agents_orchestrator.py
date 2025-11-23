@@ -1893,6 +1893,93 @@ def head_artifact(path: str, max_lines: int = 20, max_bytes: int = 200_000):
 
 
 @function_tool
+def read_npy_artifact(path: str, max_elements: int = 50_000, max_bytes: int = 5_000_000):
+    """
+    Load a small .npy file safely and return its data or shape.
+    - If file too large (elements or bytes), returns metadata (shape, dtype) instead of full data.
+    - Only supports .npy; refuses pickled objects.
+    """
+    p = BaseTool.resolve_input_path(path, allow_dir=False)
+    try:
+        size = p.stat().st_size
+    except Exception:
+        size = None
+    if size is not None and size > max_bytes:
+        return {"path": str(p), "error": f"file too large ({size} bytes)", "size_bytes": size}
+    try:
+        import numpy as np  # type: ignore
+        arr = np.load(p, allow_pickle=False)
+        shape = tuple(arr.shape)
+        dtype = str(arr.dtype)
+        if arr.size > max_elements:
+            return {"path": str(p), "shape": shape, "dtype": dtype, "note": "too large, data omitted"}
+        return {"path": str(p), "shape": shape, "dtype": dtype, "data": arr.tolist()}
+    except Exception as exc:
+        return {"path": str(p), "error": str(exc)}
+
+
+@function_tool
+def validate_per_compartment_outputs(sim_dir: str):
+    """
+    Validate standardized per-compartment outputs under a simulation folder.
+    Expects per_compartment.npz (binary_states, continuous_states, time), node_index_map.json, topology_summary.json.
+    Returns shapes/status and any detected errors.
+    """
+    sim_path = BaseTool.resolve_input_path(sim_dir, allow_dir=True)
+    npz_path = sim_path / "per_compartment.npz"
+    topo_path = sim_path / "topology_summary.json"
+    map_path = sim_path / "node_index_map.json"
+
+    info: Dict[str, Any] = {"sim_dir": str(sim_path)}
+    errors: List[str] = []
+
+    if not npz_path.exists():
+        errors.append("per_compartment.npz missing")
+    else:
+        try:
+            import numpy as np  # type: ignore
+
+            archive = np.load(npz_path, allow_pickle=False)
+            required = ["binary_states", "continuous_states", "time"]
+            missing = [k for k in required if k not in archive.files]
+            if missing:
+                errors.append(f"npz missing keys: {missing}")
+            else:
+                info["binary_shape"] = list(np.shape(archive["binary_states"]))
+                info["continuous_shape"] = list(np.shape(archive["continuous_states"]))
+                info["time_shape"] = list(np.shape(archive["time"]))
+        except Exception as exc:
+            errors.append(f"failed to read npz: {exc}")
+
+    if topo_path.exists():
+        try:
+            with topo_path.open() as f:
+                topo = json.load(f)
+            info["topology_status"] = topo.get("status")
+            info["topology_metrics"] = {k: topo.get(k) for k in ["N", "leaf_count", "mean_depth", "max_depth", "total_path_length"]}
+        except Exception as exc:
+            errors.append(f"failed to read topology_summary.json: {exc}")
+    else:
+        errors.append("topology_summary.json missing")
+
+    if map_path.exists():
+        try:
+            with map_path.open() as f:
+                mapping = json.load(f)
+            info["node_index_count"] = len(mapping.get("node_index_map", [])) if isinstance(mapping, dict) else None
+        except Exception as exc:
+            errors.append(f"failed to read node_index_map.json: {exc}")
+    else:
+        errors.append("node_index_map.json missing")
+
+    if errors:
+        info["errors"] = errors
+    else:
+        info["status"] = "ok"
+    return info
+
+
+@function_tool
 def summarize_artifact(path: str, max_lines: int = 5):
     """
     Return a lightweight summary of a file without loading full contents.
@@ -2382,7 +2469,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
-            "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete.\n"
+            "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete. Every run must also emit per_compartment.npz + node_index_map.json + topology_summary.json (binary_states, continuous_states/time); validate with validate_per_compartment_outputs before marking status=complete.\n"
             "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
             "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
             "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
@@ -2416,6 +2503,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_sim_path,
             update_transport_manifest,
             mirror_artifacts,
+            read_npy_artifact,
+            validate_per_compartment_outputs,
             manage_project_knowledge,
             write_text_artifact, # Added for writing logs
         ], 
@@ -2436,6 +2525,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Generate PNG/SVG files using 'run_biological_plotting'. Use 'sim_postprocess' if you need failure_matrix/time_vector/node order from sim.json before plotting.\n"
             "3b. Use the transport run manifest (read_transport_manifest / resolve_sim_path / update_transport_manifest) to decide what to plot or skip; resolve sim.json via resolve_sim_path instead of guessing paths, and error if the requested transport/seed is missing.\n"
             "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
+            "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
@@ -2468,6 +2558,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             write_text_artifact,
             graph_diagnostics,
             mirror_artifacts,
+            read_npy_artifact,
+            validate_per_compartment_outputs,
             manage_project_knowledge,
         ],
         model=model,
