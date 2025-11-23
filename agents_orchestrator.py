@@ -4,10 +4,15 @@ import json
 import os
 import os.path as osp
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
+import ast
+import difflib
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
 try:
     from agents.types import RunResult
 except ImportError:
@@ -15,9 +20,10 @@ except ImportError:
         from agents.types import RunResult  # type: ignore  # noqa: F401
     else:
         class RunResult:  # minimal stub
-            error: Any = None
-            status: Any = None
-            output: Any = None
+            def __init__(self, output=None, error=None, status=None):
+                self.output = output
+                self.error = error
+                self.status = status
 
 # --- Framework Imports ---
 try:
@@ -60,14 +66,12 @@ def parse_args():
     p.add_argument("--resume", action="store_true", help="Don't overwrite existing experiment folder.")
     p.add_argument("--idea_idx", type=int, default=0, help="Index if the idea file contains a list of ideas.")
     p.add_argument("--input", default=None, help="Initial input message to the PI agent.")
+    p.add_argument("--human_in_the_loop", action="store_true", help="Enable interactive mode where agents ask for confirmation before expensive tasks.")
     return p.parse_args()
 
 def _fill_output_dir(output_dir: Optional[str]) -> str:
     """
     Resolve output dir to the run-specific folder.
-    - If explicit path is provided, use it.
-    - Otherwise fall back to AISC_EXP_RESULTS.
-    - If the chosen path is relative, anchor it under AISC_BASE_FOLDER.
     """
     target = output_dir or os.environ.get("AISC_EXP_RESULTS", "experiment_results")
     if not os.path.isabs(target):
@@ -80,9 +84,6 @@ def _fill_output_dir(output_dir: Optional[str]) -> str:
 def _fill_figure_dir(output_dir: Optional[str]) -> str:
     """
     Resolve a figure output dir, preferring the run-root figures/ folder.
-    - If explicit absolute path is provided, use it.
-    - If path contains 'experiment_results/figures' or is just 'figures', normalize to <base>/figures.
-    - Otherwise, fall back to the normal output resolution.
     """
     base = os.environ.get("AISC_BASE_FOLDER")
     if output_dir is None:
@@ -93,7 +94,6 @@ def _fill_figure_dir(output_dir: Optional[str]) -> str:
         return output_dir
     if "experiment_results/figures" in output_dir or output_dir.strip("/").startswith("figures"):
         if base:
-            # Strip leading experiment_results/figures or figures/
             tail = output_dir.split("figures", 1)[-1].lstrip("/ ")
             return os.path.join(base, "figures", tail) if tail else os.path.join(base, "figures")
         return "figures"
@@ -101,11 +101,6 @@ def _fill_figure_dir(output_dir: Optional[str]) -> str:
 
 
 def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Build a minimal legacy metadata dict without duplicating annotations.
-    - Keeps type for older consumers.
-    - Avoids copying annotation payloads (the canonical source of detail).
-    """
     meta: Dict[str, Any] = {}
     if entry_type:
         meta["type"] = entry_type
@@ -113,12 +108,7 @@ def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict
 
 
 def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Normalize a manifest entry to the new path-keyed shape with annotations.
-    """
-
     def _add_annotation(raw: Any, annotations_list: List[Dict[str, Any]]):
-        """Keep only meaningful annotation fields and avoid recursive growth."""
         if not isinstance(raw, dict):
             return
         cleaned = {k: v for k, v in raw.items() if k not in {"type", "annotations"}}
@@ -163,6 +153,7 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
         "path": path,
         "type": base_type,
         "annotations": annotations,
+        "timestamp": entry.get("timestamp")
     }
     compat_meta = _build_metadata_for_compat(base_type, annotations)
     if compat_meta:
@@ -171,9 +162,6 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
 
 
 def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
-    """
-    Load manifest as a path-keyed dict, tolerating the legacy list format.
-    """
     if not manifest_path.exists():
         return {}
     try:
@@ -199,11 +187,72 @@ def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
                     manifest_map[norm["path"]] = norm
     return manifest_map
 
+# --- WATCHER: Auto-Scan Logic ---
+def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
+    """
+    Background Watcher: Scans experiment_results for orphaned files (files not in manifest).
+    Adds them with inferred types and 'auto_watcher' annotation.
+    Returns list of added filenames.
+    """
+    manifest_path = exp_dir / "file_manifest.json"
+    manifest_map = _load_manifest_map(manifest_path)
+    added_files = []
+    
+    # We normalized existing keys in _load_manifest_map, but we need to check against 
+    # the exact string format used in the manifest (usually absolute paths or relative to execution).
+    # To be safe, we check if the path_str matches any key in manifest_map.
+    
+    for root, _, files in os.walk(exp_dir):
+        for name in files:
+            if name == "file_manifest.json":
+                continue
+            
+            full_path = Path(root) / name
+            path_str = str(full_path)
+            
+            # Check for existence
+            if path_str in manifest_map:
+                continue
+                
+            # Double check relative path just in case
+            try:
+                rel_path = str(full_path.relative_to(exp_dir))
+                # Some agents might store relative paths?
+                # For robust checking, we look at basenames if paths differ, 
+                # but ADCRT prefers exact paths. We stick to exact path matching for safety.
+            except ValueError:
+                pass
+
+            # Infer type
+            suffix = full_path.suffix.lower()
+            etype = "unknown"
+            if suffix in ['.png', '.pdf', '.svg']: etype = "figure"
+            elif suffix in ['.csv', '.json', '.npy', '.npz']: etype = "data"
+            elif suffix in ['.py']: etype = "code"
+            elif suffix in ['.md', '.txt', '.log']: etype = "text"
+            
+            # Create Entry
+            entry = {
+                "name": name,
+                "path": path_str,
+                "type": etype,
+                "annotations": [{"source": "auto_watcher", "note": "Recovered orphaned file"}],
+                "timestamp": datetime.now().isoformat()
+            }
+            manifest_map[path_str] = entry
+            added_files.append(name)
+
+    if added_files:
+        try:
+            with open(manifest_path, "w") as f:
+                json.dump(manifest_map, f, indent=2)
+        except Exception:
+            pass # Fail silently (watcher shouldn't crash run)
+
+    return added_files
+
 
 def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
-    """
-    Internal helper to append to the run's manifest without invoking the tool wrapper.
-    """
     exp_dir = BaseTool.resolve_output_dir(None)
     manifest_path = exp_dir / "file_manifest.json"
     manifest_map = _load_manifest_map(manifest_path)
@@ -237,14 +286,20 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
         entry["metadata"] = compat_meta
     elif "metadata" in entry:
         entry.pop("metadata", None)
+     
+    entry["timestamp"] = datetime.now().isoformat()
+     
     manifest_map[path_str] = entry
-    with open(manifest_path, "w") as f:
-        json.dump(manifest_map, f, indent=2)
+    try:
+        with open(manifest_path, "w") as f:
+            json.dump(manifest_map, f, indent=2)
+    except Exception as e:
+        return {"error": f"Failed to write manifest: {str(e)}"}
+         
     return {"manifest_path": str(manifest_path), "n_entries": len(manifest_map)}
 
 
 def _append_artifact_from_result(result: Any, key: str, metadata_json: Optional[str], allow_missing: bool = True):
-    """Append manifest entry when a result dict contains a path under key."""
     if not metadata_json or not isinstance(result, dict):
         return
     out = result.get(key)
@@ -253,7 +308,6 @@ def _append_artifact_from_result(result: Any, key: str, metadata_json: Optional[
 
 
 def _append_figures_from_result(result: Any, metadata_json: Optional[str]):
-    """Append figure outputs found in a result dict."""
     if not metadata_json or not isinstance(result, dict):
         return
     for _, v in result.items():
@@ -261,19 +315,202 @@ def _append_figures_from_result(result: Any, metadata_json: Optional[str]):
             _append_manifest_entry(name=v, metadata_json=metadata_json, allow_missing=True)
 
 
+# --- Transport Run Manifest Helpers ---
+def _transport_manifest_path() -> Path:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    manifest_path = exp_dir / "simulations" / "transport_runs" / "manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    return manifest_path
+
+
+def _acquire_manifest_lock(manifest_path: Path, timeout: float = 5.0, poll: float = 0.2) -> Optional[Path]:
+    lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return lock_path
+        except FileExistsError:
+            time.sleep(poll)
+    return None
+
+
+def _atomic_write_json(target: Path, data: Any) -> Optional[str]:
+    lock = _acquire_manifest_lock(target)
+    if lock is None:
+        return "Failed to acquire manifest lock; concurrent write in progress."
+
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, target)
+    except Exception as exc:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        finally:
+            try:
+                lock.unlink()
+            except Exception:
+                pass
+        return f"Failed to write manifest: {exc}"
+
+    try:
+        lock.unlink()
+    except Exception:
+        pass
+    return None
+
+
+def _load_transport_manifest() -> Dict[str, Any]:
+    manifest_path = _transport_manifest_path()
+    if not manifest_path.exists():
+        return {"schema_version": 1, "runs": []}
+    try:
+        with open(manifest_path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"schema_version": 1, "runs": []}
+        data.setdefault("schema_version", 1)
+        data.setdefault("runs", [])
+        return data
+    except Exception:
+        return {"schema_version": 1, "runs": []}
+
+
+def _upsert_transport_manifest_entry(
+    baseline: str,
+    transport: float,
+    seed: int,
+    status: str,
+    paths: Dict[str, Optional[str]],
+    notes: str = "",
+    actor: Optional[str] = None,
+) -> Dict[str, Any]:
+    manifest = _load_transport_manifest()
+    runs: List[Dict[str, Any]] = manifest.get("runs", [])
+    actor_name = actor or os.environ.get("AISC_ACTIVE_ROLE", "") or "unknown"
+
+    found = None
+    for entry in runs:
+        if (
+            entry.get("baseline") == baseline
+            and entry.get("transport") == transport
+            and entry.get("seed") == seed
+        ):
+            found = entry
+            break
+
+    if found is None:
+        found = {"baseline": baseline, "transport": transport, "seed": seed}
+        runs.append(found)
+
+    found.update(
+        {
+            "status": status,
+            "paths": paths,
+            "updated_at": datetime.now().isoformat(),
+            "notes": notes or "",
+            "actor": actor_name,
+        }
+    )
+    manifest["runs"] = runs
+    manifest.setdefault("schema_version", 1)
+
+    err = _atomic_write_json(_transport_manifest_path(), manifest)
+    if err:
+        return {"error": err}
+    return {"manifest_path": str(_transport_manifest_path()), "entry": found}
+
+
+def _scan_transport_runs(root: Path) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    if not root.exists():
+        return entries
+
+    for baseline_dir in root.iterdir():
+        if not baseline_dir.is_dir():
+            continue
+        baseline = baseline_dir.name
+        for transport_dir in baseline_dir.iterdir():
+            if not transport_dir.is_dir() or not transport_dir.name.startswith("transport_"):
+                continue
+            t_str = transport_dir.name.split("transport_", 1)[-1]
+            try:
+                transport_val = float(t_str)
+            except Exception:
+                continue
+            for seed_dir in transport_dir.iterdir():
+                if not seed_dir.is_dir() or not seed_dir.name.startswith("seed_"):
+                    continue
+                s_str = seed_dir.name.split("seed_", 1)[-1]
+                try:
+                    seed_val = int(s_str)
+                except Exception:
+                    continue
+
+                def _maybe(path: Path) -> Optional[str]:
+                    return str(path) if path.exists() else None
+
+                base_prefix = baseline
+                paths = {
+                    "failure_matrix": _maybe(seed_dir / f"{base_prefix}_sim_failure_matrix.npy"),
+                    "time_vector": _maybe(seed_dir / f"{base_prefix}_sim_time_vector.npy"),
+                    "nodes_order": _maybe(seed_dir / f"nodes_order_{base_prefix}_sim.txt"),
+                    "sim_json": _maybe(seed_dir / f"{base_prefix}_sim.json"),
+                    "sim_status": _maybe(seed_dir / f"{base_prefix}_sim.status.json"),
+                }
+                missing = [k for k, v in paths.items() if v is None]
+                status = "complete" if not missing else "partial"
+                notes = ""
+                if missing:
+                    notes = f"missing: {', '.join(missing)}"
+
+                entries.append(
+                    {
+                        "baseline": baseline,
+                        "transport": transport_val,
+                        "seed": seed_val,
+                        "status": status,
+                        "paths": paths,
+                        "updated_at": datetime.now().isoformat(),
+                        "notes": notes,
+                        "actor": "system-scan",
+                    }
+                )
+    return entries
+
+
+def _build_seed_dir(baseline: str, transport: float, seed: int) -> Path:
+    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
+    seed_dir = root / baseline / f"transport_{transport}" / f"seed_{seed}"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    return seed_dir
+
+
+def _resolve_run_paths(seed_dir: Path, baseline: str) -> Dict[str, Path]:
+    return {
+        "failure_matrix": seed_dir / f"{baseline}_sim_failure_matrix.npy",
+        "time_vector": seed_dir / f"{baseline}_sim_time_vector.npy",
+        "nodes_order": seed_dir / f"nodes_order_{baseline}_sim.txt",
+        "sim_json": seed_dir / f"{baseline}_sim.json",
+        "sim_status": seed_dir / f"{baseline}_sim.status.json",
+        "verification": seed_dir / f"{baseline}_sim_verification.md",
+    }
+
 def _run_root() -> Path:
     base = os.environ.get("AISC_BASE_FOLDER", "")
     return Path(base) if base else Path(".")
 
 def format_list_field(data: Any) -> str:
-    """Helper to format JSON lists (like Experiments) into a clean string block for LLMs."""
     if isinstance(data, list):
         return "\n".join([f"- {item}" for item in data])
     return str(data)
 
 
 def _render_pdf_or_markdown(path: Path, content: str) -> Tuple[Path, Optional[str]]:
-    """Write PDF via pandoc if available; otherwise fall back to Markdown with a warning."""
     warning: Optional[str] = None
     try:
         import pypandoc  # type: ignore
@@ -297,7 +534,6 @@ def _render_pdf_or_markdown(path: Path, content: str) -> Tuple[Path, Optional[st
 
 
 def _run_cli_tool(tool_name: str, args: str = "") -> Any:
-    """Run a CLI tool in the current cwd if available; otherwise return a clear message."""
     cwd = os.getcwd()
     if not shutil.which(tool_name):
         return f"{tool_name} not found in PATH."
@@ -309,37 +545,76 @@ def _run_cli_tool(tool_name: str, args: str = "") -> Any:
 
 
 def _report_capabilities() -> Dict[str, Any]:
-    """Report availability of key tools used by the orchestrator."""
     tools = {name: bool(shutil.which(name)) for name in ("pandoc", "pdflatex", "ruff", "pyright")}
     return {"tools": tools, "pdf_engine_ready": tools.get("pandoc") and tools.get("pdflatex")}
 
 
+def _ensure_transport_readme(base_folder: str):
+    """
+    Write a standard transport_runs/README.md describing layout and manifest usage for this run.
+    Safe to call multiple times; overwrites with the canonical content.
+    """
+    transport_dir = Path(base_folder) / "experiment_results" / "simulations" / "transport_runs"
+    transport_dir.mkdir(parents=True, exist_ok=True)
+    readme_path = transport_dir / "README.md"
+    template_path = Path(__file__).parent / "docs" / "transport_runs_README.md"
+    if template_path.exists():
+        try:
+            content = template_path.read_text()
+        except Exception:
+            content = ""
+    else:
+        content = (
+            "Transport run layout and naming\n\n"
+            "- Root: experiment_results/simulations/transport_runs\n"
+            "- Baseline folders: transport_runs/<baseline>/\n"
+            "- Transport folders: transport_runs/<baseline>/transport_<transport>/\n"
+            "- Seed folders: transport_runs/<baseline>/transport_<transport>/seed_<seed>/\n"
+            "- Files in each seed folder:\n"
+            "  - <baseline>_sim_failure_matrix.npy\n"
+            "  - <baseline>_sim_time_vector.npy\n"
+            "  - nodes_order_<baseline>_sim.txt\n"
+            "  - <baseline>_sim.json\n"
+            "  - <baseline>_sim.status.json\n\n"
+            "Completion rule\n"
+            "- A run is considered complete only when the arrays (failure_matrix, time_vector, nodes_order) and sim.json + sim.status.json exist.\n"
+            "- Prefer exporting arrays during the sim run; otherwise run sim_postprocess immediately on the sim.json so arrays are present before marking complete.\n\n"
+            "Canonical manifest\n"
+            "- Manifest path: experiment_results/simulations/transport_runs/manifest.json\n"
+            "- Each entry keyed by (baseline, transport, seed) with fields: status (complete|partial|error), paths, updated_at, notes, actor.\n"
+            "- Use the manifest as the source of truth for skip/verify; if missing or stale, run scan_transport_manifest to rebuild from disk.\n"
+        )
+    try:
+        readme_path.write_text(content)
+    except Exception:
+        pass
+
 def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
-    """Small factory to keep Agent construction consistent."""
     return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
 
 
 async def extract_run_output(run_result: RunResult) -> str:
-    """Concise summary for sub-agent tool calls (status/error + final message + tool preview)."""
     parts: List[str] = []
-    err = getattr(run_result, "error", None)
-    if err is None and hasattr(run_result, "get"):
-        err = run_result.get("error", None)  # type: ignore
-    if err:
-        parts.append(f"error: {err}")
+     
+    def get_attr(obj, attr):
+        if hasattr(obj, attr):
+            return getattr(obj, attr)
+        if hasattr(obj, "get"):
+            return obj.get(attr)
+        return None
 
-    status_val = getattr(run_result, "status", None)
-    if status_val is None and hasattr(run_result, "get"):
-        status_val = run_result.get("status", None)  # type: ignore
+    err = get_attr(run_result, "error")
+    if err:
+        parts.append(f"❌ TERMINATION: {err}")
+
+    status_val = get_attr(run_result, "status")
     if status_val:
-        parts.append(f"status: {status_val}")
+        parts.append(f"STATUS: {status_val}")
 
     candidate_fields = ["final_output", "output", "final_message", "content", "message"]
     out: Any = None
     for field in candidate_fields:
-        out = getattr(run_result, field, None)
-        if out is None and hasattr(run_result, "get"):
-            out = run_result.get(field, None)  # type: ignore
+        out = get_attr(run_result, field)
         if out:
             break
 
@@ -374,23 +649,32 @@ async def extract_run_output(run_result: RunResult) -> str:
             pass
 
     if out:
-        parts.append(str(out))
+        parts.append(f"FINAL MSG: {str(out)[:500]}...")
 
     try:
         ni = getattr(run_result, "new_items", None)
         if isinstance(ni, list) and ni:
-            tool_names: List[str] = []
+            tool_trace: List[str] = []
             for item in ni:
+                t_name = None
+                t_input = None
                 if hasattr(item, "tool_name"):
-                    tool_names.append(getattr(item, "tool_name"))
+                    t_name = getattr(item, "tool_name")
+                    t_input = getattr(item, "tool_input", "")
                 elif isinstance(item, dict) and "tool_name" in item:
-                    tool_names.append(str(item["tool_name"]))
-            if tool_names:
-                preview = ", ".join(tool_names[:6])
-                tail = "..." if len(tool_names) > 6 else ""
-                parts.append(f"tools_called: {preview}{tail} (n_new_items={len(ni)})")
+                    t_name = str(item["tool_name"])
+                    t_input = str(item.get("tool_input", ""))
+                 
+                if t_name:
+                    inp_str = str(t_input).replace('\n', ' ')[:20]
+                    tool_trace.append(f"{t_name}({inp_str}...)")
+             
+            if tool_trace:
+                parts.append("\n📋 TOOL TRACE (Execution History):")
+                for i in range(0, len(tool_trace), 3):
+                    parts.append(" -> ".join(tool_trace[i:i+3]))
             else:
-                parts.append(f"n_new_items={len(ni)}")
+                parts.append("(No tool calls recorded)")
     except Exception:
         pass
 
@@ -401,18 +685,136 @@ async def extract_run_output(run_result: RunResult) -> str:
 # --- Tool Definitions (Wrappers for Agents SDK) ---
 
 @function_tool
+def inspect_recent_manifest_entries(limit: int = 20, since_minutes: int = 1440, role: Optional[str] = None):
+    """
+    Forensic Tool: Check the file manifest for updated entries.
+    Crucial for recovering work after a sub-agent timeout or crash.
+    - limit: Max number of files to return (default 20).
+    - since_minutes: Only return files updated in the last N minutes (default 1440 = 24 hours).
+    - role: If provided (e.g. 'modeler', 'analyst'), only show files where metadata['source'] matches this role.
+    Returns the files in reverse chronological order (newest first).
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    manifest_path = exp_dir / "file_manifest.json"
+    manifest_map = _load_manifest_map(manifest_path)
+    
+    if not manifest_map:
+        return "Manifest is empty."
+
+    cutoff = datetime.now() - timedelta(minutes=since_minutes)
+    valid_entries = []
+    
+    for entry in manifest_map.values():
+        ts_str = entry.get("timestamp")
+        if ts_str:
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                if ts < cutoff:
+                    continue
+            except ValueError:
+                pass 
+        
+        if role:
+            meta = entry.get("metadata", {})
+            source = meta.get("source", "").lower()
+            if role.lower() not in source and role.lower() not in str(meta).lower():
+                continue
+
+        valid_entries.append(entry)
+
+    sorted_entries = sorted(
+        valid_entries, 
+        # FIXED: Ensure None values are treated as empty strings to avoid sorting TypeError
+        key=lambda x: x.get("timestamp") or "", 
+        reverse=True
+    )
+    
+    recent = sorted_entries[:limit]
+    
+    if not recent:
+        msg = f"No manifest updates found in the last {since_minutes} minutes"
+        if role:
+            msg += f" for role '{role}'"
+        return msg + "."
+
+    output = [f"Last {len(recent)} manifest updates (since {since_minutes} min ago):"]
+    for entry in recent:
+        ts = entry.get("timestamp", "N/A")
+        name = entry.get("name", "Unknown")
+        etype = entry.get("type", "Unknown")
+        output.append(f"- [{ts}] {name} (Type: {etype})")
+        
+    return "\n".join(output)
+
+@function_tool
+def manage_project_knowledge(
+    action: str,
+    category: str = "general",
+    observation: str = "",
+    solution: str = "",
+    actor: str = "",
+):
+    """
+    Manage the persistent Project Knowledge Base (project_knowledge.md).
+    Use this to store constraints, decisions, failure patterns, and REFLECTIONS that persist across sessions.
+     
+    Args:
+        action: 'add' to log new info, 'read' to retrieve all knowledge.
+        category: 'constraint', 'decision', 'failure_pattern', or 'reflection'.
+        observation: Context of the problem, inefficiency, or constraint (Required for 'add').
+        solution: The fix, decision, or proposed improvement (Required for 'add').
+        actor: Optional role/agent name to auto-log who created the record. If omitted, falls back to env AISC_ACTIVE_ROLE or 'unknown'.
+    """
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    kb_path = os.path.join(base, "project_knowledge.md")
+    actor_name = (
+        actor.strip()
+        or os.environ.get("AISC_ACTIVE_ROLE", "").strip()
+        or "unknown"
+    )
+     
+    if action == "read":
+        if os.path.exists(kb_path):
+            try:
+                with open(kb_path, 'r') as f:
+                    return f.read()
+            except Exception as e:
+                return f"Error reading knowledge base: {str(e)}"
+        return "Project Knowledge Base is empty."
+        
+    if action == "add":
+        if not observation or not solution:
+            return "Error: Both 'observation' and 'solution' are required for 'add' action."
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = (
+            f"\n## [{category.upper()}] {timestamp}\n"
+            f"**Actor:** {actor_name}\n"
+            f"**Observation/Problem:** {observation}\n"
+            f"**Solution/Insight:** {solution}\n"
+            f"{'-'*40}\n"
+        )
+        
+        try:
+            with open(kb_path, 'a') as f:
+                f.write(entry)
+            return f"Added new {category} entry to project_knowledge.md"
+        except Exception as e:
+            return f"Error writing to knowledge base: {str(e)}"
+        
+    return "Invalid action. Use 'add' or 'read'."
+
+@function_tool
 def check_project_state(base_folder: str) -> str:
     """
-    Reads the project state to see what artifacts exist. 
-    Creates the folder structure if it does not exist.
+    Reads the project state to see what artifacts exist.
+    UPDATED: Automatically scans for orphaned files and updates the manifest.
     """
     status_msg = "Folder existed"
     
-    # Auto-creation logic
     if not os.path.exists(base_folder):
         try:
             os.makedirs(base_folder, exist_ok=True)
-            # Also create the standard subfolder to save the agents a step
             exp_results = os.path.join(base_folder, "experiment_results")
             os.makedirs(exp_results, exist_ok=True)
             status_msg = f"Created new directory: {base_folder}"
@@ -421,8 +823,13 @@ def check_project_state(base_folder: str) -> str:
         
     exists = os.listdir(base_folder)
     exp_results = os.path.join(base_folder, "experiment_results")
+    
+    # --- AUTO-WATCHER TRIGGER ---
+    orphans = []
+    if os.path.exists(exp_results):
+        orphans = _scan_and_auto_update_manifest(Path(exp_results))
+    
     artifacts = os.listdir(exp_results) if os.path.exists(exp_results) else []
-    # Include files in subdirectories for richer signals (png/svg/pdf/csv, lit summary)
     has_plots = False
     has_data = any(x.endswith('.csv') for x in artifacts)
     has_lit_review = "lit_summary.json" in artifacts or "lit_summary.csv" in artifacts
@@ -441,6 +848,7 @@ def check_project_state(base_folder: str) -> str:
 
     return json.dumps({
         "status_message": status_msg,
+        "orphaned_files_recovered": len(orphans),
         "root_files": exists,
         "artifacts": artifacts,
         "has_lit_review": has_lit_review,
@@ -449,6 +857,517 @@ def check_project_state(base_folder: str) -> str:
         "has_draft": "manuscript.pdf" in exists or "manuscript.tex" in exists
     })
 
+
+@function_tool
+def scan_transport_manifest(write: bool = True):
+    """
+    Scan transport_runs and (optionally) write manifest.json with status of (baseline, transport, seed).
+    """
+    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
+    entries = _scan_transport_runs(root)
+    manifest = {"schema_version": 1, "runs": entries, "updated_at": datetime.now().isoformat()}
+    if write:
+        err = _atomic_write_json(_transport_manifest_path(), manifest)
+        if err:
+            return {"error": err, "manifest_path": str(_transport_manifest_path())}
+    return {"manifest_path": str(_transport_manifest_path()), "runs": entries}
+
+
+def _status_from_paths(paths: Dict[str, Optional[str]], required_keys: Optional[List[str]] = None) -> Tuple[str, List[str]]:
+    required = required_keys or ["failure_matrix", "time_vector", "nodes_order", "sim_json", "sim_status"]
+    missing = [k for k in required if not paths.get(k)]
+    status = "complete" if not missing else "partial"
+    return status, missing
+
+
+def _write_verification(seed_dir: Path, baseline: str, transport: float, seed: int, status: str, notes: str):
+    ver_path = _resolve_run_paths(seed_dir, baseline)["verification"]
+    lines = [
+        f"baseline: {baseline}",
+        f"transport: {transport}",
+        f"seed: {seed}",
+        f"status: {status}",
+        f"notes: {notes}",
+    ]
+    try:
+        ver_path.write_text("\n".join(lines))
+    except Exception:
+        pass
+
+
+def _generate_run_recipe(base_folder: str):
+    """
+    Generate a per-run run_recipe.json under experiment_results/simulations/transport_runs by scanning available morphologies
+    and seeding template/nodes_order from existing transport_runs if present. Overwrites safely each run startup.
+    """
+    base_path = Path(base_folder)
+    morph_dir = base_path / "experiment_results" / "morphologies"
+    transport_runs_dir = base_path / "experiment_results" / "simulations" / "transport_runs"
+    recipe_path = transport_runs_dir / "run_recipe.json"
+    transport_runs_dir.mkdir(parents=True, exist_ok=True)
+
+    allowed_suffixes = [".npy", ".npz", ".graphml", ".gpickle", ".gml"]
+    entries: List[Dict[str, str]] = []
+
+    # Helper to find an existing template in transport_runs for a baseline
+    def _find_template(baseline: str) -> Tuple[Optional[str], Optional[str]]:
+        root = transport_runs_dir / baseline
+        if not root.exists():
+            return None, None
+        for tdir in root.iterdir():
+            if not tdir.is_dir() or not tdir.name.startswith("transport_"):
+                continue
+            seed_dir = tdir / "seed_0"
+            if not seed_dir.exists():
+                continue
+            sim_json = seed_dir / f"{baseline}_sim.json"
+            nodes = seed_dir / f"nodes_order_{baseline}_sim.txt"
+            sim_str = str(sim_json) if sim_json.exists() else None
+            nodes_str = str(nodes) if nodes.exists() else None
+            if sim_str or nodes_str:
+                return sim_str, nodes_str
+        return None, None
+
+    if morph_dir.exists():
+        for f in morph_dir.iterdir():
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in allowed_suffixes:
+                continue
+            baseline = f.stem
+            tpl_json, tpl_nodes = _find_template(baseline)
+            entries.append(
+                {
+                    "baseline": baseline,
+                    "morphology_path": str(f),
+                    "template_json": tpl_json or "",
+                    "nodes_order_template": tpl_nodes or "",
+                    "output_root": str(
+                        base_path
+                        / "experiment_results"
+                        / "simulations"
+                        / "transport_sweep"
+                        / "transport_{transport}"
+                        / "seed_{seed}"
+                        / ""
+                    ),
+                }
+            )
+
+    try:
+        with open(recipe_path, "w") as fp:
+            json.dump(entries, fp, indent=2)
+    except Exception:
+        pass
+
+@function_tool
+def mirror_artifacts(
+    src_paths: List[str],
+    dest_dir: str = "experiment_results/figures_for_manuscript",
+    mode: str = "copy",
+    prefix: str = "",
+    suffix: str = "",
+):
+    """
+    Copy or move artifacts into a canonical figures directory under the run root.
+    - src_paths: list of files to mirror.
+    - dest_dir: relative or absolute dest; defaults to experiment_results/figures_for_manuscript.
+    - mode: 'copy' (default) or 'move'.
+    - prefix/suffix: optional disambiguation added to filename stem.
+    Refuses to write outside AISC_BASE_FOLDER. Uses temp+atomic rename to avoid partial writes.
+    """
+    base = Path(os.environ.get("AISC_BASE_FOLDER", ".")).resolve()
+    if not base.exists():
+        return {"error": "AISC_BASE_FOLDER not set or missing."}
+    dest = Path(dest_dir)
+    if not dest.is_absolute():
+        dest = (base / dest).resolve()
+    try:
+        dest.relative_to(base)
+    except Exception:
+        return {"error": f"Destination outside run root: {dest}"}
+    dest.mkdir(parents=True, exist_ok=True)
+
+    copied: List[str] = []
+    skipped: List[str] = []
+    errors: List[str] = []
+
+    for src in src_paths:
+        try:
+            p = BaseTool.resolve_input_path(src, allow_dir=False)
+        except Exception as exc:
+            errors.append(f"{src}: {exc}")
+            continue
+        try:
+            p.relative_to(base)
+        except Exception:
+            errors.append(f"{p}: outside run root")
+            continue
+        if not p.exists():
+            errors.append(f"{p}: missing")
+            continue
+
+        stem = p.stem
+        name = stem
+        if prefix:
+            name = f"{prefix}{name}"
+        if suffix:
+            name = f"{name}{suffix}"
+        name = f"{name}{p.suffix}"
+        target = dest / name
+
+        if target.exists():
+            errors.append(f"{p}: target exists {target}; use prefix/suffix to disambiguate.")
+            continue
+
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        try:
+            if mode == "move":
+                shutil.copy2(p, tmp)
+                os.replace(tmp, target)
+                p.unlink()
+            else:
+                shutil.copy2(p, tmp)
+                os.replace(tmp, target)
+            copied.append(str(target))
+        except Exception as exc:
+            errors.append(f"{p} -> {target}: {exc}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+    return {"dest_dir": str(dest), "copied": copied, "skipped": skipped, "errors": errors}
+
+
+def _resolve_baseline_path_internal(baseline: str) -> Tuple[Optional[Path], List[str], Optional[str]]:
+    """
+    Resolve a baseline path. Accepts absolute/relative path or a name under experiment_results/morphologies/<baseline>.*.
+    Only allows graph formats: .npy, .npz, .graphml, .gpickle, .gml.
+    Returns (path_or_none, available_baselines, error_message_or_none).
+    """
+    allowed_suffixes = [".npy", ".npz", ".graphml", ".gpickle", ".gml"]
+    try:
+        p = BaseTool.resolve_input_path(baseline, allow_dir=False)
+        if p.suffix.lower() in allowed_suffixes:
+            return p, [], None
+        return None, [], f"Unsupported baseline format '{p.suffix}'. Allowed: {', '.join(allowed_suffixes)}"
+    except Exception:
+        pass
+
+    morph_dir = BaseTool.resolve_output_dir(None) / "morphologies"
+    candidates: List[Path] = []
+    if morph_dir.exists():
+        for f in morph_dir.iterdir():
+            if f.is_file():
+                candidates.append(f)
+    available = sorted({c.stem for c in candidates})
+
+    for suff in allowed_suffixes:
+        candidate = morph_dir / f"{baseline}{suff}"
+        if candidate.exists():
+            return candidate, available, None
+
+    return None, available, f"Baseline '{baseline}' not found. Provide a valid graph path or one of: {', '.join(available)}"
+
+
+@function_tool
+def resolve_baseline_path(baseline: str):
+    """
+    Resolve a baseline path by name or explicit path (searches experiment_results/morphologies for <baseline> with common suffixes).
+    Returns {path} or an error with available baselines.
+    """
+    path, available, err = _resolve_baseline_path_internal(baseline)
+    if path:
+        return {"path": str(path)}
+    return {"error": err or "baseline not found", "available_baselines": available}
+
+
+@function_tool
+def resolve_sim_path(baseline: str, transport: float, seed: int):
+    """
+    Resolve a sim.json path for (baseline, transport, seed) using the transport manifest with a scan fallback.
+    Returns {path, status, missing, available_transports, available_pairs} or an error with suggestions.
+    """
+    data = _load_transport_manifest()
+    runs = data.get("runs", [])
+    if not runs:
+        root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
+        runs = _scan_transport_runs(root)
+
+    candidates = [r for r in runs if r.get("baseline") == baseline]
+    available_transports = sorted(
+        [t for t in (r.get("transport") for r in candidates if "transport" in r) if isinstance(t, (int, float))]
+    )
+    available_pairs = sorted(
+        [
+            (t, s)
+            for t, s in (
+                (r.get("transport"), r.get("seed")) for r in candidates if "transport" in r and "seed" in r
+            )
+            if isinstance(t, (int, float)) and isinstance(s, (int, float))
+        ]
+    )
+
+    entry = next(
+        (r for r in candidates if r.get("transport") == transport and r.get("seed") == seed),
+        None,
+    )
+    if entry is None:
+        return {
+            "error": f"Run not found for baseline={baseline}, transport={transport}, seed={seed}",
+            "available_transports": available_transports,
+            "available_pairs": available_pairs,
+        }
+
+    paths = entry.get("paths", {}) if isinstance(entry, dict) else {}
+    sim_path = paths.get("sim_json")
+    # Reconstruct expected path as fallback
+    expected = (
+        BaseTool.resolve_output_dir(None)
+        / "simulations"
+        / "transport_runs"
+        / baseline
+        / f"transport_{transport}"
+        / f"seed_{seed}"
+        / f"{baseline}_sim.json"
+    )
+    resolved_path: Optional[Path] = None
+    if sim_path:
+        p = Path(sim_path)
+        if not p.is_absolute():
+            p = Path(sim_path)
+        if p.exists():
+            resolved_path = p
+    if resolved_path is None and expected.exists():
+        resolved_path = expected
+
+    missing = [k for k in ["failure_matrix", "time_vector", "nodes_order", "sim_json", "sim_status"] if not paths.get(k)]
+    if resolved_path is None:
+        return {
+            "error": f"sim.json missing for baseline={baseline}, transport={transport}, seed={seed}",
+            "status": entry.get("status"),
+            "paths": paths,
+            "missing": missing,
+            "available_transports": available_transports,
+            "available_pairs": available_pairs,
+        }
+
+    if missing:
+        note = f"warning: missing {', '.join(missing)}"
+    else:
+        note = ""
+    return {
+        "path": str(resolved_path),
+        "status": entry.get("status"),
+        "missing": missing,
+        "note": note,
+        "available_transports": available_transports,
+        "available_pairs": available_pairs,
+    }
+
+
+@function_tool
+def run_transport_batch(
+    baseline_path: str,
+    transport_values: List[float],
+    seeds: List[int],
+    steps: int = 150,
+    dt: float = 0.1,
+    export_arrays: bool = True,
+    max_workers: int = 1,
+    mitophagy_rate: float = 0.02,
+    demand_scale: float = 0.5,
+    noise_std: float = 0.0,
+    downsample: int = 1,
+):
+    """
+    Batch wrapper: run transport sims for a baseline across transports/seeds, postprocess arrays if missing, and update the transport manifest.
+    """
+    baseline_path_resolved, available_bases, err = _resolve_baseline_path_internal(baseline_path)
+    if baseline_path_resolved is None or err:
+        return {
+            "error": err or "Baseline not found",
+            "available_baselines": available_bases,
+            "hint": "Provide a valid baseline path or use resolve_baseline_path.",
+        }
+    baseline_name = baseline_path_resolved.stem
+    tasks = []
+    results: List[Dict[str, Any]] = []
+
+    manifest_data = _load_transport_manifest()
+    existing = manifest_data.get("runs", [])
+
+    def should_skip(entry: Optional[Dict[str, Any]], path_map: Dict[str, Path]) -> bool:
+        entry_paths = entry.get("paths", {}) if isinstance(entry, dict) else {}
+        paths_now = {k: entry_paths.get(k) or (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
+        status_now, missing = _status_from_paths(paths_now)
+        return status_now == "complete" and not missing
+
+    for t in transport_values:
+        for s in seeds:
+            seed_dir = _build_seed_dir(baseline_name, t, s)
+            path_map = _resolve_run_paths(seed_dir, baseline_name)
+            entry = next((e for e in existing if e.get("baseline") == baseline_name and e.get("transport") == t and e.get("seed") == s), None)
+            if should_skip(entry, path_map):
+                results.append({"baseline": baseline_name, "transport": t, "seed": s, "skipped": True, "reason": "manifest_complete"})
+                continue
+            tasks.append((t, s, seed_dir, path_map))
+
+    def run_one(t: float, s: int, seed_dir: Path, path_map: Dict[str, Path]):
+        actor = os.environ.get("AISC_ACTIVE_ROLE", "") or "batch_runner"
+        notes = ""
+        status = "partial"
+        try:
+            RunCompartmentalSimTool().use_tool(
+                graph_path=str(baseline_path_resolved),
+                output_dir=str(seed_dir),
+                steps=steps,
+                dt=dt,
+                transport_rate=t,
+                demand_scale=demand_scale,
+                mitophagy_rate=mitophagy_rate,
+                noise_std=noise_std,
+                seed=s,
+                store_timeseries=True,
+                downsample=downsample,
+                export_arrays=export_arrays,
+            )
+            paths_now = {k: (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
+            status_now, missing = _status_from_paths(paths_now)
+            if missing:
+                sim_json = path_map["sim_json"]
+                if sim_json.exists():
+                    SimPostprocessTool().use_tool(
+                        sim_json_path=str(sim_json),
+                        output_dir=str(seed_dir),
+                        graph_path=str(baseline_path_resolved),
+                    )
+                    paths_now = {k: (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
+                    status_now, missing = _status_from_paths(paths_now)
+            status = status_now
+            if missing:
+                notes = f"missing after postprocess: {', '.join(missing)}"
+            _write_verification(seed_dir, baseline_name, t, s, status, notes)
+            upd = _upsert_transport_manifest_entry(
+                baseline=baseline_name,
+                transport=t,
+                seed=s,
+                status=status,
+                paths=paths_now,
+                notes=notes,
+                actor=actor,
+            )
+            return {"baseline": baseline_name, "transport": t, "seed": s, "status": status, "notes": notes, "manifest": upd}
+        except Exception as exc:
+            notes = f"error: {exc}"
+            _write_verification(seed_dir, baseline_name, t, s, "error", notes)
+            _upsert_transport_manifest_entry(
+                baseline=baseline_name,
+                transport=t,
+                seed=s,
+                status="error",
+                paths={k: (str(v) if isinstance(v, Path) else str(v)) for k, v in path_map.items() if k != "verification"},
+                notes=notes,
+                actor=actor,
+            )
+            return {"baseline": baseline_name, "transport": t, "seed": s, "status": "error", "notes": notes}
+
+    if max_workers <= 1:
+        for t, s, seed_dir, path_map in tasks:
+            results.append(run_one(t, s, seed_dir, path_map))
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = [ex.submit(run_one, t, s, seed_dir, path_map) for t, s, seed_dir, path_map in tasks]
+            for fut in as_completed(futs):
+                results.append(fut.result())
+
+    return {"baseline": baseline_name, "requested": len(transport_values) * len(seeds), "scheduled": len(tasks), "results": results}
+
+
+@function_tool
+def read_transport_manifest(baseline: Optional[str] = None, transport: Optional[float] = None, seed: Optional[int] = None):
+    """
+    Read transport_runs manifest (filters optional).
+    If missing, auto-scan without writing.
+    """
+    data = _load_transport_manifest()
+    runs = data.get("runs", [])
+    filtered = []
+    for entry in runs:
+        if baseline is not None and entry.get("baseline") != baseline:
+            continue
+        if transport is not None and entry.get("transport") != transport:
+            continue
+        if seed is not None and entry.get("seed") != seed:
+            continue
+        filtered.append(entry)
+    if not runs:
+        # fall back to a read-only scan
+        root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
+        runs = _scan_transport_runs(root)
+        filtered = [e for e in runs if (baseline is None or e["baseline"] == baseline) and (transport is None or e["transport"] == transport) and (seed is None or e["seed"] == seed)]
+    return {"manifest_path": str(_transport_manifest_path()), "runs": filtered, "schema_version": data.get("schema_version", 1)}
+
+
+@function_tool
+def update_transport_manifest(
+    baseline: str,
+    transport: float,
+    seed: int,
+    status: str,
+    paths_json: Optional[str] = None,
+    notes: str = "",
+    actor: str = "",
+):
+    """
+    Upsert a single transport run entry. Paths not provided will be inferred from standard filenames in the seed folder.
+    """
+    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
+    seed_dir = root / baseline / f"transport_{transport}" / f"seed_{seed}"
+
+    def _infer(path_name: str) -> Optional[str]:
+        try:
+            parsed_paths = json.loads(paths_json) if paths_json else {}
+        except Exception:
+            parsed_paths = {}
+        if isinstance(parsed_paths, dict) and path_name in parsed_paths:
+            return parsed_paths[path_name]
+        candidates = {
+            "failure_matrix": seed_dir / f"{baseline}_sim_failure_matrix.npy",
+            "time_vector": seed_dir / f"{baseline}_sim_time_vector.npy",
+            "nodes_order": seed_dir / f"nodes_order_{baseline}_sim.txt",
+            "sim_json": seed_dir / f"{baseline}_sim.json",
+            "sim_status": seed_dir / f"{baseline}_sim.status.json",
+        }
+        p = candidates.get(path_name)
+        return str(p) if p and p.exists() else None
+
+    resolved_paths = {
+        "failure_matrix": _infer("failure_matrix"),
+        "time_vector": _infer("time_vector"),
+        "nodes_order": _infer("nodes_order"),
+        "sim_json": _infer("sim_json"),
+        "sim_status": _infer("sim_status"),
+    }
+    missing = [k for k, v in resolved_paths.items() if v is None]
+    if status == "complete" and missing:
+        status = "partial"
+        if notes:
+            notes = notes + f"; missing: {', '.join(missing)}"
+        else:
+            notes = f"missing: {', '.join(missing)}"
+
+    actor_name = actor or os.environ.get("AISC_ACTIVE_ROLE", "") or "unknown"
+    return _upsert_transport_manifest_entry(
+        baseline=baseline,
+        transport=transport,
+        seed=seed,
+        status=status,
+        paths=resolved_paths,
+        notes=notes,
+        actor=actor_name,
+    )
 @function_tool
 def log_strategic_pivot(reason: str, new_plan: str):
     """Logs a major change in direction to the system logs."""
@@ -463,6 +1382,9 @@ def assemble_lit_data(
     use_semantic_scholar: bool = True,
 ):
     """Searches for literature and creates a lit_summary."""
+    if not queries and not seed_paths:
+        return "Error: You provided no 'queries' or 'seed_paths'. Please provide specific keywords or paper IDs."
+        
     return LitDataAssemblyTool().use_tool(
         queries=queries,
         seed_paths=seed_paths,
@@ -477,7 +1399,7 @@ def validate_lit_summary(path: str):
 
 @function_tool
 def run_comp_sim(
-    graph_path: Optional[str] = None, # Optional because tool might auto-gen
+    graph_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     steps: int = 200,
     dt: float = 0.1,
@@ -493,7 +1415,7 @@ def run_comp_sim(
 ):
     """Runs a compartmental simulation and saves CSV data."""
     res = RunCompartmentalSimTool().use_tool(
-        graph_path=graph_path,  # Require explicit path; agent must build/provide a graph
+        graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
         steps=steps,
         dt=dt,
@@ -584,7 +1506,6 @@ def search_semantic_scholar(query: str):
 def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):
     """Generate canonical graphs (binary tree, heavy-tailed, random tree)."""
     res = BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
-    # Log outputs to manifest
     for graph_type, paths in res.items():
         for k, v in paths.items():
             _append_manifest_entry(
@@ -769,9 +1690,25 @@ def get_run_paths():
 
 @function_tool
 def resolve_path(path: str, must_exist: bool = True, allow_dir: bool = False):
-    """Resolve a filename against the current run folders (experiment_results/base)."""
-    p = BaseTool.resolve_input_path(path, must_exist=must_exist, allow_dir=allow_dir)
-    return {"resolved_path": str(p)}
+    """
+    Resolve a filename against the current run folders (experiment_results/base).
+    GUARDRAIL: If file not found, scan directory for fuzzy matches to suggest alternatives.
+    """
+    try:
+        p = BaseTool.resolve_input_path(path, must_exist=must_exist, allow_dir=allow_dir)
+        return {"resolved_path": str(p)}
+    except FileNotFoundError as e:
+        # Fuzzy matching logic
+        if must_exist:
+            d, f = os.path.split(path)
+            # Search in experiment_results by default if d is empty
+            search_dir = BaseTool.resolve_output_dir(d if d else None)
+            if search_dir.exists():
+                candidates = os.listdir(search_dir)
+                matches = difflib.get_close_matches(f, candidates, n=3, cutoff=0.6)
+                if matches:
+                    return {"error": f"File '{path}' not found. Did you mean: {', '.join(matches)}?"}
+        raise e
 
 
 @function_tool
@@ -1277,7 +2214,14 @@ def run_pyright():
 def coder_create_python(file_path: str, content: str):
     """
     Safely create/update a Python file under the current run folder. Paths are anchored to AISC_BASE_FOLDER to avoid writing elsewhere.
+    GUARDRAIL: Check syntax via AST before saving.
     """
+    # GUARDRAIL: Check syntax first
+    try:
+        ast.parse(content)
+    except SyntaxError as e:
+        return {"error": f"SyntaxError in python code at line {e.lineno}: {e.msg}. File not saved."}
+
     base = os.environ.get("AISC_BASE_FOLDER", "")
     if not base:
         raise ValueError("AISC_BASE_FOLDER is not set; cannot determine safe write location.")
@@ -1300,6 +2244,51 @@ def coder_create_python(file_path: str, content: str):
         f.write(content)
     return {"path": str(target), "bytes_written": len(content)}
 
+# --- NEW TOOLS for Interactive Governance ---
+
+@function_tool
+def wait_for_human_review(artifact_name: str, description: str = ""):
+    """
+    Pause execution to request human review of a specific artifact (e.g., implementation plan).
+    If human-in-the-loop mode is off, this just logs the request and auto-approves.
+    """
+    interactive = os.environ.get("AISC_INTERACTIVE", "false").lower() == "true"
+    msg = f"⏸️  REVIEW REQUESTED: {artifact_name}\n   Context: {description}"
+    
+    if not interactive:
+        return f"Auto-approved (Interactive mode OFF). Logged review request for {artifact_name}."
+    
+    print(f"\n{msg}")
+    print("   >> Press ENTER to approve and continue, or Ctrl+C to abort.")
+    try:
+        input()
+        return f"User approved {artifact_name}."
+    except KeyboardInterrupt:
+        raise SystemExit("User aborted execution during review.")
+
+@function_tool
+def check_user_inbox():
+    """
+    Check for new asynchronous feedback from the user in 'user_inbox.md'.
+    Returns the content of the inbox if present, or 'Inbox empty'.
+    """
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    inbox_path = os.path.join(base, "user_inbox.md")
+    
+    if not os.path.exists(inbox_path):
+        return "Inbox empty (no user_inbox.md found)."
+        
+    try:
+        with open(inbox_path, 'r') as f:
+            content = f.read().strip()
+        if not content:
+            return "Inbox empty."
+        # In a real system, you might archive this after reading.
+        # Here we return it so the agent can act on it.
+        return f"USER MESSAGE: {content}"
+    except Exception as e:
+        return f"Error reading inbox: {str(e)}"
+
 # --- Agent Definitions ---
 
 def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
@@ -1317,21 +2306,46 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     experiments_plan = format_list_field(idea.get('Experiments', []))
     risk_factors = format_list_field(idea.get('Risk Factors and Limitations', []))
 
+    # --- PRE-CALCULATE PATHS FOR PROMPT INJECTION (Saves ~1 turn/agent) ---
+    # Note: dirs['base'] and dirs['results'] are already resolved strings.
+    path_context = (
+        f"SYSTEM CONTEXT: Run Root='{dirs['base']}', Exp Results='{dirs['results']}'. "
+        f"Figures='{os.path.join(dirs['base'], 'figures')}'. "
+        "Use these paths directly; do NOT call get_run_paths. "
+        "Assume provided input paths exist; only list_artifacts if path is missing."
+    )
+    
+    # --- STANDARD REFLECTION PROMPT ---
+    reflection_instruction = (
+        "SELF-REFLECTION: When finished (or if stuck), ask: 'What missing tool or knowledge would have made this trivial?' "
+        "If you have a concrete, new insight, log it via manage_project_knowledge(action='add', category='reflection', "
+        "observation='<your specific friction>', solution='<your specific fix>', actor='<your role name>'). "
+        "Do NOT log boilerplate or repeated reflections; skip logging if nothing new. Use your actual role name (e.g., 'PI', 'Modeler')."
+    )
+
+    # --- PROOF OF WORK INSTRUCTION ---
+    proof_of_work_instruction = (
+        "PROOF OF WORK: For every significant result (data or figure), you must write a corresponding "
+        "`_verification.md` file. This file must list: 1) Input files used, 2) Key parameters/filters applied, "
+        "3) Explicit validation checks (e.g., 'Checked x > 0: Pass'). Do not output the artifact without this proof."
+    )
+
     # 1. The Archivist (Scope: Literature & Claims)
     archivist = _make_agent(
         name="Archivist",
         instructions=(
-            f"Role: Senior Literature Curator.\n"
+            f"You are an expert Literature Curator.\n"
             f"Goal: Verify novelty of '{title}' and map claims to citations.\n"
             f"Context: {abstract}\n"
             f"Related Work to Consider: {related_work}\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs to avoid path errors.\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
             "3. Output 'lit_summary.json' to experiment_results/.\n"
             "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (name + metadata/description).\n"
-            "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations."
+            "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
+            f"6. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1347,6 +2361,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             validate_lit_summary,
             search_semantic_scholar,
             update_claim_graph,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1356,19 +2371,25 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     modeler = _make_agent(
         name="Modeler",
         instructions=(
-            f"Role: Computational Biologist.\n"
+            f"You are an expert Computational Biologist.\n"
             f"Goal: Execute simulations for '{title}'.\n"
             f"Hypothesis: {hypothesis}\n"
             f"Experimental Plan:\n{experiments_plan}\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs to avoid path errors.\n"
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
-            "6. If downstream needs arrays (failure_matrix.npy/time_vector/nodes_order), call 'sim_postprocess' or set export_arrays=True when running sims.\n"
-            "7. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + metadata/description."
+            "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete.\n"
+            "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
+            "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
+            "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
+            "8. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + metadata/description.\n"
+            "9. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
+            f"10. {proof_of_work_instruction}\n"
+            f"11. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1388,6 +2409,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             sim_postprocess,
             run_sensitivity_sweep,
             run_intervention_tests,
+            run_transport_batch,
+            scan_transport_manifest,
+            read_transport_manifest,
+            resolve_baseline_path,
+            resolve_sim_path,
+            update_transport_manifest,
+            mirror_artifacts,
+            manage_project_knowledge,
+            write_text_artifact, # Added for writing logs
         ], 
         model=model,
         settings=common_settings,
@@ -1397,15 +2427,20 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     analyst = _make_agent(
         name="Analyst",
         instructions=(
-            "Role: Scientific Visualization Expert.\n"
+            "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs (lit, sims, morphologies) to avoid path errors.\n"
-            "1. Read data from experiment_results/.\n"
+            "1. Read data from provided input paths. Do NOT list files to find them; assume the path is correct.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
             "3. Generate PNG/SVG files using 'run_biological_plotting'. Use 'sim_postprocess' if you need failure_matrix/time_vector/node order from sim.json before plotting.\n"
+            "3b. Use the transport run manifest (read_transport_manifest / resolve_sim_path / update_transport_manifest) to decide what to plot or skip; resolve sim.json via resolve_sim_path instead of guessing paths, and error if the requested transport/seed is missing.\n"
+            "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
-            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description."
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description.\n"
+            "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
+            f"7. {proof_of_work_instruction}\n"
+            f"8. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1419,13 +2454,21 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            scan_transport_manifest,
+            read_transport_manifest,
+            resolve_baseline_path,
             run_biological_plotting,
             run_validation_compare,
             run_biological_stats,
             sim_postprocess,
+            run_transport_batch,
+            resolve_sim_path,
+            update_transport_manifest,
             write_figures_readme,
             write_text_artifact,
             graph_diagnostics,
+            mirror_artifacts,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1435,17 +2478,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     reviewer = _make_agent(
         name="Reviewer",
         instructions=(
-            "Role: Holistic Reviewer (Reviewer #2).\n"
+            "You are an expert Holistic Reviewer.\n"
             "Goal: Identify logical gaps and structural flaws.\n"
             f"Risk Factors & Limitations to Check:\n{risk_factors}\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs to avoid path errors.\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
-            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value."
+            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value.\n"
+            "7. VERIFY PROOF OF WORK: Reject any result artifact that lacks a corresponding `_verification.md` or `_log.md` file explaining how it was derived.\n"
+            f"8. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1463,6 +2508,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_claim_graph,
             run_biological_stats,
             write_text_artifact,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1472,15 +2518,16 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     interpreter = _make_agent(
         name="Interpreter",
         instructions=(
-            "Role: Mathematical–Biological Interpreter.\n"
+            "You are an expert Mathematical-Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' once; use 'resolve_path' for any file inputs to avoid path errors.\n"
             "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
             "3. If interpretation fails, report the error clearly.\n"
             "4. Use 'write_text_artifact' to save interpretations (e.g., theory_interpretation.txt) under experiment_results/.\n"
-            "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description."
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description.\n"
+            f"6. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1499,6 +2546,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             write_figures_readme,
             check_status,
             interpret_biology,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1508,14 +2556,16 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     coder = _make_agent(
         name="Coder",
         instructions=(
-            "Role: Utility Engineer.\n"
+            "You are an expert Utility Engineer.\n"
             "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
-            "0. Call 'get_run_paths' and use 'resolve_path' before reading/writing.\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
             "2. If you add tools/helpers, document them briefly and log via 'append_manifest'.\n"
             "3. Prefer small, dependency-light snippets; avoid large libraries or network access.\n"
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
+            "5. Log code patterns or library constraints to Project Knowledge.\n"
+            f"6. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1529,6 +2579,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             coder_create_python,
             run_ruff,
             run_pyright,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1538,12 +2589,14 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     publisher = _make_agent(
         name="Publisher",
         instructions=(
-            "Role: Production Editor.\n"
+            "You are an expert Production Editor.\n"
             "Goal: Compile final PDF.\n"
+            f"{path_context}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Target the 'blank_theoretical_biology_latex' template.\n"
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
-            "3. Ensure compile success. Debug LaTeX errors autonomously."
+            "3. Ensure compile success. Debug LaTeX errors autonomously.\n"
+            f"4. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -1558,6 +2611,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             write_figures_readme,
             check_status,
             run_writeup_task,
+            manage_project_knowledge,
         ],
         model=model,
         settings=common_settings,
@@ -1565,28 +2619,32 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
 
     # 7. The PI (Scope: Strategy & Handoffs)
     pi = Agent(
-        name="PI",
+        name="Principal Investigator",
         instructions=(
-            f"Role: Principal Investigator for project: {title}.\n"
+            f"You are an expert Principal Investigator for project: {title}.\n"
             f"Hypothesis: {hypothesis}\n"
             "Responsibilities:\n"
             "0. Agents are stateless tools with a hard ~40-turn budget (including their tool calls). Do NOT send 'prepare' or 'wait until X' tasks. Delegate small, end-to-end units with concrete paths; if a job is large, split it into multiple invocations (e.g., one per batch of sims/plots) and ask the agent to persist outputs plus a brief status note to user_inbox.md/pi_notes.md before returning. You may spawn multiple parallel calls to the same role if that speeds work, as long as each request is end-to-end and self-contained. If you already know the relevant file paths or artifact names, include them in the prompt to save turn budget.\n"
-            "1. STATE CHECK: First, read 'pi_notes.md' and 'user_inbox.md' (if present) via 'read_note', then call 'check_project_state' to see what has been done.\n"
-            "2. DELEGATE: Handoff to specialized agents based on missing artifacts.\n"
+            "1. STATE CHECK: First, use any injected context about 'pi_notes.md', 'user_inbox.md', or prior 'check_project_state' runs that appears in your system/user message. Only call 'read_note' or 'check_project_state' if you need a fresh snapshot beyond what is already provided.\n"
+            "2. REVIEW KNOWLEDGE: Check 'manage_project_knowledge' for constraints or decisions before delegating.\n"
+            "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
+            "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_recent_manifest_entries or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
             "   - Missing Plots -> Analyst\n"
             "   - Theoretical Interpretation -> Interpreter\n"
             "   - Draft Exists -> Reviewer\n"
             "   - Validated & Ready -> Publisher\n"
-            "3. ITERATE: If Reviewer finds gaps, translate them into new tasks for Modeler/Archivist.\n"
-            "4. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
-            "5. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
+            "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
+            "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_recent_manifest_entries(role=...)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
+            "7. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
+            "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
         ),
         model=model,
         tools=[
             check_project_state,
             log_strategic_pivot,
+            inspect_recent_manifest_entries,
             get_run_paths,
             resolve_path,
             list_artifacts,
@@ -1599,12 +2657,23 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_status,
             read_note,
             write_pi_notes,
+            manage_project_knowledge,
+            scan_transport_manifest,
+            read_transport_manifest,
+            resolve_baseline_path,
+            resolve_sim_path,
+            update_transport_manifest,
+            mirror_artifacts,
+            write_text_artifact,  # Added this tool to allow PI to write plans directly
+            # New interactive tools
+            wait_for_human_review,
+            check_user_inbox,
             archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
             modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             coder.as_tool(tool_name="coder", tool_description="Write/update helper code in run folder.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             interpreter.as_tool(tool_name="interpreter", tool_description="Generate theoretical interpretation.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            publisher.as_tool(tool_name="publisher", tool_description="Write and compile text.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            publisher.as_tool(tool_name="publisher", tool_description="Write and compile final publishable manuscript.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             reviewer.as_tool(tool_name="reviewer", tool_description="Critique the draft.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
         ],
         model_settings=ModelSettings(tool_choice="required"),
@@ -1620,6 +2689,9 @@ def main():
     # Load Env
     if load_dotenv:
         load_dotenv(override=True)
+    
+    # Set Interactive Flag for Tools
+    os.environ["AISC_INTERACTIVE"] = str(args.human_in_the_loop).lower()
     
     # Load Idea
     with open(args.load_idea) as f:
@@ -1666,6 +2738,11 @@ def main():
     os.environ["AISC_BASE_FOLDER"] = base_folder
     os.environ["AISC_CONFIG_PATH"] = osp.join(base_folder, "bfts_config.yaml")
 
+    # Ensure standard transport_runs README exists for this run
+    _ensure_transport_readme(base_folder)
+    # Generate per-run run_recipe.json from morphologies/templates
+    _generate_run_recipe(base_folder)
+
     # Surface tool availability so PDF/analysis fallbacks are explicit
     caps = _report_capabilities()
     print(f"🛠️  Tool availability: pandoc={caps['tools'].get('pandoc')}, pdflatex={caps['tools'].get('pdflatex')}, "
@@ -1683,16 +2760,56 @@ def main():
 
     print(f"🧪 Launching ADCRT for '{idea.get('Title', 'Project')}'...")
     print(f"📂 Context: {base_folder}")
+    if args.human_in_the_loop:
+        print(f"🛑 Interactive Mode: Agents will pause for plan reviews.")
 
-    # Input Prompt
+    # Input Prompt: Inject persistent memory (pi_notes) and user feedback (user_inbox)
+    initial_prompt_parts = []
+    
+    # 1. Base instruction
     if args.input:
-        initial_prompt = args.input
+        initial_prompt_parts.append(args.input)
     else:
-        initial_prompt = (
+        initial_prompt_parts.append(
             f"Begin project '{idea.get('Name', 'Project')}'. \n"
             f"Current working directory is: {base_folder}\n"
-            "Assess current state via check_project_state and begin delegation."
+            "Assess current state, preferring the injected summaries of pi_notes.md, user_inbox.md, and any prior check_project_state output above; only call tools again if you need a fresh snapshot, then begin delegation."
         )
+
+    # 2. Inject Persistent Memory (PI Notes)
+    pi_notes_path = os.path.join(base_folder, "pi_notes.md")
+    if os.path.exists(pi_notes_path):
+        try:
+            with open(pi_notes_path, "r") as f:
+                notes_content = f.read().strip()
+            if notes_content:
+                initial_prompt_parts.append(f"\n\n--- PERSISTENT MEMORY (pi_notes.md) ---\n{notes_content}")
+        except Exception as e:
+            print(f"⚠️ Failed to read pi_notes.md: {e}")
+
+    # 3. Inject User Inbox (Sticky Notes)
+    user_inbox_path = os.path.join(base_folder, "user_inbox.md")
+    if os.path.exists(user_inbox_path):
+        try:
+            with open(user_inbox_path, "r") as f:
+                inbox_content = f.read().strip()
+            if inbox_content:
+                initial_prompt_parts.append(f"\n\n--- USER FEEDBACK (user_inbox.md) ---\n{inbox_content}")
+        except Exception as e:
+            print(f"⚠️ Failed to read user_inbox.md: {e}")
+
+    # 4. Inject implementation plan if present (avoid extra tool calls on resume)
+    impl_plan_path = os.path.join(exp_results, "implementation_plan.md")
+    if os.path.exists(impl_plan_path):
+        try:
+            with open(impl_plan_path, "r") as f:
+                plan_content = f.read().strip()
+            if plan_content:
+                initial_prompt_parts.append(f"\n\n--- IMPLEMENTATION PLAN (experiment_results/implementation_plan.md) ---\n{plan_content}")
+        except Exception as e:
+            print(f"⚠️ Failed to read implementation_plan.md: {e}")
+
+    initial_prompt = "\n".join(initial_prompt_parts)
 
     # Execution with Robust Timeout
     async def run_lab():
