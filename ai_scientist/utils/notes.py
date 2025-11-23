@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-from ai_scientist.tools.base_tool import BaseTool
-from ai_scientist.utils.pathing import resolve_output_path
+    from ai_scientist.tools.base_tool import BaseTool
+    from ai_scientist.utils.pathing import resolve_output_path
 except Exception:
     BaseTool = None
 
