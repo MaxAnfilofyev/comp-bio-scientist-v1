@@ -3,8 +3,6 @@ import uuid
 from pathlib import Path
 from typing import Dict, Tuple
 
-from ai_scientist.tools.base_tool import BaseTool
-
 
 class ResolvedPath(Dict[str, object]):
     """Dictionary style return for resolved output paths."""
@@ -34,6 +32,22 @@ def _make_unique(path: Path) -> Path:
     return parent / f"{stem}__{uuid.uuid4().hex}{suffix}"
 
 
+def _resolve_output_root(run_root: Path | None = None) -> Path:
+    """
+    Resolve a base output directory without importing BaseTool to avoid circular imports.
+    Prefers (in order): provided run_root, AISC_EXP_RESULTS, AISC_BASE_FOLDER/experiment_results, then relative experiment_results.
+    """
+    if run_root:
+        return Path(run_root)
+    env_dir = os.environ.get("AISC_EXP_RESULTS", "")
+    if env_dir:
+        return Path(env_dir)
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    if base:
+        return Path(base) / "experiment_results"
+    return Path("experiment_results")
+
+
 def resolve_output_path(
     subdir: str | None,
     name: str,
@@ -47,7 +61,7 @@ def resolve_output_path(
     Resolve an output path anchored to experiment_results, rejecting traversal and auto-creating parents.
     Returns (path, quarantined, note).
     """
-    base = run_root or BaseTool.resolve_output_dir(None)
+    base = _resolve_output_root(run_root)
     # Ensure we anchor to experiment_results even if only base folder was provided.
     env_base = os.environ.get("AISC_BASE_FOLDER", "")
     if base.name != "experiment_results" and env_base and "experiment_results" not in str(base):

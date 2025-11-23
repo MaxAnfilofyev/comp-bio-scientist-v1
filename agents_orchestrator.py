@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import ast
 import difflib
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
     from agents.types import RunResult
@@ -55,8 +55,9 @@ from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs as validate_per_compartment_outputs_internal
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
-from ai_scientist.utils.notes import ensure_note_files, read_note_file, write_note_file
+from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file
 from ai_scientist.utils.pathing import resolve_output_path
+from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
 
@@ -410,60 +411,17 @@ def _upsert_transport_manifest_entry(
 
 
 def _scan_transport_runs(root: Path) -> List[Dict[str, Any]]:
+    # Delegate to shared indexer so transport run discovery is consistent across tools.
+    run_root = root.parent.parent if root.name == "transport_runs" else root
+    idx = index_transport_runs(base_dir=run_root)
+    entries_dict = cast(Dict[str, Dict[str, Any]], idx.get("entries", {}) if isinstance(idx, dict) else {}) or {}
+    # Attach actor/updated_at for backward compatibility with older manifest consumers.
     entries: List[Dict[str, Any]] = []
-    if not root.exists():
-        return entries
-
-    for baseline_dir in root.iterdir():
-        if not baseline_dir.is_dir():
-            continue
-        baseline = baseline_dir.name
-        for transport_dir in baseline_dir.iterdir():
-            if not transport_dir.is_dir() or not transport_dir.name.startswith("transport_"):
-                continue
-            t_str = transport_dir.name.split("transport_", 1)[-1]
-            try:
-                transport_val = float(t_str)
-            except Exception:
-                continue
-            for seed_dir in transport_dir.iterdir():
-                if not seed_dir.is_dir() or not seed_dir.name.startswith("seed_"):
-                    continue
-                s_str = seed_dir.name.split("seed_", 1)[-1]
-                try:
-                    seed_val = int(s_str)
-                except Exception:
-                    continue
-
-                def _maybe(path: Path) -> Optional[str]:
-                    return str(path) if path.exists() else None
-
-                base_prefix = baseline
-                paths = {
-                    "failure_matrix": _maybe(seed_dir / f"{base_prefix}_sim_failure_matrix.npy"),
-                    "time_vector": _maybe(seed_dir / f"{base_prefix}_sim_time_vector.npy"),
-                    "nodes_order": _maybe(seed_dir / f"nodes_order_{base_prefix}_sim.txt"),
-                    "sim_json": _maybe(seed_dir / f"{base_prefix}_sim.json"),
-                    "sim_status": _maybe(seed_dir / f"{base_prefix}_sim.status.json"),
-                }
-                missing = [k for k, v in paths.items() if v is None]
-                status = "complete" if not missing else "partial"
-                notes = ""
-                if missing:
-                    notes = f"missing: {', '.join(missing)}"
-
-                entries.append(
-                    {
-                        "baseline": baseline,
-                        "transport": transport_val,
-                        "seed": seed_val,
-                        "status": status,
-                        "paths": paths,
-                        "updated_at": datetime.now().isoformat(),
-                        "notes": notes,
-                        "actor": "system-scan",
-                    }
-                )
+    for entry in entries_dict.values():
+        if isinstance(entry, dict):
+            entry.setdefault("actor", "system-scan")
+            entry.setdefault("updated_at", datetime.now().isoformat())
+            entries.append(entry)
     return entries
 
 
@@ -882,13 +840,29 @@ def scan_transport_manifest(write: bool = True):
     Scan transport_runs and (optionally) write manifest.json with status of (baseline, transport, seed).
     """
     root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-    entries = _scan_transport_runs(root)
-    manifest = {"schema_version": 1, "runs": entries, "updated_at": datetime.now().isoformat()}
+    idx = index_transport_runs(base_dir=root.parent.parent if root.name == "transport_runs" else root)
+    entries_dict = cast(Dict[str, Dict[str, Any]], idx.get("entries", {}) if isinstance(idx, dict) else {})
+    entries = list(entries_dict.values())
+    manifest = {
+        "schema_version": 1,
+        "runs": entries,
+        "updated_at": datetime.now().isoformat(),
+        "index_path": idx.get("index_path") if isinstance(idx, dict) else None,
+    }
     if write:
         err = _atomic_write_json(_transport_manifest_path(), manifest)
         if err:
             return {"error": err, "manifest_path": str(_transport_manifest_path())}
     return {"manifest_path": str(_transport_manifest_path()), "runs": entries}
+
+
+@function_tool
+def resolve_transport_run(baseline: str, transport: str, seed: str):
+    """
+    Resolve paths for a transport run using the shared index (refreshes if stale).
+    """
+    res = resolve_transport_sim(baseline=baseline, transport=float(transport), seed=int(seed))
+    return res
 
 
 def _status_from_paths(paths: Dict[str, Optional[str]], required_keys: Optional[List[str]] = None) -> Tuple[str, List[str]]:
@@ -2163,7 +2137,23 @@ def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = No
     if subdir in ("graphs", "derived", "processed") and norm_name.startswith(f"{subdir}/"):
         norm_name = norm_name[len(f"{subdir}/") :]
 
-    path, quarantined, note = resolve_output_path(subdir=subdir, name=norm_name)
+    note_target = Path(norm_name).name
+    if note_target in NOTE_NAMES and subdir in (None, "", ".", "experiment_results"):
+        # Route note writes through the canonical note helper to avoid uuid-suffixed duplicates.
+        write_result = write_note_file(content=content, name=note_target, append=False)
+        result: Dict[str, Any] = {"path": write_result.get("path", ""), "quarantined": False}
+        if metadata_json and result["path"]:
+            _append_manifest_entry(name=result["path"], metadata_json=metadata_json, allow_missing=True)
+        if write_result.get("warning"):
+            result["warning"] = write_result["warning"]
+        return result
+
+    unique = True
+    if note_target == "implementation_plan.md" and subdir in (None, "", ".", "experiment_results"):
+        # Keep the implementation plan singleton; allow overwrite rather than uuid suffix.
+        unique = False
+
+    path, quarantined, note = resolve_output_path(subdir=subdir, name=norm_name, unique=unique)
     if str(path).lower().endswith(".pdf"):
         path, warning = _render_pdf_or_markdown(path, content)
     else:

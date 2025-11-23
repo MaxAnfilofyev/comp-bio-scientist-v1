@@ -7,6 +7,7 @@ import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.compartmental_sim import load_graph
+from ai_scientist.utils.pathing import resolve_output_path
 
 
 def export_sim_timeseries(
@@ -51,13 +52,38 @@ def export_sim_timeseries(
 
     failure_matrix = (e_arr < failure_threshold).astype(np.uint8)
 
-    out_dir = BaseTool.resolve_output_dir(output_dir) if output_dir else sim_json_path.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Route outputs through the sanitized resolver to keep everything under the run root.
+    base_dir = BaseTool.resolve_output_dir(output_dir) if output_dir else sim_json_path.parent
+    out_dir, _, _ = resolve_output_path(
+        subdir=None,
+        name="",
+        run_root=base_dir,
+        allow_quarantine=True,
+        unique=False,
+    )
 
     stem = sim_json_path.stem.replace(".json", "")
-    failure_path = out_dir / f"{stem}_failure_matrix.npy"
-    time_path = out_dir / f"{stem}_time_vector.npy"
-    nodes_path = out_dir / f"nodes_order_{stem}.txt"
+    failure_path, _, _ = resolve_output_path(
+        subdir=None,
+        name=f"{stem}_failure_matrix.npy",
+        run_root=out_dir,
+        allow_quarantine=True,
+        unique=True,
+    )
+    time_path, _, _ = resolve_output_path(
+        subdir=None,
+        name=f"{stem}_time_vector.npy",
+        run_root=out_dir,
+        allow_quarantine=True,
+        unique=True,
+    )
+    nodes_path, _, _ = resolve_output_path(
+        subdir=None,
+        name=f"nodes_order_{stem}.txt",
+        run_root=out_dir,
+        allow_quarantine=True,
+        unique=True,
+    )
 
     np.save(failure_path, failure_matrix)
     np.save(time_path, t_arr)

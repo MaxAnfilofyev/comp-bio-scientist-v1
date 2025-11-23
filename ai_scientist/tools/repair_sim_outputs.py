@@ -13,6 +13,7 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs
 from ai_scientist.tools.sim_postprocess import export_sim_timeseries
 from ai_scientist.utils import manifest as manifest_utils
+from ai_scientist.utils.repair_helpers import normalize_sim_dir, safe_move_into_sim_dir
 
 
 def _acquire_lock(target: Path, timeout: float = 5.0, poll: float = 0.2) -> Optional[Path]:
@@ -20,6 +21,10 @@ def _acquire_lock(target: Path, timeout: float = 5.0, poll: float = 0.2) -> Opti
     Simple per-artifact lock to avoid concurrent repair of the same file.
     """
     lock_path = target.with_suffix(target.suffix + ".repair.lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -124,9 +129,9 @@ def _atomic_write_json(target: Path, data: Any) -> Optional[str]:
     return None
 
 
-def _expected_postprocess_paths(sim_path: Path) -> Dict[str, Path]:
+def _expected_postprocess_paths(sim_path: Path, sim_dir: Path) -> Dict[str, Path]:
     stem = sim_path.stem.replace(".json", "")
-    out_dir = sim_path.parent
+    out_dir = sim_dir
     return {
         "failure_matrix": out_dir / f"{stem}_failure_matrix.npy",
         "time_vector": out_dir / f"{stem}_time_vector.npy",
@@ -212,7 +217,22 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
             result["reason"] = "sim_json_missing_time_or_E"
             return result
 
-        expected = _expected_postprocess_paths(sim_path)
+        sim_dir = normalize_sim_dir(sim_path.parent)
+
+        # If outputs already exist in a duplicated run_root, move them into canonical sim_dir
+        for fname in (
+            f"{sim_path.stem.replace('.json', '')}_failure_matrix.npy",
+            f"{sim_path.stem.replace('.json', '')}_time_vector.npy",
+            f"nodes_order_{sim_path.stem.replace('.json', '')}.txt",
+            "per_compartment.npz",
+            "node_index_map.json",
+            "topology_summary.json",
+        ):
+            misplaced = sim_path.parent / fname
+            if misplaced.exists():
+                safe_move_into_sim_dir(misplaced, sim_dir)
+
+        expected = _expected_postprocess_paths(sim_path, sim_dir)
         missing_before = [k for k, p in expected.items() if not p.exists()]
         result["missing_before"] = missing_before
 
@@ -222,9 +242,14 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
                 export_result = export_sim_timeseries(
                     sim_json_path=sim_path,
                     graph_path=None,
-                    output_dir=sim_path.parent,
+                    output_dir=sim_dir,
                     failure_threshold=failure_threshold,
                 )
+                # Ensure exported arrays live in canonical sim_dir
+                for key in ("failure_matrix", "time_vector", "nodes_order"):
+                    if export_result and export_result.get(key):
+                        moved = safe_move_into_sim_dir(Path(export_result[key]), sim_dir)
+                        export_result[key] = str(moved)
                 post_status = {"generated": True, "export_result": export_result}
             except Exception as exc:
                 post_status = {"generated": False, "error": str(exc)}
@@ -235,7 +260,7 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
         missing_after = [k for k, p in expected.items() if not p.exists()]
         result["missing_after"] = missing_after
 
-        validation = validate_per_compartment_outputs(sim_path.parent)
+        validation = validate_per_compartment_outputs(sim_dir)
         result["per_compartment_validation"] = validation
 
         if post_status.get("error"):
@@ -315,7 +340,7 @@ def repair_sim_outputs(
         manifest_map[sim_entry["path"]] = sim_entry
         updated_entries.append(sim_entry)
 
-        expected = _expected_postprocess_paths(sim_path)
+        expected = _expected_postprocess_paths(sim_path, normalize_sim_dir(sim_path.parent))
         for label, p in expected.items():
             if p.exists():
                 entry = _ensure_entry(manifest_map, p, entry_type="data")
