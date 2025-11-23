@@ -53,6 +53,7 @@ from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
+from ai_scientist.utils.notes import ensure_note_files, read_note_file, write_note_file
 
 # --- Configuration & Helpers ---
 
@@ -216,20 +217,22 @@ def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
                 
             # Double check relative path just in case
             try:
-                rel_path = str(full_path.relative_to(exp_dir))
-                # Some agents might store relative paths?
-                # For robust checking, we look at basenames if paths differ, 
-                # but ADCRT prefers exact paths. We stick to exact path matching for safety.
+                full_path.relative_to(exp_dir)
+                # Some agents might store relative paths? We compute once to ensure it is relative.
             except ValueError:
                 pass
 
             # Infer type
             suffix = full_path.suffix.lower()
             etype = "unknown"
-            if suffix in ['.png', '.pdf', '.svg']: etype = "figure"
-            elif suffix in ['.csv', '.json', '.npy', '.npz']: etype = "data"
-            elif suffix in ['.py']: etype = "code"
-            elif suffix in ['.md', '.txt', '.log']: etype = "text"
+            if suffix in [".png", ".pdf", ".svg"]:
+                etype = "figure"
+            elif suffix in [".csv", ".json", ".npy", ".npz"]:
+                etype = "data"
+            elif suffix in [".py"]:
+                etype = "code"
+            elif suffix in [".md", ".txt", ".log"]:
+                etype = "text"
             
             # Create Entry
             entry = {
@@ -503,6 +506,15 @@ def _resolve_run_paths(seed_dir: Path, baseline: str) -> Dict[str, Path]:
 def _run_root() -> Path:
     base = os.environ.get("AISC_BASE_FOLDER", "")
     return Path(base) if base else Path(".")
+
+
+def _bootstrap_note_links() -> None:
+    for name in ("pi_notes.md", "user_inbox.md"):
+        try:
+            ensure_note_files(name)
+        except Exception as exc:
+            print(f"⚠️ Failed to ensure {name}: {exc}")
+
 
 def format_list_field(data: Any) -> str:
     if isinstance(data, list):
@@ -1932,6 +1944,14 @@ def validate_per_compartment_outputs(sim_dir: str):
 
     info: Dict[str, Any] = {"sim_dir": str(sim_path)}
     errors: List[str] = []
+    warnings: List[str] = []
+
+    npz_shapes: Dict[str, List[int]] = {}
+    ordering_checksum: Optional[str] = None
+    topo_checksum: Optional[str] = None
+    topo_binary_shape: Optional[List[int]] = None
+    topo_continuous_shape: Optional[List[int]] = None
+    schema_version: Optional[str] = None
 
     if not npz_path.exists():
         errors.append("per_compartment.npz missing")
@@ -1945,38 +1965,112 @@ def validate_per_compartment_outputs(sim_dir: str):
             if missing:
                 errors.append(f"npz missing keys: {missing}")
             else:
-                info["binary_shape"] = list(np.shape(archive["binary_states"]))
-                info["continuous_shape"] = list(np.shape(archive["continuous_states"]))
-                info["time_shape"] = list(np.shape(archive["time"]))
+                npz_shapes["binary_shape"] = list(np.shape(archive["binary_states"]))
+                npz_shapes["continuous_shape"] = list(np.shape(archive["continuous_states"]))
+                npz_shapes["time_shape"] = list(np.shape(archive["time"]))
+
+                # Shape consistency checks
+                if len(npz_shapes["binary_shape"]) != 2:
+                    errors.append(f"binary_states expected 2D [time, nodes], got {npz_shapes['binary_shape']}")
+                if len(npz_shapes["continuous_shape"]) not in (2, 3):
+                    errors.append(
+                        f"continuous_states expected 2D/3D [time, nodes(, vars)], got {npz_shapes['continuous_shape']}"
+                    )
+                if npz_shapes.get("time_shape") and len(npz_shapes["time_shape"]) != 1:
+                    errors.append(f"time expected 1D, got {npz_shapes['time_shape']}")
+
+                # Align time dimension
+                if (
+                    npz_shapes.get("binary_shape")
+                    and npz_shapes.get("time_shape")
+                    and npz_shapes["binary_shape"][0] != npz_shapes["time_shape"][0]
+                ):
+                    errors.append(
+                        f"time length {npz_shapes['time_shape'][0]} != binary_states time {npz_shapes['binary_shape'][0]}"
+                    )
+                if (
+                    npz_shapes.get("continuous_shape")
+                    and npz_shapes.get("binary_shape")
+                    and npz_shapes["continuous_shape"][0] != npz_shapes["binary_shape"][0]
+                ):
+                    errors.append(
+                        f"continuous_states time {npz_shapes['continuous_shape'][0]} != binary_states time {npz_shapes['binary_shape'][0]}"
+                    )
+                if npz_shapes.get("binary_shape") and npz_shapes["binary_shape"][0] <= 0:
+                    warnings.append("binary_states has zero time steps")
+
+                info.update(npz_shapes)
         except Exception as exc:
             errors.append(f"failed to read npz: {exc}")
-
-    if topo_path.exists():
-        try:
-            with topo_path.open() as f:
-                topo = json.load(f)
-            info["topology_status"] = topo.get("status")
-            info["topology_metrics"] = {k: topo.get(k) for k in ["N", "leaf_count", "mean_depth", "max_depth", "total_path_length"]}
-        except Exception as exc:
-            errors.append(f"failed to read topology_summary.json: {exc}")
-    else:
-        errors.append("topology_summary.json missing")
 
     if map_path.exists():
         try:
             with map_path.open() as f:
                 mapping = json.load(f)
-            info["node_index_count"] = len(mapping.get("node_index_map", [])) if isinstance(mapping, dict) else None
+            if isinstance(mapping, dict):
+                schema_version = mapping.get("state_schema_version")
+                ordering = mapping.get("ordering") or []
+                ordering_checksum = mapping.get("ordering_checksum")
+                info["node_index_count"] = len(mapping.get("node_index_map", []))
+                if not ordering_checksum and ordering:
+                    ordering_checksum = _sha256_join(ordering)
+                    warnings.append("ordering_checksum missing; computed locally")
+            else:
+                errors.append("node_index_map.json has unexpected structure (expected dict)")
         except Exception as exc:
             errors.append(f"failed to read node_index_map.json: {exc}")
     else:
         errors.append("node_index_map.json missing")
 
+    if topo_path.exists():
+        try:
+            with topo_path.open() as f:
+                topo = json.load(f)
+            schema_version = schema_version or topo.get("state_schema_version")
+            topo_checksum = topo.get("ordering_checksum")
+            topo_binary_shape = topo.get("binary_shape")
+            topo_continuous_shape = topo.get("continuous_shape")
+            info["topology_status"] = topo.get("status")
+            info["topology_metrics"] = {
+                k: topo.get(k) for k in ["N", "leaf_count", "mean_depth", "max_depth", "total_path_length"]
+            }
+        except Exception as exc:
+            errors.append(f"failed to read topology_summary.json: {exc}")
+    else:
+        errors.append("topology_summary.json missing")
+
+    if schema_version and schema_version != "1.0":
+        warnings.append(f"unexpected state_schema_version {schema_version}")
+
+    # Cross-check shapes against topology summary
+    if topo_binary_shape and npz_shapes.get("binary_shape") and topo_binary_shape != npz_shapes["binary_shape"]:
+        errors.append(f"topology_summary binary_shape {topo_binary_shape} != npz {npz_shapes['binary_shape']}")
+    if (
+        topo_continuous_shape
+        and npz_shapes.get("continuous_shape")
+        and topo_continuous_shape != npz_shapes["continuous_shape"]
+    ):
+        errors.append(
+            f"topology_summary continuous_shape {topo_continuous_shape} != npz {npz_shapes['continuous_shape']}"
+        )
+
+    if ordering_checksum and topo_checksum and ordering_checksum != topo_checksum:
+        errors.append("ordering_checksum mismatch between node_index_map.json and topology_summary.json")
+
     if errors:
         info["errors"] = errors
-    else:
+    if warnings:
+        info["warnings"] = warnings
+    if not errors:
         info["status"] = "ok"
     return info
+
+
+def _sha256_join(ordering: List[str]) -> str:
+    import hashlib
+
+    joined = "|".join(ordering)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 @function_tool
@@ -2213,29 +2307,20 @@ def write_figures_readme(content: str, filename: str = "README.md"):
 @function_tool
 def read_note(name: str = "pi_notes.md"):
     """
-    Read a note file from the run root (e.g., pi_notes.md or user_inbox.md). Returns empty string if missing.
+    Read a note file from the canonical run location (pi_notes.md or user_inbox.md). Returns empty string if missing.
     """
-    path = _run_root() / name
-    if not path.exists():
-        return {"path": str(path), "content": ""}
-    try:
-        return {"path": str(path), "content": path.read_text()}
-    except Exception as exc:
-        return {"path": str(path), "error": str(exc)}
+    result = read_note_file(name=name)
+    if result.get("error"):
+        return result
+    return result
 
 
 @function_tool
 def write_pi_notes(content: str, name: str = "pi_notes.md"):
     """
-    Overwrite PI notes in the run root (default pi_notes.md).
+    Overwrite PI notes in the canonical location (experiment_results/pi_notes.md) and refresh root symlink.
     """
-    path = _run_root() / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        path.write_text(content)
-        return {"path": str(path)}
-    except Exception as exc:
-        return {"error": str(exc), "path": str(path)}
+    return write_note_file(content=content, name=name, append=False)
 
 
 @function_tool
@@ -2359,22 +2444,13 @@ def check_user_inbox():
     Check for new asynchronous feedback from the user in 'user_inbox.md'.
     Returns the content of the inbox if present, or 'Inbox empty'.
     """
-    base = os.environ.get("AISC_BASE_FOLDER", "")
-    inbox_path = os.path.join(base, "user_inbox.md")
-    
-    if not os.path.exists(inbox_path):
-        return "Inbox empty (no user_inbox.md found)."
-        
-    try:
-        with open(inbox_path, 'r') as f:
-            content = f.read().strip()
-        if not content:
-            return "Inbox empty."
-        # In a real system, you might archive this after reading.
-        # Here we return it so the agent can act on it.
-        return f"USER MESSAGE: {content}"
-    except Exception as e:
-        return f"Error reading inbox: {str(e)}"
+    inbox = read_note_file("user_inbox.md")
+    if inbox.get("error"):
+        return f"Error reading inbox: {inbox['error']}"
+    content = inbox.get("content", "").strip()
+    if not content:
+        return "Inbox empty."
+    return f"USER MESSAGE: {content}"
 
 # --- Agent Definitions ---
 
@@ -2834,6 +2910,8 @@ def main():
     _ensure_transport_readme(base_folder)
     # Generate per-run run_recipe.json from morphologies/templates
     _generate_run_recipe(base_folder)
+    # Ensure canonical PI/user inbox files live under experiment_results with root-level symlinks
+    _bootstrap_note_links()
 
     # Surface tool availability so PDF/analysis fallbacks are explicit
     caps = _report_capabilities()
@@ -2853,7 +2931,7 @@ def main():
     print(f"🧪 Launching ADCRT for '{idea.get('Title', 'Project')}'...")
     print(f"📂 Context: {base_folder}")
     if args.human_in_the_loop:
-        print(f"🛑 Interactive Mode: Agents will pause for plan reviews.")
+        print("🛑 Interactive Mode: Agents will pause for plan reviews.")
 
     # Input Prompt: Inject persistent memory (pi_notes) and user feedback (user_inbox)
     initial_prompt_parts = []
@@ -2869,26 +2947,22 @@ def main():
         )
 
     # 2. Inject Persistent Memory (PI Notes)
-    pi_notes_path = os.path.join(base_folder, "pi_notes.md")
-    if os.path.exists(pi_notes_path):
-        try:
-            with open(pi_notes_path, "r") as f:
-                notes_content = f.read().strip()
-            if notes_content:
-                initial_prompt_parts.append(f"\n\n--- PERSISTENT MEMORY (pi_notes.md) ---\n{notes_content}")
-        except Exception as e:
-            print(f"⚠️ Failed to read pi_notes.md: {e}")
+    pi_notes_snapshot = read_note_file("pi_notes.md")
+    if pi_notes_snapshot.get("error"):
+        print(f"⚠️ Failed to read pi_notes.md: {pi_notes_snapshot['error']}")
+    else:
+        notes_content = pi_notes_snapshot.get("content", "").strip()
+        if notes_content:
+            initial_prompt_parts.append(f"\n\n--- PERSISTENT MEMORY (pi_notes.md) ---\n{notes_content}")
 
     # 3. Inject User Inbox (Sticky Notes)
-    user_inbox_path = os.path.join(base_folder, "user_inbox.md")
-    if os.path.exists(user_inbox_path):
-        try:
-            with open(user_inbox_path, "r") as f:
-                inbox_content = f.read().strip()
-            if inbox_content:
-                initial_prompt_parts.append(f"\n\n--- USER FEEDBACK (user_inbox.md) ---\n{inbox_content}")
-        except Exception as e:
-            print(f"⚠️ Failed to read user_inbox.md: {e}")
+    user_inbox_snapshot = read_note_file("user_inbox.md")
+    if user_inbox_snapshot.get("error"):
+        print(f"⚠️ Failed to read user_inbox.md: {user_inbox_snapshot['error']}")
+    else:
+        inbox_content = user_inbox_snapshot.get("content", "").strip()
+        if inbox_content:
+            initial_prompt_parts.append(f"\n\n--- USER FEEDBACK (user_inbox.md) ---\n{inbox_content}")
 
     # 4. Inject implementation plan if present (avoid extra tool calls on resume)
     impl_plan_path = os.path.join(exp_results, "implementation_plan.md")

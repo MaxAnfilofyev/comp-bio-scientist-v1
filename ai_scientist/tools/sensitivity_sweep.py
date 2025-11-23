@@ -1,10 +1,17 @@
 import csv
 from pathlib import Path
 from typing import Dict, Any, List
-import networkx as nx
+
+import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
-from ai_scientist.tools.compartmental_sim import simulate_compartmental, load_graph
+from ai_scientist.tools.compartmental_sim import (
+    simulate_compartmental,
+    load_graph,
+    write_per_compartment_outputs,
+    build_node_index_payload,
+    compute_topology_metrics,
+)
 
 
 class RunSensitivitySweepTool(BaseTool):
@@ -29,6 +36,11 @@ class RunSensitivitySweepTool(BaseTool):
             {"name": "demand_vals", "type": "list[float]", "description": "Values for demand_scale"},
             {"name": "steps", "type": "int", "description": "Simulation steps (default 150)"},
             {"name": "dt", "type": "float", "description": "Timestep (default 0.1)"},
+            {
+                "name": "failure_threshold",
+                "type": "float",
+                "description": "Threshold for binary failure state when writing per_compartment outputs (default 0.2)",
+            },
         ]
         super().__init__(name, description, parameters)
 
@@ -40,6 +52,7 @@ class RunSensitivitySweepTool(BaseTool):
         demand_vals: List[float] | None = None,
         steps: int = 150,
         dt: float = 0.1,
+        failure_threshold: float = 0.2,
     ) -> Dict[str, Any]:
         transport_vals = transport_vals or [0.02, 0.05, 0.1]
         demand_vals = demand_vals or [0.3, 0.5, 0.7]
@@ -51,11 +64,14 @@ class RunSensitivitySweepTool(BaseTool):
         out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / f"{Path(graph_path).stem}_sensitivity.csv"
+        node_index_payload = build_node_index_payload(list(G.nodes()))
+        topology_metrics = compute_topology_metrics(G, list(G.nodes()), node_index_payload["ordering_checksum"])
+        per_comp_outputs: List[Dict[str, Any]] = []
 
         rows = []
         for tr in transport_vals:
             for dm in demand_vals:
-                res = simulate_compartmental(
+                res, e_arr, m_arr = simulate_compartmental(
                     G,
                     steps=steps,
                     dt=dt,
@@ -64,12 +80,32 @@ class RunSensitivitySweepTool(BaseTool):
                     mitophagy_rate=0.02,
                     noise_std=0.0,
                     seed=0,
+                    return_arrays=True,
                 )
                 rows.append({"transport_rate": tr, "demand_scale": dm, "frac_failed": res["frac_failed"]})
+                sim_subdir = out_dir / f"transport_{tr}_demand_{dm}"
+                time_arr = np.array(res["time"], dtype=float)
+                binary_states = (np.array(e_arr) < failure_threshold).astype(np.uint8)
+                continuous_states = np.stack([e_arr, m_arr], axis=-1)
+                per_comp_outputs.append(
+                    write_per_compartment_outputs(
+                        output_dir=sim_subdir,
+                        binary_states=binary_states,
+                        continuous_states=continuous_states,
+                        time_vector=time_arr,
+                        node_index_payload=node_index_payload,
+                        topology_metrics=topology_metrics,
+                        status=topology_metrics.get("status", "ok"),
+                    )
+                )
 
         with csv_path.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=["transport_rate", "demand_scale", "frac_failed"])
             writer.writeheader()
             writer.writerows(rows)
 
-        return {"output_csv": str(csv_path), "n_rows": len(rows)}
+        return {
+            "output_csv": str(csv_path),
+            "n_rows": len(rows),
+            "per_compartment_outputs": per_comp_outputs,
+        }

@@ -48,11 +48,11 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - **BuildGraphs** (`ai_scientist/tools/graph_builder.py`)
   - Params: `n_nodes`, `output_dir`, `seed`; saves gpickle + adjacency.
 - **RunCompartmentalSimulation** (`ai_scientist/tools/compartmental_sim.py`)
-  - Params: `graph_path`, `output_dir`, `steps`, `dt`, `transport_rate`, `demand_scale`, `mitophagy_rate`, `noise_std`, `seed`. Supports `.gpickle`, `.graphml`, and `.gml` graph inputs. Emits standardized per-compartment artifacts (`per_compartment.npz` with `binary_states`/`continuous_states`/`time`, `node_index_map.json`, `topology_summary.json` with schema version/status/metrics).
+  - Params: `graph_path`, `output_dir`, `steps`, `dt`, `transport_rate`, `demand_scale`, `mitophagy_rate`, `noise_std`, `seed`. Supports `.gpickle`, `.graphml`, and `.gml` graph inputs. Emits standardized per-compartment artifacts (`per_compartment.npz` with `binary_states`/`continuous_states`/`time`, `node_index_map.json`, `topology_summary.json` with schema version/status/metrics/checksum). Mapping is canonical (`ordering`, `ordering_checksum`, bidirectional lookups); validator will fail on checksum/shape mismatches.
 - **RunSensitivitySweep** (`ai_scientist/tools/sensitivity_sweep.py`)
-  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `steps`, `dt`.
+  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `steps`, `dt`, `failure_threshold`. Each sweep point now also writes per-compartment artifacts with ordering checksum to its subfolder.
 - **RunInterventionTester** (`ai_scientist/tools/intervention_tester.py`)
-  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `baseline_transport`, `baseline_demand`.
+  - Params: `graph_path` (file; supports .gpickle/.graphml/.gml/.npz/.npy), `output_dir`, `transport_vals`, `demand_vals`, `baseline_transport`, `baseline_demand`, `failure_threshold`. Baseline and each intervention write per-compartment artifacts with ordering checksum to dedicated subfolders.
 - **RunValidationCompare** (`ai_scientist/tools/validation_compare.py`)
   - Params: `lit_path`, `sim_path`; computes simple correlations.
 - **RunBiologicalModel** (`ai_scientist/tools/biological_model.py`)
@@ -69,8 +69,9 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 - **Filesystem helpers** (agents_orchestrator.py wrappers)
   - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output`, `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`), `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`, `get_artifact_index` (manifest + experiment_results index), `summarize_artifact` (lightweight heads/shapes). Output-producing helpers can auto-log to the manifest when metadata is provided (e.g., write_text_artifact, plotting/sim tools). Manifest is path-keyed and stores `name` as the basename only; annotations hold details, and `metadata` is type-only for compatibility—avoid duplicating annotation fields there. Prefer checking with `read_manifest_entry`/`check_manifest` before logging.
+  - PI/user inbox notes are canonical under `experiment_results` and maintained via the orchestrator wrappers (`read_note`, `write_pi_notes`, `check_user_inbox`) backed by `ai_scientist.utils.notes`. Root-level `pi_notes.md`/`user_inbox.md` are symlinks/copies only—agents should never write these paths directly.
   - `read_npy_artifact` (safely load small .npy arrays to JSON-friendly data; returns shape/dtype or full data if under size limits; errors for large or pickled arrays).
-  - `validate_per_compartment_outputs` checks for required per-compartment artifacts (npz + map + topology summary) and surfaces shapes/status/errors to gate completion.
+  - `validate_per_compartment_outputs` checks for required per-compartment artifacts (npz + map + topology summary), enforces schema version, shape/time alignment, and ordering checksum agreement; surfaces shapes/status/warnings/errors to gate completion.
   - Graph loaders accept `.gpickle` even on NetworkX>=3.5 via a pickle fallback (upstream removed `read_gpickle`).
 - **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 

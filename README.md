@@ -65,6 +65,10 @@ pip install -r requirements.txt
 
 Installation usually takes no more than one hour.
 
+### Persistent PI/User Notes
+
+During runs, agents write progress summaries to `pi_notes.md` and user feedback to `user_inbox.md`. These files live canonically under `experiment_results/`; the orchestrator maintains root-level symlinks or copies for convenience. Avoid writing them manually—use the orchestrator tools so paths stay consistent across resumes.
+
 ### Supported Models and API Keys
 
 #### OpenAI Models
@@ -169,7 +173,7 @@ For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpre
 * Uses idea context (Title/Hypothesis/Abstract/Experiments/Risks) and targets the `blank_theoretical_biology_latex` template by default.
 * Enforces output conventions (artifacts in `experiment_results/`, figures in `figures/` when aggregated, PDFs at run root) and structured status files.
 * Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`), Coder (`coder_create_python`, `run_ruff`, `run_pyright` for quick lint/type checks), plus shared helpers (`get_run_paths`, `resolve_path`, `list_artifacts`, `read_artifact` w/ summary mode, `read_npy_artifact` for small `.npy` loads, `reserve_output`, `write_text_artifact` + conveniences, `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader. Manifest is path-keyed; use `read_manifest_entry`/`check_manifest` to inspect before logging new artifacts.
-* Simulation standardization: all sim runs are expected to emit `per_compartment.npz` (`binary_states`, `continuous_states`, `time`) plus `node_index_map.json` and `topology_summary.json` (schema v1.0) for cluster/finite-size analyses; use `validate_per_compartment_outputs` to verify presence/shapes/status before marking runs complete or plotting.
+* Simulation standardization: all sim runs must emit `per_compartment.npz` (`binary_states`, `continuous_states`, `time`) plus `node_index_map.json` and `topology_summary.json` (schema v1.0) with an ordering checksum of the morphology IDs; `validate_per_compartment_outputs` enforces shape/time alignment and checksum agreement before a run is marked complete or used for plotting.
 * Manifest shape: `path` is the key, `name` is just the basename (no directories), annotations hold the descriptive fields, and legacy `metadata` only carries `{"type": ...}` for compatibility—avoid duplicating annotation content there.
 * Robust PI visibility: when sub-agents (Modeler/Analyst/etc.) hit `max_turns` or return sparse text, the orchestrator now surfaces their final message plus a summary of tool calls (`tools_called: ...`) so the PI sees what actually ran.
 * Awareness of plot aggregation (`perform_plotting.py`), modeling/stats utilities (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reader tool, and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).

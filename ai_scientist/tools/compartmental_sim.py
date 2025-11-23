@@ -1,4 +1,5 @@
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
+import hashlib
 import json
 import os
 import pickle
@@ -59,12 +60,34 @@ def load_graph(graph_path: Path | str) -> nx.Graph:
     raise ValueError(f"Unsupported graph format: {suffix}")
 
 
-def _compute_topology_metrics(graph: nx.Graph, nodes: List[Any]) -> Dict[str, Any]:
+def _ordering_checksum(ordering: List[str]) -> str:
+    joined = "|".join(ordering)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def build_node_index_payload(nodes: List[Any]) -> Dict[str, Any]:
+    """
+    Build a canonical node index mapping with checksum and dual lookups.
+    """
+    ordering = [str(n) for n in nodes]
+    checksum = _ordering_checksum(ordering)
+    return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "ordering": ordering,
+        "ordering_checksum": checksum,
+        "node_index_map": [{"index": i, "node_id": node_id} for i, node_id in enumerate(ordering)],
+        "index_to_node": ordering,
+        "node_to_index": {node_id: i for i, node_id in enumerate(ordering)},
+    }
+
+
+def compute_topology_metrics(graph: nx.Graph, nodes: List[Any], ordering_checksum: str) -> Dict[str, Any]:
     """Compute simple topology metrics with graceful fallback."""
     metrics: Dict[str, Union[int, float, str]] = {
         "state_schema_version": STATE_SCHEMA_VERSION,
         "status": "ok",
         "N": len(nodes),
+        "ordering_checksum": ordering_checksum,
     }
     try:
         degrees = [graph.degree(n) for n in nodes]
@@ -102,7 +125,7 @@ def write_per_compartment_outputs(
     binary_states: np.ndarray,
     continuous_states: np.ndarray,
     time_vector: np.ndarray,
-    node_index_map: List[Dict[str, Any]],
+    node_index_payload: Dict[str, Any],
     topology_metrics: Dict[str, Any],
     status: str = "ok",
 ) -> Dict[str, Any]:
@@ -129,7 +152,8 @@ def write_per_compartment_outputs(
         topology_metrics = {**topology_metrics, "notes": f"npz write failed: {exc}"}
 
     try:
-        _atomic_write_json(map_path, {"state_schema_version": STATE_SCHEMA_VERSION, "node_index_map": node_index_map})
+        payload = {"state_schema_version": STATE_SCHEMA_VERSION, **node_index_payload}
+        _atomic_write_json(map_path, payload)
     except Exception:
         payload_status = payload_status if payload_status != "ok" else "corrupt"
 
@@ -365,14 +389,14 @@ class RunCompartmentalSimTool(BaseTool):
             binary_states = (e_arr < failure_threshold).astype(np.uint8)
             continuous_states = np.stack([e_arr, m_arr], axis=-1)
             nodes = list(graph.nodes())
-            node_index_map = [{"index": i, "node_id": str(n)} for i, n in enumerate(nodes)]
-            topology_metrics = _compute_topology_metrics(graph, nodes)
+            node_index_payload = build_node_index_payload(nodes)
+            topology_metrics = compute_topology_metrics(graph, nodes, node_index_payload["ordering_checksum"])
             per_comp_status = write_per_compartment_outputs(
                 output_dir=Path(export_output_dir),
                 binary_states=binary_states,
                 continuous_states=continuous_states,
                 time_vector=time_arr,
-                node_index_map=node_index_map,
+                node_index_payload=node_index_payload,
                 topology_metrics=topology_metrics,
                 status=topology_metrics.get("status", "ok"),
             )
