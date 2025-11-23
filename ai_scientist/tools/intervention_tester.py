@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.tools.compartmental_sim import (
     simulate_compartmental,
     load_graph,
@@ -77,7 +78,13 @@ class RunInterventionTesterTool(BaseTool):
                 "label": "baseline",
             }
         )
-        base_subdir = BaseTool.resolve_output_dir(output_dir) / "baseline"
+        base_subdir, _, _ = resolve_output_path(
+            subdir=None,
+            name="baseline",
+            run_root=BaseTool.resolve_output_dir(output_dir),
+            allow_quarantine=True,
+            unique=False,
+        )
         base_time = np.array(base["time"], dtype=float)
         per_compartment_outputs.append(
             write_per_compartment_outputs(
@@ -103,7 +110,13 @@ class RunInterventionTesterTool(BaseTool):
                         "delta_frac_failed": res["frac_failed"] - base_ff,
                     }
                 )
-                sim_subdir = BaseTool.resolve_output_dir(output_dir) / f"transport_{tr}_demand_{dm}"
+                sim_subdir, _, _ = resolve_output_path(
+                    subdir=None,
+                    name=f"transport_{tr}_demand_{dm}",
+                    run_root=BaseTool.resolve_output_dir(output_dir),
+                    allow_quarantine=True,
+                    unique=False,
+                )
                 time_arr = np.array(res["time"], dtype=float)
                 per_compartment_outputs.append(
                     write_per_compartment_outputs(
@@ -119,7 +132,13 @@ class RunInterventionTesterTool(BaseTool):
 
         out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{Path(graph_path).stem}_interventions.json"
+        out_path, _, _ = resolve_output_path(
+            subdir=None,
+            name=f"{Path(graph_path).stem}_interventions.json",
+            run_root=out_dir,
+            allow_quarantine=True,
+            unique=True,
+        )
         with out_path.open("w") as f:
             json.dump(results, f, indent=2)
 

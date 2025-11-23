@@ -32,6 +32,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, List, Dict, Any, Optional
 
+from ai_scientist.utils.pathing import resolve_output_path
+
 # Semantic Scholar helper (optional)
 try:
     from ai_scientist.tools.semantic_scholar import search_for_papers
@@ -199,8 +201,8 @@ def main():
     base_env = os.environ.get("AISC_EXP_RESULTS", "")
     out_dir = Path(base_env) if base_env else Path("experiment_results")
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = out_dir / "lit_summary.csv"
-    json_path = out_dir / "lit_summary.json"
+    csv_path, quarantined_csv, _ = resolve_output_path(subdir=None, name="lit_summary.csv", run_root=out_dir, allow_quarantine=True, unique=True)
+    json_path, quarantined_json, _ = resolve_output_path(subdir=None, name="lit_summary.json", run_root=out_dir, allow_quarantine=True, unique=True)
 
     result = assemble_lit_data(
         output_csv=str(csv_path),
@@ -210,6 +212,8 @@ def main():
         max_results=args.max_results,
         use_semantic_scholar=not args.no_semantic_scholar,
     )
+    if quarantined_csv or quarantined_json:
+        result["quarantined"] = True
     print(json.dumps(result, indent=2))
 
 

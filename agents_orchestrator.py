@@ -54,6 +54,8 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.utils.notes import ensure_note_files, read_note_file, write_note_file
+from ai_scientist.utils.pathing import resolve_output_path
+from ai_scientist.utils.health import log_missing_or_corrupt
 
 # --- Configuration & Helpers ---
 
@@ -72,33 +74,28 @@ def parse_args():
 
 def _fill_output_dir(output_dir: Optional[str]) -> str:
     """
-    Resolve output dir to the run-specific folder.
+    Resolve output dir to the run-specific folder using sanitized resolver.
     """
-    target = output_dir or os.environ.get("AISC_EXP_RESULTS", "experiment_results")
-    if not os.path.isabs(target):
-        base = os.environ.get("AISC_BASE_FOLDER")
-        if base and not target.startswith(base) and not target.startswith("experiments/"):
-            target = os.path.join(base, target)
-    return target
+    path, _, _ = resolve_output_path(subdir=None, name="", allow_quarantine=False, unique=False)
+    base = str(path)
+    if output_dir:
+        if os.path.isabs(output_dir):
+            return output_dir
+        # Anchor relative to experiment_results
+        anchored, _, _ = resolve_output_path(subdir=None, name=output_dir, allow_quarantine=False, unique=False)
+        return str(anchored)
+    return base
 
 
 def _fill_figure_dir(output_dir: Optional[str]) -> str:
     """
-    Resolve a figure output dir, preferring the run-root figures/ folder.
+    Resolve a figure output dir, preferring the run-root figures/ folder, sanitized.
     """
-    base = os.environ.get("AISC_BASE_FOLDER")
-    if output_dir is None:
-        if base:
-            return os.path.join(base, "figures")
-        return "figures"
-    if os.path.isabs(output_dir):
+    if output_dir and os.path.isabs(output_dir):
         return output_dir
-    if "experiment_results/figures" in output_dir or output_dir.strip("/").startswith("figures"):
-        if base:
-            tail = output_dir.split("figures", 1)[-1].lstrip("/ ")
-            return os.path.join(base, "figures", tail) if tail else os.path.join(base, "figures")
-        return "figures"
-    return _fill_output_dir(output_dir)
+    name = output_dir or "figures"
+    path, _, _ = resolve_output_path(subdir=None, name=name, allow_quarantine=False, unique=False)
+    return str(path)
 
 
 def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -566,7 +563,13 @@ def _ensure_transport_readme(base_folder: str):
     Write a standard transport_runs/README.md describing layout and manifest usage for this run.
     Safe to call multiple times; overwrites with the canonical content.
     """
-    transport_dir = Path(base_folder) / "experiment_results" / "simulations" / "transport_runs"
+    transport_dir, _, _ = resolve_output_path(
+        subdir="simulations/transport_runs",
+        name="",
+        run_root=Path(base_folder) / "experiment_results",
+        allow_quarantine=False,
+        unique=False,
+    )
     transport_dir.mkdir(parents=True, exist_ok=True)
     readme_path = transport_dir / "README.md"
     template_path = Path(__file__).parent / "docs" / "transport_runs_README.md"
@@ -913,8 +916,8 @@ def _generate_run_recipe(base_folder: str):
     and seeding template/nodes_order from existing transport_runs if present. Overwrites safely each run startup.
     """
     base_path = Path(base_folder)
-    morph_dir = base_path / "experiment_results" / "morphologies"
-    transport_runs_dir = base_path / "experiment_results" / "simulations" / "transport_runs"
+    morph_dir, _, _ = resolve_output_path(subdir="morphologies", name="", run_root=base_path / "experiment_results", allow_quarantine=False, unique=False)
+    transport_runs_dir, _, _ = resolve_output_path(subdir="simulations/transport_runs", name="", run_root=base_path / "experiment_results", allow_quarantine=False, unique=False)
     recipe_path = transport_runs_dir / "run_recipe.json"
     transport_runs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -988,16 +991,16 @@ def mirror_artifacts(
     - prefix/suffix: optional disambiguation added to filename stem.
     Refuses to write outside AISC_BASE_FOLDER. Uses temp+atomic rename to avoid partial writes.
     """
-    base = Path(os.environ.get("AISC_BASE_FOLDER", ".")).resolve()
+    base_env = os.environ.get("AISC_BASE_FOLDER", ".")
+    base = Path(base_env).resolve()
     if not base.exists():
         return {"error": "AISC_BASE_FOLDER not set or missing."}
-    dest = Path(dest_dir)
-    if not dest.is_absolute():
-        dest = (base / dest).resolve()
+    dest_path, _, note = resolve_output_path(subdir=None, name=dest_dir, run_root=base / "experiment_results", allow_quarantine=True, unique=False)
     try:
-        dest.relative_to(base)
+        dest_path.relative_to(base)
     except Exception:
-        return {"error": f"Destination outside run root: {dest}"}
+        return {"error": f"Destination outside run root: {dest_path}"}
+    dest = dest_path
     dest.mkdir(parents=True, exist_ok=True)
 
     copied: List[str] = []
@@ -2147,13 +2150,14 @@ def summarize_artifact(path: str, max_lines: int = 5):
 @function_tool
 def reserve_output(name: str, subdir: Optional[str] = None):
     """
-    Return a canonical output path under experiment_results (or a subdir) without creating it.
-    Agents should use this to avoid constructing paths manually.
+    Return a canonical output path under experiment_results (or a subdir), auto-uniqued and sanitized.
+    Agents must use this instead of manual path joining. Rejects traversal and routes to _unrouted on failure.
     """
-    base = BaseTool.resolve_output_dir(subdir or os.environ.get("AISC_EXP_RESULTS", "experiment_results"))
-    path = base / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return {"reserved_path": str(path)}
+    target, quarantined, note = resolve_output_path(subdir=subdir, name=name)
+    result = {"reserved_path": str(target), "quarantined": quarantined}
+    if note:
+        result["note"] = note
+    return result
 
 
 @function_tool
@@ -2229,6 +2233,15 @@ def check_manifest():
         by_name.setdefault(name, []).append(path)
 
     duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+    health_entries: List[Dict[str, Any]] = []
+    if missing:
+        health_entries.append({"missing_files": missing})
+    if missing_type:
+        health_entries.append({"missing_type": missing_type})
+    if duplicates:
+        health_entries.append({"duplicate_names": duplicates})
+    if health_entries:
+        log_missing_or_corrupt(health_entries)
     return {
         "manifest_path": str(manifest_path),
         "n_entries": len(manifest_map),
@@ -2247,7 +2260,6 @@ def read_manifest():
 
 
 def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = None, metadata_json: Optional[str] = None) -> Dict[str, Any]:
-    root = BaseTool.resolve_output_dir(subdir or None)
     # Normalize common nested paths (e.g., figures/figures, graphs/graphs)
     norm_name = name
     for dup in ("figures/figures/", "graphs/graphs/", "derived/derived/", "processed/processed/"):
@@ -2259,8 +2271,7 @@ def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = No
     if subdir in ("graphs", "derived", "processed") and norm_name.startswith(f"{subdir}/"):
         norm_name = norm_name[len(f"{subdir}/") :]
 
-    path = root / norm_name
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path, quarantined, note = resolve_output_path(subdir=subdir, name=norm_name)
     if str(path).lower().endswith(".pdf"):
         path, warning = _render_pdf_or_markdown(path, content)
     else:
@@ -2268,7 +2279,9 @@ def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = No
             f.write(content)
     if metadata_json:
         _append_manifest_entry(name=str(path), metadata_json=metadata_json, allow_missing=True)
-    result: Dict[str, Any] = {"path": str(path)}
+    result: Dict[str, Any] = {"path": str(path), "quarantined": quarantined}
+    if note:
+        result["note"] = note
     if "warning" in locals() and warning:  # type: ignore[name-defined]
         result["warning"] = warning
     return result
@@ -2477,6 +2490,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         "Use these paths directly; do NOT call get_run_paths. "
         "Assume provided input paths exist; only list_artifacts if path is missing."
     )
+    path_guardrails = (
+        "FILE IO POLICY: Build write paths via 'reserve_output' or 'write_text_artifact'; do not hand-roll paths or use '../'. "
+        "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note."
+    )
     
     # --- STANDARD REFLECTION PROMPT ---
     reflection_instruction = (
@@ -2501,7 +2518,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             f"Goal: Verify novelty of '{title}' and map claims to citations.\n"
             f"Context: {abstract}\n"
             f"Related Work to Consider: {related_work}\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
@@ -2538,7 +2555,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             f"Goal: Execute simulations for '{title}'.\n"
             f"Hypothesis: {hypothesis}\n"
             f"Experimental Plan:\n{experiments_plan}\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
@@ -2594,7 +2611,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         instructions=(
             "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Read data from provided input paths. Do NOT list files to find them; assume the path is correct.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
@@ -2649,7 +2666,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "You are an expert Holistic Reviewer.\n"
             "Goal: Identify logical gaps and structural flaws.\n"
             f"Risk Factors & Limitations to Check:\n{risk_factors}\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
@@ -2688,7 +2705,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         instructions=(
             "You are an expert Mathematical-Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
@@ -2726,7 +2743,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         instructions=(
             "You are an expert Utility Engineer.\n"
             "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
             "2. If you add tools/helpers, document them briefly and log via 'append_manifest'.\n"
@@ -2759,7 +2776,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         instructions=(
             "You are an expert Production Editor.\n"
             "Goal: Compile final PDF.\n"
-            f"{path_context}\n"  # INJECT PATHS
+            f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Target the 'blank_theoretical_biology_latex' template.\n"
             "2. Integrate 'lit_summary.json' and figures into the text.\n"

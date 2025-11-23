@@ -4,6 +4,7 @@ import json
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.perform_biological_modeling import (
     create_sample_models,
     solve_biological_model,
@@ -68,7 +69,13 @@ class RunBiologicalModelTool(BaseTool):
 
         out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{model_key}_solution.json"
+        out_path, _, _ = resolve_output_path(
+            subdir=None,
+            name=f"{model_key}_solution.json",
+            run_root=out_dir,
+            allow_quarantine=True,
+            unique=True,
+        )
 
         payload: Dict[str, Any] = {
             "model": model_key,

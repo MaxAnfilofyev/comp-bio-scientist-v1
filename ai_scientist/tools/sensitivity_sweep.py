@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.tools.compartmental_sim import (
     simulate_compartmental,
     load_graph,
@@ -63,7 +64,13 @@ class RunSensitivitySweepTool(BaseTool):
 
         out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = out_dir / f"{Path(graph_path).stem}_sensitivity.csv"
+        csv_path, _, _ = resolve_output_path(
+            subdir=None,
+            name=f"{Path(graph_path).stem}_sensitivity.csv",
+            run_root=out_dir,
+            allow_quarantine=True,
+            unique=True,
+        )
         node_index_payload = build_node_index_payload(list(G.nodes()))
         topology_metrics = compute_topology_metrics(G, list(G.nodes()), node_index_payload["ordering_checksum"])
         per_comp_outputs: List[Dict[str, Any]] = []
@@ -83,7 +90,13 @@ class RunSensitivitySweepTool(BaseTool):
                     return_arrays=True,
                 )
                 rows.append({"transport_rate": tr, "demand_scale": dm, "frac_failed": res["frac_failed"]})
-                sim_subdir = out_dir / f"transport_{tr}_demand_{dm}"
+                sim_subdir, _, _ = resolve_output_path(
+                    subdir=None,
+                    name=f"transport_{tr}_demand_{dm}",
+                    run_root=out_dir,
+                    allow_quarantine=True,
+                    unique=False,
+                )
                 time_arr = np.array(res["time"], dtype=float)
                 binary_states = (np.array(e_arr) < failure_threshold).astype(np.uint8)
                 continuous_states = np.stack([e_arr, m_arr], axis=-1)

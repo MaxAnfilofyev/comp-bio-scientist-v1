@@ -11,6 +11,7 @@ import networkx as nx
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 
 
 STATE_SCHEMA_VERSION = "1.0"
@@ -278,7 +279,8 @@ class RunCompartmentalSimTool(BaseTool):
         if graph_path is None or str(graph_path).strip() == "":
             raise ValueError("graph_path is required (build one with BuildGraphsTool or provide a path)")
 
-        output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
+        base_out = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
+        output_dir = base_out
         steps = int(kwargs.get("steps", 200))
         dt = float(kwargs.get("dt", 0.1))
         transport_rate = float(kwargs.get("transport_rate", 0.05))
@@ -293,6 +295,13 @@ class RunCompartmentalSimTool(BaseTool):
         export_arrays = bool(kwargs.get("export_arrays", False))
         failure_threshold = float(kwargs.get("failure_threshold", 0.2))
         export_output_dir = kwargs.get("export_output_dir") or output_dir
+        export_output_dir = resolve_output_path(
+            subdir=None,
+            name="",
+            run_root=BaseTool.resolve_output_dir(export_output_dir),
+            allow_quarantine=True,
+            unique=False,
+        )[0]
 
         graph = load_graph(Path(graph_path))
         n_nodes = graph.number_of_nodes()
@@ -303,7 +312,17 @@ class RunCompartmentalSimTool(BaseTool):
             )
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        status_file = Path(status_path) if status_path else output_dir / f"{Path(graph_path).stem}_sim.status.json"
+        status_file = (
+            Path(status_path)
+            if status_path
+            else resolve_output_path(
+                subdir=None,
+                name=f"{Path(graph_path).stem}_sim.status.json",
+                run_root=output_dir,
+                allow_quarantine=True,
+                unique=False,
+            )[0]
+        )
         # Write running status so agents see progress
         try:
             with status_file.open("w") as sf:
@@ -360,7 +379,13 @@ class RunCompartmentalSimTool(BaseTool):
                 "noise_std": noise_std,
                 "seed": seed,
             }
-        out_path = output_dir / f"{Path(graph_path).stem}_sim.json"
+        out_path = resolve_output_path(
+            subdir=None,
+            name=f"{Path(graph_path).stem}_sim.json",
+            run_root=output_dir,
+            allow_quarantine=True,
+            unique=True,
+        )[0]
         with out_path.open("w") as f:
             json.dump(result, f, indent=2)
 

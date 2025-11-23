@@ -5,6 +5,7 @@ import json
 import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.perform_biological_plotting import BiologicalPlotter
 
 
@@ -54,7 +55,8 @@ class RunBiologicalPlottingTool(BaseTool):
         solution_path = kwargs.get("solution_path")
         if solution_path is None:
             raise ValueError("solution_path is required")
-        output_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
+        root_dir = BaseTool.resolve_output_dir(kwargs.get("output_dir"))
+        output_dir, _, _ = resolve_output_path(subdir=None, name="", run_root=root_dir, allow_quarantine=False, unique=False)
         make_phase_portrait = bool(kwargs.get("make_phase_portrait", True))
         make_combined_svg = bool(kwargs.get("make_combined_svg", False))
         downsample = int(kwargs.get("downsample", 1))

@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.tools.base_tool import BaseTool
+from ai_scientist.utils.pathing import resolve_output_path
 except Exception:
     BaseTool = None
 
@@ -20,19 +21,12 @@ def _run_root(explicit: Optional[Path] = None) -> Path:
 
 
 def _resolve_output_dir(default: str = "experiment_results") -> Path:
-    if BaseTool:
-        try:
-            return BaseTool.resolve_output_dir(None, default=default)
-        except Exception:
-            pass
-    env_dir = os.environ.get("AISC_EXP_RESULTS", "")
-    if env_dir:
-        p = Path(env_dir)
-        return p if p.is_absolute() else Path.cwd() / p
-    base = os.environ.get("AISC_BASE_FOLDER", "")
-    if base:
-        return Path(base) / default
-    return Path(default)
+    try:
+        resolved, _, _ = resolve_output_path(subdir=None, name="", allow_quarantine=False, unique=False)
+        return resolved if resolved.name == default else resolved
+    except Exception:
+        pass
+    return BaseTool.resolve_output_dir(None, default=default) if BaseTool else Path(default)
 
 
 def _normalize_name(name: str) -> str:
