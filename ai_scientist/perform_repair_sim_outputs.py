@@ -15,7 +15,7 @@ def main():
         "--manifest",
         dest="manifest_path",
         default=None,
-        help="Path to file_manifest.json (default: experiment_results/file_manifest.json).",
+        help="Optional manifest index path or experiment_results directory (defaults to active run manifest).",
     )
     parser.add_argument(
         "--manifest-paths",

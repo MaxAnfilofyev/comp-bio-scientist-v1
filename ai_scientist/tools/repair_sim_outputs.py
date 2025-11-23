@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs
 from ai_scientist.tools.sim_postprocess import export_sim_timeseries
+from ai_scientist.utils import manifest as manifest_utils
 
 
 def _acquire_lock(target: Path, timeout: float = 5.0, poll: float = 0.2) -> Optional[Path]:
@@ -77,29 +78,29 @@ def _normalize_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None)
     return normalized
 
 
-def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
-    if not manifest_path.exists():
-        return {}
-    try:
-        with open(manifest_path) as f:
-            data = json.load(f)
-    except Exception:
-        return {}
+def _resolve_manifest_base(manifest_path: Optional[Path], run_root: Optional[Path]) -> Path:
+    """
+    Resolve the experiment_results directory for manifest loading based on inputs.
+    """
+    if run_root:
+        exp_dir = run_root / "experiment_results"
+        return exp_dir if exp_dir.exists() else run_root
+    if manifest_path:
+        if manifest_path.is_dir():
+            return manifest_path
+        if manifest_path.name == "manifest_index.json":
+            if manifest_path.parent.name == "manifest":
+                return manifest_path.parent.parent
+            return manifest_path.parent
+        if manifest_path.name == "file_manifest.json":
+            return manifest_path.parent
+        return manifest_path.parent
+    return BaseTool.resolve_output_dir(None)
 
-    manifest_map: Dict[str, Dict[str, Any]] = {}
-    if isinstance(data, dict):
-        for key, val in data.items():
-            if isinstance(val, dict):
-                norm = _normalize_entry(val, fallback_path=key)
-                if norm:
-                    manifest_map[norm["path"]] = norm
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                norm = _normalize_entry(item)
-                if norm:
-                    manifest_map[norm["path"]] = norm
-    return manifest_map
+
+def _load_manifest_map(base_folder: Path) -> Dict[str, Dict[str, Any]]:
+    entries = manifest_utils.load_entries(base_folder=base_folder)
+    return {e["path"]: e for e in entries if isinstance(e, dict) and e.get("path")}
 
 
 def _atomic_write_json(target: Path, data: Any) -> Optional[str]:
@@ -270,18 +271,15 @@ def repair_sim_outputs(
     Bulk repair simulation outputs: runs sim_postprocess on sim.json files lacking exported arrays,
     validates per-compartment artifacts, and updates the manifest/tool_summary with outcomes.
     """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    mpath = Path(manifest_path) if manifest_path else exp_dir / "file_manifest.json"
-    if run_root and not mpath.is_absolute():
-        mpath = Path(run_root) / mpath
-    mpath = mpath.resolve()
-    exp_dir = mpath.parent if mpath.parent.name == "experiment_results" else exp_dir
+    run_root_path = Path(run_root) if run_root else None
+    manifest_path_obj = Path(manifest_path) if manifest_path else None
+    exp_dir = _resolve_manifest_base(manifest_path_obj, run_root_path)
 
-    manifest_map = _load_manifest_map(mpath)
+    manifest_map = _load_manifest_map(exp_dir)
     targets = _collect_targets(manifest_map, manifest_paths)
     if not targets:
         return {
-            "manifest_path": str(mpath),
+            "manifest_path": str(exp_dir / "manifest" / "manifest_index.json"),
             "processed": 0,
             "repaired": 0,
             "errors": [],
@@ -293,6 +291,7 @@ def repair_sim_outputs(
     repaired = 0
     errors: List[str] = []
     skipped: List[str] = []
+    updated_entries: List[Dict[str, Any]] = []
 
     for sim_path in targets[: max(batch_size, 1)]:
         res = _process_sim(sim_path, force=force)
@@ -314,6 +313,7 @@ def repair_sim_outputs(
         }
         _append_annotation(sim_entry, sim_annotation)
         manifest_map[sim_entry["path"]] = sim_entry
+        updated_entries.append(sim_entry)
 
         expected = _expected_postprocess_paths(sim_path)
         for label, p in expected.items():
@@ -328,10 +328,13 @@ def repair_sim_outputs(
                     },
                 )
                 manifest_map[entry["path"]] = entry
+                updated_entries.append(entry)
 
-    write_err = _atomic_write_json(mpath, manifest_map)
+    for entry in updated_entries:
+        manifest_utils.append_manifest_entry(entry, base_folder=exp_dir, dedupe_key=entry.get("path"))
+
     log_lines = [
-        f"manifest: {mpath}",
+        f"manifest: {exp_dir/'manifest'/'manifest_index.json'}",
         f"processed: {len(results)} (limit {batch_size})",
         f"repaired: {repaired}",
         f"errors: {len(errors)}",
@@ -340,7 +343,7 @@ def repair_sim_outputs(
     log_path = _log_tool_summary(exp_dir, log_lines)
 
     summary: Dict[str, Any] = {
-        "manifest_path": str(mpath),
+        "manifest_path": str(exp_dir / "manifest" / "manifest_index.json"),
         "processed": len(results),
         "repaired": repaired,
         "errors": errors,
@@ -348,8 +351,6 @@ def repair_sim_outputs(
         "results": results,
         "log_path": log_path,
     }
-    if write_err:
-        summary["manifest_write_error"] = write_err
     return summary
 
 

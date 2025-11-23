@@ -58,6 +58,7 @@ from ai_scientist.perform_biological_interpretation import interpret_biological_
 from ai_scientist.utils.notes import ensure_note_files, read_note_file, write_note_file
 from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.utils.health import log_missing_or_corrupt
+from ai_scientist.utils import manifest as manifest_utils
 
 # --- Configuration & Helpers ---
 
@@ -162,10 +163,22 @@ def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str
 
 
 def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    Backward-compatible manifest loader. Prefers sharded manifest via manifest_utils, and
+    falls back to the legacy file_manifest.json if needed.
+    """
+    try:
+        entries = manifest_utils.load_entries(base_folder=BaseTool.resolve_output_dir(None))
+        manifest_map = {e["path"]: e for e in entries if isinstance(e, dict) and e.get("path")}
+        if manifest_map:
+            return manifest_map
+    except Exception:
+        pass
+
     if not manifest_path.exists():
         return {}
     try:
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return {}
@@ -194,32 +207,21 @@ def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
     Adds them with inferred types and 'auto_watcher' annotation.
     Returns list of added filenames.
     """
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
     added_files = []
-    
-    # We normalized existing keys in _load_manifest_map, but we need to check against 
-    # the exact string format used in the manifest (usually absolute paths or relative to execution).
-    # To be safe, we check if the path_str matches any key in manifest_map.
-    
+
+    manifest_root = exp_dir / "manifest"
+
     for root, _, files in os.walk(exp_dir):
+        if manifest_root in Path(root).parents or Path(root) == manifest_root:
+            continue
         for name in files:
             if name == "file_manifest.json":
                 continue
-            
+            if Path(root) == manifest_root:
+                continue
+
             full_path = Path(root) / name
             path_str = str(full_path)
-            
-            # Check for existence
-            if path_str in manifest_map:
-                continue
-                
-            # Double check relative path just in case
-            try:
-                full_path.relative_to(exp_dir)
-                # Some agents might store relative paths? We compute once to ensure it is relative.
-            except ValueError:
-                pass
 
             # Infer type
             suffix = full_path.suffix.lower()
@@ -241,23 +243,15 @@ def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
                 "annotations": [{"source": "auto_watcher", "note": "Recovered orphaned file"}],
                 "timestamp": datetime.now().isoformat()
             }
-            manifest_map[path_str] = entry
-            added_files.append(name)
-
-    if added_files:
-        try:
-            with open(manifest_path, "w") as f:
-                json.dump(manifest_map, f, indent=2)
-        except Exception:
-            pass # Fail silently (watcher shouldn't crash run)
+            res = manifest_utils.append_manifest_entry(entry, base_folder=exp_dir)
+            if not res.get("error"):
+                added_files.append(name)
 
     return added_files
 
 
 def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
     exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
 
     try:
         target_path = BaseTool.resolve_input_path(name, allow_dir=True)
@@ -274,31 +268,19 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
             meta = {"raw": metadata_json}
     path_str = str(target_path)
     name_only = os.path.basename(name or path_str)
-    entry = manifest_map.get(path_str, {"name": name_only, "path": path_str, "type": None, "annotations": []})
-    entry["name"] = name_only
-    entry_type = entry.get("type") or meta.get("type")
-    annotations: List[Dict[str, Any]] = entry.get("annotations") or []
+    entry: Dict[str, Any] = {"name": name_only, "path": path_str, "type": meta.get("type"), "annotations": []}
     annotation = {k: v for k, v in meta.items() if k != "type"}
-    if annotation and annotation not in annotations:
-        annotations.append(annotation)
-    entry["type"] = entry_type
-    entry["annotations"] = annotations
-    compat_meta = _build_metadata_for_compat(entry_type, annotations)
-    if compat_meta:
-        entry["metadata"] = compat_meta
-    elif "metadata" in entry:
-        entry.pop("metadata", None)
-     
-    entry["timestamp"] = datetime.now().isoformat()
-     
-    manifest_map[path_str] = entry
-    try:
-        with open(manifest_path, "w") as f:
-            json.dump(manifest_map, f, indent=2)
-    except Exception as e:
-        return {"error": f"Failed to write manifest: {str(e)}"}
-         
-    return {"manifest_path": str(manifest_path), "n_entries": len(manifest_map)}
+    if annotation:
+        entry["annotations"].append(annotation)
+    res = manifest_utils.append_manifest_entry(entry, base_folder=exp_dir, dedupe_key=path_str)
+    if res.get("error"):
+        return res
+    return {
+        "manifest_index": res.get("manifest_index"),
+        "shard": res.get("shard"),
+        "n_entries": res.get("count"),
+        "deduped": res.get("deduped", False),
+    }
 
 
 def _append_artifact_from_result(result: Any, key: str, metadata_json: Optional[str], allow_missing: bool = True):
@@ -521,6 +503,27 @@ def format_list_field(data: Any) -> str:
     return str(data)
 
 
+def _truncate_text_response(
+    text: str,
+    *,
+    path: Optional[str],
+    threshold: int,
+    total_bytes: Optional[int] = None,
+    hint_tool: str = "head_artifact",
+) -> Dict[str, Any]:
+    """
+    Standardized truncation message for tools returning text content.
+    """
+    total_chars = len(text)
+    snippet = text[:threshold]
+    note = (
+        f"Content exceeds threshold ({threshold} chars); returned first {threshold} of {total_chars}"
+        + (f" (~{total_bytes} bytes)" if total_bytes is not None else "")
+        + f". To inspect more, use {hint_tool} or raise return_size_threshold_chars carefully (watch context limits)."
+    )
+    return {"path": path, "content": snippet, "truncated": True, "note": note, "total_chars": total_chars}
+
+
 def _render_pdf_or_markdown(path: Path, content: str) -> Tuple[Path, Optional[str]]:
     warning: Optional[str] = None
     try:
@@ -702,65 +705,63 @@ async def extract_run_output(run_result: RunResult) -> str:
 # --- Tool Definitions (Wrappers for Agents SDK) ---
 
 @function_tool
+def inspect_manifest(
+    base_folder: Optional[str] = None,
+    role: Optional[str] = None,
+    path_glob: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 200,
+    summary_only: bool = True,
+    include_samples: int = 3,
+):
+    """
+    Sharded manifest reader (defaults to summary-only). Filters by optional role, glob, and ISO8601 since timestamp.
+    - limit: max entries returned when summary_only=False (capped at 2000).
+    - include_samples: how many sample entries to return in summary mode.
+    - base_folder: optional override run root; defaults to the active run.
+    """
+    exp_dir = Path(base_folder) if base_folder else BaseTool.resolve_output_dir(None)
+    return manifest_utils.inspect_manifest(
+        base_folder=exp_dir,
+        role=role,
+        path_glob=path_glob,
+        since=since,
+        limit=limit,
+        summary_only=summary_only,
+        include_samples=include_samples,
+    )
+
+
+@function_tool
 def inspect_recent_manifest_entries(limit: int = 20, since_minutes: int = 1440, role: Optional[str] = None):
     """
-    Forensic Tool: Check the file manifest for updated entries.
+    Forensic Tool: Check the manifest for updated entries.
     Crucial for recovering work after a sub-agent timeout or crash.
-    - limit: Max number of files to return (default 20).
+    - limit: Max number of files to return (default 20, capped to 2000).
     - since_minutes: Only return files updated in the last N minutes (default 1440 = 24 hours).
-    - role: If provided (e.g. 'modeler', 'analyst'), only show files where metadata['source'] matches this role.
-    Returns the files in reverse chronological order (newest first).
+    - role: Optional filter (e.g. 'Modeler', 'Analyst'); matches metadata.source/actor.
+    Returns the files in reverse chronological order (newest first), using the sharded manifest.
     """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
-    
-    if not manifest_map:
-        return "Manifest is empty."
-
     cutoff = datetime.now() - timedelta(minutes=since_minutes)
-    valid_entries = []
-    
-    for entry in manifest_map.values():
-        ts_str = entry.get("timestamp")
-        if ts_str:
-            try:
-                ts = datetime.fromisoformat(ts_str)
-                if ts < cutoff:
-                    continue
-            except ValueError:
-                pass 
-        
-        if role:
-            meta = entry.get("metadata", {})
-            source = meta.get("source", "").lower()
-            if role.lower() not in source and role.lower() not in str(meta).lower():
-                continue
-
-        valid_entries.append(entry)
-
-    sorted_entries = sorted(
-        valid_entries, 
-        # FIXED: Ensure None values are treated as empty strings to avoid sorting TypeError
-        key=lambda x: x.get("timestamp") or "", 
-        reverse=True
+    data = manifest_utils.inspect_manifest(
+        base_folder=BaseTool.resolve_output_dir(None),
+        role=role,
+        since=cutoff.isoformat(),
+        limit=limit,
+        summary_only=False,
     )
-    
-    recent = sorted_entries[:limit]
-    
-    if not recent:
+    entries = data.get("entries", [])
+    if not entries:
         msg = f"No manifest updates found in the last {since_minutes} minutes"
         if role:
             msg += f" for role '{role}'"
         return msg + "."
-
-    output = [f"Last {len(recent)} manifest updates (since {since_minutes} min ago):"]
-    for entry in recent:
+    output = [f"Last {len(entries)} manifest updates (since {since_minutes} min ago):"]
+    for entry in entries:
         ts = entry.get("timestamp", "N/A")
         name = entry.get("name", "Unknown")
         etype = entry.get("type", "Unknown")
         output.append(f"- [{ts}] {name} (Type: {etype})")
-        
     return "\n".join(output)
 
 @function_tool
@@ -1483,7 +1484,7 @@ def repair_sim_outputs(manifest_paths: Optional[List[str]] = None, batch_size: i
     Bulk repair sim.json entries missing exported arrays; validates per-compartment artifacts and updates manifest/tool_summary.
     """
     exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
+    manifest_path = exp_dir / "manifest" / "manifest_index.json"
     run_root = exp_dir.parent if exp_dir.name == "experiment_results" else exp_dir
     return RepairSimOutputsTool().use_tool(
         manifest_paths=manifest_paths,
@@ -1510,9 +1511,22 @@ def graph_diagnostics(
     )
 
 @function_tool
-def read_manuscript(path: str):
-    """Reads the PDF or text of the manuscript."""
-    return ManuscriptReaderTool().use_tool(path=path)
+def read_manuscript(path: str, return_size_threshold_chars: int = 2000):
+    """
+    Reads the PDF or text of the manuscript. Truncates text over the threshold to avoid context blowups.
+    """
+    result = ManuscriptReaderTool().use_tool(path=path)
+    text = result.get("text")
+    if isinstance(text, str) and len(text) > return_size_threshold_chars:
+        truncated = _truncate_text_response(
+            text,
+            path=str(path),
+            threshold=return_size_threshold_chars,
+            total_bytes=None,
+            hint_tool="head_artifact",
+        )
+        result.update(truncated)
+    return result
 
 @function_tool
 def run_writeup_task(
@@ -1787,11 +1801,12 @@ def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
 
 
 @function_tool
-def read_artifact(path: str, summary_only: bool = False, head_lines: Optional[int] = None):
+def read_artifact(path: str, summary_only: bool = False, head_lines: Optional[int] = None, return_size_threshold_chars: int = 2000):
     """
     Resolve and read a small artifact (json/text). Use for configs/metadata, not large binaries.
     - summary_only=True: for large JSON, return top-level keys + types instead of full payload.
     - head_lines: return only the first N lines/items (bypasses size guard for text/JSON).
+    - return_size_threshold_chars: if text output exceeds this length, it is truncated with a note (default 2000).
     """
     p = BaseTool.resolve_input_path(path, allow_dir=False)
     max_bytes = 1_000_000  # ~1 MB
@@ -1868,7 +1883,16 @@ def read_artifact(path: str, summary_only: bool = False, head_lines: Optional[in
             return {"error": str(exc)}
 
     with open(p) as f:
-        return f.read()
+        content = f.read()
+    if len(content) > return_size_threshold_chars:
+        return _truncate_text_response(
+            content,
+            path=str(p),
+            threshold=return_size_threshold_chars,
+            total_bytes=size,
+            hint_tool="head_artifact",
+        )
+    return content
 
 
 @function_tool
@@ -2050,21 +2074,11 @@ def reserve_output(name: str, subdir: Optional[str] = None):
 @function_tool
 def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
     """
-    Append an entry to the run's file manifest (experiment_results/file_manifest.json).
+    Append an entry to the run's sharded manifest (experiment_results/manifest/...).
     Pass metadata as a JSON string (e.g., '{"type":"figure","source":"analyst"}').
     Creates the manifest file if missing.
     """
     return _append_manifest_entry(name=name, metadata_json=metadata_json, allow_missing=allow_missing)
-
-
-def _read_manifest_entries() -> List[Dict[str, Any]]:
-    """Helper to read manifest entries without tool wrapper."""
-    exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
-    entries = list(manifest_map.values())
-    entries.sort(key=lambda e: e.get("path", ""))
-    return entries
 
 
 @function_tool
@@ -2073,23 +2087,9 @@ def read_manifest_entry(path_or_name: str):
     Read a single manifest entry by path key or filename (basename).
     """
     exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
-    if not manifest_map:
-        return {"error": "Manifest empty or missing", "path": str(manifest_path)}
-
-    # Exact path match first
-    entry = manifest_map.get(path_or_name)
+    entry = manifest_utils.find_manifest_entry(path_or_name, base_folder=exp_dir)
     if entry:
-        return {"path": path_or_name, "entry": entry}
-
-    # Fallback: match by basename
-    matches = []
-    for p, e in manifest_map.items():
-        if os.path.basename(p) == path_or_name:
-            matches.append({"path": p, "entry": e})
-    if matches:
-        return {"matches": matches}
+        return {"entry": entry}
     return {"error": "Not found", "path_or_name": path_or_name}
 
 
@@ -2099,15 +2099,15 @@ def check_manifest():
     Validate manifest entries: report missing files, entries lacking type, and duplicate basenames.
     """
     exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    manifest_map = _load_manifest_map(manifest_path)
-    if not manifest_map:
-        return {"error": "Manifest empty or missing", "path": str(manifest_path)}
+    entries = manifest_utils.load_entries(base_folder=exp_dir)
+    if not entries:
+        return {"error": "Manifest empty or missing", "path": str(exp_dir / 'manifest')}
 
     missing = []
     missing_type = []
     by_name: Dict[str, list[str]] = {}
-    for path, entry in manifest_map.items():
+    for entry in entries:
+        path = entry.get("path", "")
         try:
             exists = Path(path).exists()
         except Exception:
@@ -2116,7 +2116,7 @@ def check_manifest():
             missing.append(path)
         if not entry.get("type"):
             missing_type.append(path)
-        name = entry.get("name") or os.path.basename(path)
+        name = entry.get("name") or os.path.basename(path or "")
         by_name.setdefault(name, []).append(path)
 
     duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
@@ -2130,8 +2130,8 @@ def check_manifest():
     if health_entries:
         log_missing_or_corrupt(health_entries)
     return {
-        "manifest_path": str(manifest_path),
-        "n_entries": len(manifest_map),
+        "manifest_index": str(BaseTool.resolve_output_dir(None) / "manifest" / "manifest_index.json"),
+        "n_entries": len(entries),
         "missing_files": missing,
         "missing_type": missing_type,
         "duplicate_names": duplicates,
@@ -2140,10 +2140,15 @@ def check_manifest():
 
 @function_tool
 def read_manifest():
-    """Read the run's file manifest if present (experiment_results/file_manifest.json)."""
+    """Read the run's manifest with a capped entry list; use inspect_manifest for filtered views."""
     exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "file_manifest.json"
-    return {"manifest_path": str(manifest_path), "entries": _read_manifest_entries()}
+    data = manifest_utils.inspect_manifest(base_folder=exp_dir, summary_only=False, limit=500)
+    return {
+        "manifest_index": data.get("manifest_index"),
+        "entries": data.get("entries", []),
+        "summary": data.get("summary", {}),
+        "note": "Entries capped at 500; use inspect_manifest for filtered views.",
+    }
 
 
 def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = None, metadata_json: Optional[str] = None) -> Dict[str, Any]:
@@ -2205,13 +2210,24 @@ def write_figures_readme(content: str, filename: str = "README.md"):
 
 
 @function_tool
-def read_note(name: str = "pi_notes.md"):
+def read_note(name: str = "pi_notes.md", return_size_threshold_chars: int = 2000):
     """
     Read a note file from the canonical run location (pi_notes.md or user_inbox.md). Returns empty string if missing.
+    Truncates content over the threshold to limit context usage.
     """
     result = read_note_file(name=name)
     if result.get("error"):
         return result
+    content = result.get("content", "")
+    if isinstance(content, str) and len(content) > return_size_threshold_chars:
+        truncated = _truncate_text_response(
+            content,
+            path=result.get("path"),
+            threshold=return_size_threshold_chars,
+            total_bytes=None,
+            hint_tool="head_artifact",
+        )
+        result.update(truncated)
     return result
 
 
@@ -2250,7 +2266,11 @@ def get_artifact_index(max_entries: int = 2000):
     Build a lightweight index of artifacts under experiment_results and include manifest entries if present.
     """
     root = BaseTool.resolve_output_dir(None)
-    manifest = _read_manifest_entries()
+    manifest = manifest_utils.inspect_manifest(
+        base_folder=root,
+        summary_only=False,
+        limit=min(500, max_entries),
+    )
     files: List[Dict[str, Any]] = []
     try:
         count = 0
@@ -2700,7 +2720,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. STATE CHECK: First, use any injected context about 'pi_notes.md', 'user_inbox.md', or prior 'check_project_state' runs that appears in your system/user message. Only call 'read_note' or 'check_project_state' if you need a fresh snapshot beyond what is already provided.\n"
             "2. REVIEW KNOWLEDGE: Check 'manage_project_knowledge' for constraints or decisions before delegating.\n"
             "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
-            "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_recent_manifest_entries or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
+            "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
             "   - Missing Plots -> Analyst\n"
@@ -2708,7 +2728,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "   - Draft Exists -> Reviewer\n"
             "   - Validated & Ready -> Publisher\n"
             "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
-            "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_recent_manifest_entries(role=...)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
+            "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
             "7. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
             "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
         ),
@@ -2716,6 +2736,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         tools=[
             check_project_state,
             log_strategic_pivot,
+            inspect_manifest,
             inspect_recent_manifest_entries,
             get_run_paths,
             resolve_path,
