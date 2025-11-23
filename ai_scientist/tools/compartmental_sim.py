@@ -1,5 +1,4 @@
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
-import hashlib
 import json
 import os
 import pickle
@@ -12,12 +11,11 @@ import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.pathing import resolve_output_path
-
-
-STATE_SCHEMA_VERSION = "1.0"
-_PER_COMPARTMENT_FILENAME = "per_compartment.npz"
-_NODE_INDEX_MAP_FILENAME = "node_index_map.json"
-_TOPOLOGY_SUMMARY_FILENAME = "topology_summary.json"
+from ai_scientist.utils.per_compartment import (
+    build_node_index_payload,
+    compute_topology_metrics,
+    write_per_compartment_outputs,
+)
 
 
 def _resolve_graph_path(p: Path) -> Path:
@@ -59,123 +57,6 @@ def load_graph(graph_path: Path | str) -> nx.Graph:
         graph = nx.from_numpy_array(arr)
         return graph
     raise ValueError(f"Unsupported graph format: {suffix}")
-
-
-def _ordering_checksum(ordering: List[str]) -> str:
-    joined = "|".join(ordering)
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
-
-
-def build_node_index_payload(nodes: List[Any]) -> Dict[str, Any]:
-    """
-    Build a canonical node index mapping with checksum and dual lookups.
-    """
-    ordering = [str(n) for n in nodes]
-    checksum = _ordering_checksum(ordering)
-    return {
-        "state_schema_version": STATE_SCHEMA_VERSION,
-        "ordering": ordering,
-        "ordering_checksum": checksum,
-        "node_index_map": [{"index": i, "node_id": node_id} for i, node_id in enumerate(ordering)],
-        "index_to_node": ordering,
-        "node_to_index": {node_id: i for i, node_id in enumerate(ordering)},
-    }
-
-
-def compute_topology_metrics(graph: nx.Graph, nodes: List[Any], ordering_checksum: str) -> Dict[str, Any]:
-    """Compute simple topology metrics with graceful fallback."""
-    metrics: Dict[str, Union[int, float, str]] = {
-        "state_schema_version": STATE_SCHEMA_VERSION,
-        "status": "ok",
-        "N": len(nodes),
-        "ordering_checksum": ordering_checksum,
-    }
-    try:
-        degrees = [graph.degree(n) for n in nodes]
-        metrics["leaf_count"] = int(sum(1 for d in degrees if d == 1))
-        metrics["mean_depth"] = 0.0
-        metrics["max_depth"] = 0.0
-        metrics["total_path_length"] = 0.0
-        if nodes:
-            root = nodes[0]
-            lengths = nx.single_source_shortest_path_length(graph, root)
-            depths = [lengths.get(n, 0) for n in nodes]
-            if depths:
-                metrics["mean_depth"] = float(np.mean(depths))
-                metrics["max_depth"] = float(np.max(depths))
-                metrics["total_path_length"] = float(np.sum(list(lengths.values())))
-    except Exception as exc:
-        metrics["status"] = "no_morphology"
-        metrics["notes"] = f"failed to compute topology metrics: {exc}"
-        metrics.setdefault("leaf_count", 0)
-        metrics.setdefault("mean_depth", 0.0)
-        metrics.setdefault("max_depth", 0.0)
-        metrics.setdefault("total_path_length", 0.0)
-    return metrics
-
-
-def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, path)
-
-
-def write_per_compartment_outputs(
-    output_dir: Path,
-    binary_states: np.ndarray,
-    continuous_states: np.ndarray,
-    time_vector: np.ndarray,
-    node_index_payload: Dict[str, Any],
-    topology_metrics: Dict[str, Any],
-    status: str = "ok",
-) -> Dict[str, Any]:
-    """
-    Standardized writer for per-compartment outputs (binary + continuous + mapping + topology summary).
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    npz_path = output_dir / _PER_COMPARTMENT_FILENAME
-    map_path = output_dir / _NODE_INDEX_MAP_FILENAME
-    topo_path = output_dir / _TOPOLOGY_SUMMARY_FILENAME
-
-    payload_status = status
-    try:
-        tmp_npz = npz_path.with_suffix(npz_path.suffix + ".tmp")
-        np.savez_compressed(
-            tmp_npz,
-            binary_states=binary_states.astype(np.uint8),
-            continuous_states=continuous_states.astype(np.float32),
-            time=time_vector.astype(np.float32),
-        )
-        os.replace(tmp_npz, npz_path)
-    except Exception as exc:
-        payload_status = "corrupt"
-        topology_metrics = {**topology_metrics, "notes": f"npz write failed: {exc}"}
-
-    try:
-        payload = {"state_schema_version": STATE_SCHEMA_VERSION, **node_index_payload}
-        _atomic_write_json(map_path, payload)
-    except Exception:
-        payload_status = payload_status if payload_status != "ok" else "corrupt"
-
-    topology_payload = {
-        "state_schema_version": STATE_SCHEMA_VERSION,
-        "status": payload_status,
-        **topology_metrics,
-        "binary_shape": list(binary_states.shape),
-        "continuous_shape": list(continuous_states.shape),
-    }
-    try:
-        _atomic_write_json(topo_path, topology_payload)
-    except Exception:
-        pass
-
-    return {
-        "per_compartment_npz": str(npz_path),
-        "node_index_map": str(map_path),
-        "topology_summary": str(topo_path),
-        "status": payload_status,
-    }
 
 
 def simulate_compartmental(

@@ -7,6 +7,7 @@ import numpy as np
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.compartmental_sim import load_graph
+from ai_scientist.utils.per_compartment import derive_per_compartment_from_arrays
 from ai_scientist.utils.pathing import resolve_output_path
 
 
@@ -15,9 +16,13 @@ def export_sim_timeseries(
     graph_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     failure_threshold: float = 0.2,
+    write_per_compartment: bool = True,
+    per_compartment_threshold: Optional[float] = None,
+    force_per_compartment: bool = True,
 ) -> Dict[str, Any]:
     """
     Convert a sim.json into failure_matrix.npy, time_vector.npy, and nodes_order.txt.
+    Also emits per_compartment.npz + node_index_map.json + topology_summary.json when requested.
     """
     sim_json_path = BaseTool.resolve_input_path(str(sim_json_path), allow_dir=False)
     with sim_json_path.open() as f:
@@ -91,12 +96,26 @@ def export_sim_timeseries(
         for node in nodes:
             nf.write(f"{node}\n")
 
+    per_compartment_result: Dict[str, Any] = {}
+    if write_per_compartment:
+        per_compartment_result = derive_per_compartment_from_arrays(
+            failure_matrix=failure_matrix,
+            time_vector=t_arr,
+            nodes_order=nodes,
+            output_dir=out_dir,
+            binary_threshold=per_compartment_threshold,
+            allow_mismatch=False,
+            skip_existing=not force_per_compartment,
+            provenance="sim_postprocess",
+        )
+
     return {
         "failure_matrix": str(failure_path),
         "time_vector": str(time_path),
         "nodes_order": str(nodes_path),
         "n_timepoints": int(n_time),
         "n_nodes": int(n_nodes),
+        "per_compartment": per_compartment_result or None,
     }
 
 
@@ -110,7 +129,8 @@ class SimPostprocessTool(BaseTool):
         name: str = "SimPostprocess",
         description: str = (
             "Convert sim.json (with time/E) into failure_matrix.npy, time_vector.npy, and nodes_order.txt. "
-            "Optionally provide graph_path to emit node names; otherwise indices are used."
+            "Optionally provide graph_path to emit node names; otherwise indices are used. "
+            "Also writes per_compartment.npz + node_index_map.json + topology_summary.json for downstream validation."
         ),
     ):
         parameters = [
@@ -118,6 +138,21 @@ class SimPostprocessTool(BaseTool):
             {"name": "output_dir", "type": "str", "description": "Output directory (default: sim folder)."},
             {"name": "graph_path", "type": "str", "description": "Optional graph file to derive node ordering."},
             {"name": "failure_threshold", "type": "float", "description": "Energy threshold for failure (default 0.2)."},
+            {
+                "name": "write_per_compartment",
+                "type": "bool",
+                "description": "Also emit per_compartment.npz/node_index_map/topology_summary (default True).",
+            },
+            {
+                "name": "per_compartment_threshold",
+                "type": "float",
+                "description": "Threshold to binarize non-binary failure matrices (default >0 when needed).",
+            },
+            {
+                "name": "force_per_compartment",
+                "type": "bool",
+                "description": "Overwrite per_compartment artifacts if present (default True).",
+            },
         ]
         super().__init__(name, description, parameters)
 
@@ -128,10 +163,17 @@ class SimPostprocessTool(BaseTool):
         output_dir = kwargs.get("output_dir")
         graph_path = kwargs.get("graph_path")
         failure_threshold = float(kwargs.get("failure_threshold", 0.2))
+        write_per_compartment = bool(kwargs.get("write_per_compartment", True))
+        per_comp_threshold = kwargs.get("per_compartment_threshold")
+        force_per_compartment = bool(kwargs.get("force_per_compartment", True))
+        pct = float(per_comp_threshold) if per_comp_threshold is not None else None
 
         return export_sim_timeseries(
             sim_json_path=sim_json_path,
             graph_path=graph_path,
             output_dir=output_dir,
             failure_threshold=failure_threshold,
+            write_per_compartment=write_per_compartment,
+            per_compartment_threshold=pct,
+            force_per_compartment=force_per_compartment,
         )

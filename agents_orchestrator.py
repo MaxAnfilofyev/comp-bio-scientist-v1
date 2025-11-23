@@ -202,15 +202,44 @@ def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
     return manifest_map
 
 # --- WATCHER: Auto-Scan Logic ---
-def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
+def _scan_and_auto_update_manifest(exp_dir: Path, skip: bool = False) -> List[str]:
     """
     Background Watcher: Scans experiment_results for orphaned files (files not in manifest).
     Adds them with inferred types and 'auto_watcher' annotation.
     Returns list of added filenames.
     """
+    if (
+        skip
+        or os.environ.get("AISC_SKIP_WATCHER", "").strip().lower()
+        in {"1", "true", "yes"}
+    ):
+        # Explicit opt-out to avoid long manifest scans during troubleshooting.
+        return []
     added_files = []
 
     manifest_root = exp_dir / "manifest"
+
+    # Preload manifest entries so we only write new files and avoid slow rewrites.
+    known_paths: set[str] = set()
+    try:
+        existing_entries = manifest_utils.load_entries(base_folder=exp_dir)
+        for entry in existing_entries:
+            raw_path = entry.get("path")
+            if not raw_path:
+                continue
+            p = Path(raw_path)
+            known_paths.add(str(p))
+            try:
+                known_paths.add(str(p.resolve()))
+            except Exception:
+                pass
+            if not p.is_absolute():
+                try:
+                    known_paths.add(str((exp_dir.parent / p).resolve()))
+                except Exception:
+                    pass
+    except Exception:
+        known_paths = set()
 
     for root, _, files in os.walk(exp_dir):
         if manifest_root in Path(root).parents or Path(root) == manifest_root:
@@ -223,6 +252,15 @@ def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
 
             full_path = Path(root) / name
             path_str = str(full_path)
+            resolved_str = None
+            try:
+                resolved_str = str(full_path.resolve())
+            except Exception:
+                resolved_str = None
+
+            # Skip anything already indexed (by stored or resolved path).
+            if path_str in known_paths or (resolved_str and resolved_str in known_paths):
+                continue
 
             # Infer type
             suffix = full_path.suffix.lower()
@@ -247,6 +285,9 @@ def _scan_and_auto_update_manifest(exp_dir: Path) -> List[str]:
             res = manifest_utils.append_manifest_entry(entry, base_folder=exp_dir)
             if not res.get("error"):
                 added_files.append(name)
+                known_paths.add(path_str)
+                if resolved_str:
+                    known_paths.add(resolved_str)
 
     return added_files
 
@@ -785,6 +826,7 @@ def check_project_state(base_folder: str) -> str:
     """
     Reads the project state to see what artifacts exist.
     UPDATED: Automatically scans for orphaned files and updates the manifest.
+    Set env AISC_SKIP_WATCHER=1 or pass skip_watcher=True to skip the manifest scan.
     """
     status_msg = "Folder existed"
     
@@ -803,7 +845,12 @@ def check_project_state(base_folder: str) -> str:
     # --- AUTO-WATCHER TRIGGER ---
     orphans = []
     if os.path.exists(exp_results):
-        orphans = _scan_and_auto_update_manifest(Path(exp_results))
+        # Default to skipping the watcher for speed; can be overridden via env or caller args.
+        orphans = _scan_and_auto_update_manifest(
+            Path(exp_results),
+            skip=os.environ.get("AISC_SKIP_WATCHER", "").strip().lower()
+            not in {"0", "false", "no"},
+        )
     
     artifacts = os.listdir(exp_results) if os.path.exists(exp_results) else []
     has_plots = False

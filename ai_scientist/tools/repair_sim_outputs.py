@@ -13,6 +13,7 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs
 from ai_scientist.tools.sim_postprocess import export_sim_timeseries
 from ai_scientist.utils import manifest as manifest_utils
+from ai_scientist.utils.per_compartment import derive_per_compartment_from_files
 from ai_scientist.utils.repair_helpers import normalize_sim_dir, safe_move_into_sim_dir
 
 
@@ -139,6 +140,25 @@ def _expected_postprocess_paths(sim_path: Path, sim_dir: Path) -> Dict[str, Path
     }
 
 
+def _find_timeseries_paths(sim_dir: Path, sim_path: Path) -> Dict[str, Path]:
+    """
+    Locate failure_matrix/time_vector/nodes_order with fallbacks for unique filenames.
+    """
+    expected = _expected_postprocess_paths(sim_path, sim_dir)
+    paths = expected.copy()
+    fallback_globs = {
+        "failure_matrix": "*failure_matrix*.npy",
+        "time_vector": "*time_vector*.npy",
+        "nodes_order": "nodes_order_*.txt",
+    }
+    for key, pattern in fallback_globs.items():
+        if not paths[key].exists():
+            candidates = sorted(sim_dir.glob(pattern))
+            if candidates:
+                paths[key] = candidates[0]
+    return paths
+
+
 def _append_annotation(entry: Dict[str, Any], annotation: Dict[str, Any]) -> Dict[str, Any]:
     annotations = entry.get("annotations") or []
     if annotation and annotation not in annotations:
@@ -236,6 +256,12 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
         missing_before = [k for k, p in expected.items() if not p.exists()]
         result["missing_before"] = missing_before
 
+        per_comp_paths = {
+            "npz": sim_dir / "per_compartment.npz",
+            "map": sim_dir / "node_index_map.json",
+            "topo": sim_dir / "topology_summary.json",
+        }
+
         post_status: Dict[str, Any] = {}
         if missing_before or force:
             try:
@@ -244,6 +270,7 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
                     graph_path=None,
                     output_dir=sim_dir,
                     failure_threshold=failure_threshold,
+                    write_per_compartment=False,
                 )
                 # Ensure exported arrays live in canonical sim_dir
                 for key in ("failure_matrix", "time_vector", "nodes_order"):
@@ -257,8 +284,23 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
             post_status = {"generated": False, "skipped": "arrays_present"}
         result["postprocess"] = post_status
 
-        missing_after = [k for k, p in expected.items() if not p.exists()]
+        timeseries_paths = _find_timeseries_paths(sim_dir, sim_path)
+        missing_after = [k for k, p in timeseries_paths.items() if not p.exists()]
         result["missing_after"] = missing_after
+        per_comp_status: Dict[str, Any] = {}
+        per_comp_missing = [k for k, p in per_comp_paths.items() if not p.exists()]
+        if per_comp_missing or force:
+            per_comp_status = derive_per_compartment_from_files(
+                failure_matrix_path=timeseries_paths["failure_matrix"],
+                time_vector_path=timeseries_paths["time_vector"],
+                nodes_order_path=timeseries_paths["nodes_order"],
+                output_dir=sim_dir,
+                binary_threshold=None,
+                allow_mismatch=False,
+                skip_existing=not force,
+                provenance="repair_sim_outputs",
+            )
+        result["per_compartment_generated"] = per_comp_status
 
         validation = validate_per_compartment_outputs(sim_dir)
         result["per_compartment_validation"] = validation
@@ -269,6 +311,9 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
         elif missing_after:
             result["status"] = "partial"
             result["reason"] = "outputs_still_missing"
+        elif validation.get("errors"):
+            result["status"] = "partial"
+            result["reason"] = "per_compartment_invalid"
         else:
             result["status"] = "repaired" if missing_before else "unchanged"
     finally:
@@ -342,6 +387,24 @@ def repair_sim_outputs(
 
         expected = _expected_postprocess_paths(sim_path, normalize_sim_dir(sim_path.parent))
         for label, p in expected.items():
+            if p.exists():
+                entry = _ensure_entry(manifest_map, p, entry_type="data")
+                _append_annotation(
+                    entry,
+                    {
+                        "source": "repair_sim_outputs",
+                        "derived_from": sim_path.name,
+                        "kind": label,
+                    },
+                )
+                manifest_map[entry["path"]] = entry
+                updated_entries.append(entry)
+        per_comp_targets = {
+            "per_compartment_npz": normalize_sim_dir(sim_path.parent) / "per_compartment.npz",
+            "node_index_map": normalize_sim_dir(sim_path.parent) / "node_index_map.json",
+            "topology_summary": normalize_sim_dir(sim_path.parent) / "topology_summary.json",
+        }
+        for label, p in per_comp_targets.items():
             if p.exists():
                 entry = _ensure_entry(manifest_map, p, entry_type="data")
                 _append_annotation(
