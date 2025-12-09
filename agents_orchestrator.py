@@ -57,7 +57,7 @@ from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs as validate_per_compartment_outputs_internal
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
-from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file
+from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file, append_run_note
 from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
 from ai_scientist.utils.health import log_missing_or_corrupt
@@ -91,6 +91,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "rel_dir": "experiment_results/graphs",
         "pattern": "{graph_id}_topology.json",
         "description": "Graph topology summary JSON.",
+    },
+    "parameter_set": {
+        "rel_dir": "experiment_results/parameters",
+        "pattern": "{name}_params.json",
+        "description": "Parameter set definition for simulations or models.",
     },
     "biological_model_solution": {
         "rel_dir": "experiment_results/models",
@@ -167,6 +172,21 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "fig_{figure_id}.svg",
         "description": "SVG figure for manuscript.",
     },
+    "phase_portrait": {
+        "rel_dir": "experiment_results/figures",
+        "pattern": "phase_portrait_{label}.png",
+        "description": "Phase portrait plot.",
+    },
+    "energetic_landscape": {
+        "rel_dir": "experiment_results/figures",
+        "pattern": "energy_landscape_{label}.png",
+        "description": "Energetic landscape plot.",
+    },
+    "ac_sweep": {
+        "rel_dir": "experiment_results/simulations/ac_sweep",
+        "pattern": "ac_sweep__{run_id}.csv",
+        "description": "AC sweep results CSV.",
+    },
     "figures_readme": {
         "rel_dir": "experiment_results/figures_for_manuscript",
         "pattern": "README.md",
@@ -188,6 +208,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "description": "Proof-of-work verification note.",
     },
     "writeup_pdf": {
+        "rel_dir": "experiment_results",
+        "pattern": "manuscript.pdf",
+        "description": "Final manuscript PDF.",
+    },
+    "manuscript_pdf": {
         "rel_dir": "experiment_results",
         "pattern": "manuscript.pdf",
         "description": "Final manuscript PDF.",
@@ -1017,6 +1042,14 @@ def manage_project_knowledge(
             return f"Added new {category} entry to project_knowledge.md"
         except Exception as e:
             return f"Error writing to knowledge base: {str(e)}"
+
+
+@function_tool
+def append_run_note_tool(category: str, text: str, actor: str = "system"):
+    """
+    Append a short run note/reflection to experiment_results/run_notes.md (keeps manifest lean).
+    """
+    return append_run_note(category=category, text=text, actor=actor)
         
     return "Invalid action. Use 'add' or 'read'."
 
@@ -2447,6 +2480,17 @@ def summarize_artifact(path: str, max_lines: int = 5):
 
 
 @function_tool
+def list_artifacts_by_kind(kind: str, limit: int = 100):
+    """
+    List artifacts from manifest v2 filtered by kind.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    entries = manifest_utils.load_entries(base_folder=exp_dir, limit=None)
+    filtered = [e for e in entries if e.get("kind") == kind]
+    return {"kind": kind, "paths": [e.get("path") for e in filtered[:limit]], "total": len(filtered)}
+
+
+@function_tool
 def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
     """
     Reserve a canonical artifact path using the artifact type registry (VI-01).
@@ -2481,6 +2525,44 @@ def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: b
     if note:
         result["note"] = note
     return result
+
+
+@function_tool
+def reserve_and_register_artifact(kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True):
+    """
+    Reserve a canonical artifact path using the registry and immediately register it in manifest v2 with provided status.
+    """
+    meta: Dict[str, Any] = {}
+    if meta_json:
+        try:
+            parsed = json.loads(meta_json)
+        except json.JSONDecodeError as exc:
+            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
+        if not isinstance(parsed, dict):
+            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
+        meta = parsed
+
+    reserve = reserve_typed_artifact(kind=kind, meta_json=meta_json, unique=unique)
+    if reserve.get("error"):
+        return reserve
+    path = reserve.get("reserved_path")
+    if not path:
+        return {"error": "failed_to_reserve", "kind": kind}
+    entry = {
+        "path": path,
+        "name": reserve.get("name") or os.path.basename(path),
+        "kind": kind,
+        "created_by": meta.get("created_by") or meta.get("actor") or os.environ.get("AISC_ACTIVE_ROLE") or "unknown",
+        "status": status,
+    }
+    manifest_res = manifest_utils.append_or_update(entry, base_folder=BaseTool.resolve_output_dir(None))
+    if manifest_res.get("error"):
+        reserve["manifest_error"] = manifest_res["error"]
+    else:
+        manifest_idx = manifest_res.get("manifest_index")
+        if manifest_idx:
+            reserve["manifest_index"] = manifest_idx
+    return reserve
 
 
 @function_tool
@@ -2861,8 +2943,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     path_guardrails = (
         "FILE IO POLICY: Every persistent artifact must be reserved via 'reserve_typed_artifact(kind=..., meta_json=...)' using the registry below; do NOT invent filenames or bypass the registry. "
         f"Known kinds: {artifact_catalog}. "
-        "Use 'reserve_output' only for scratch logs or temporary debugging. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
-        "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note."
+        "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status via append_manifest. "
+        "Use 'reserve_output' only for PI/Coder scratch logs; other roles must stay within typed helpers. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
+        "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note. "
+        "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead."
     )
     
     # --- STANDARD REFLECTION PROMPT ---
@@ -2895,15 +2979,17 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Use 'reserve_typed_artifact(kind=\"lit_summary_main\")' for lit summaries and 'reserve_typed_artifact(kind=\"claim_graph_main\")' for claim graphs; do not invent filenames.\n"
             "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (include kind + created_by + status).\n"
             "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
-            f"6. {reflection_instruction}"
+            "6. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"7. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
-            reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2914,6 +3000,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             search_semantic_scholar,
             update_claim_graph,
             manage_project_knowledge,
+            append_run_note_tool,
         ],
         model=model,
         settings=common_settings,
@@ -2942,17 +3029,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "8. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + kind + created_by + status.\n"
             "9. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
             f"10. {proof_of_work_instruction}\n"
-            f"11. {reflection_instruction}"
+            "11. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"12. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             get_artifact_index,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2999,17 +3088,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
             f"7. {proof_of_work_instruction}\n"
-            f"8. {reflection_instruction}"
+            "8. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"9. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             get_artifact_index,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -3054,17 +3145,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + kind + created_by + status) only when it adds value.\n"
             "7. VERIFY PROOF OF WORK: Reject any result artifact that lacks a corresponding `_verification.md` or `_log.md` file explaining how it was derived.\n"
             "8. Reserve any review artifacts/notes with 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
-            f"9. {reflection_instruction}"
+            "9. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"10. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             get_artifact_index,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -3093,17 +3186,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. If interpretation fails, report the error clearly.\n"
             "4. Reserve interpretation outputs via 'reserve_typed_artifact' (interpretation_json or interpretation_md) and use the reserved path with 'write_text_artifact'.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + kind + created_by + status.\n"
-            f"6. {reflection_instruction}"
+            "6. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"7. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             get_artifact_index,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -3134,15 +3229,18 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
             "5. Log code patterns or library constraints to Project Knowledge.\n"
             "6. Reserve any persisted helper outputs via 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
-            f"7. {reflection_instruction}"
+            "7. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"8. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             check_manifest_unique_paths,
@@ -3168,16 +3266,19 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
             "3. Reserve outputs (figures README, manuscript PDF) via 'reserve_typed_artifact' before writing; do not invent filenames.\n"
             "4. Ensure compile success. Debug LaTeX errors autonomously.\n"
-            f"5. {reflection_instruction}"
+            "5. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"6. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
             resolve_path,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
             reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             check_manifest_unique_paths,
@@ -3212,7 +3313,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
             "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
             "7. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
-            "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated."
+            "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated.\n"
+            "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest."
         ),
         model=model,
         tools=[
@@ -3223,11 +3325,13 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             get_run_paths,
             resolve_path,
             list_artifacts,
+            list_artifacts_by_kind,
             read_artifact,
             head_artifact,
             summarize_artifact,
             reserve_output,
             reserve_typed_artifact,
+            reserve_and_register_artifact,
             append_manifest,
             read_manifest,
             check_status,
@@ -3245,6 +3349,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             # New interactive tools
             wait_for_human_review,
             check_user_inbox,
+            append_run_note_tool,
             archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
             modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),

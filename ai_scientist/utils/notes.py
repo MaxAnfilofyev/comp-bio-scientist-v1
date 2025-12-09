@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -9,8 +10,9 @@ try:
     from ai_scientist.utils.pathing import resolve_output_path
 except Exception:
     BaseTool = None
+    resolve_output_path = None
 
-NOTE_NAMES = {"pi_notes.md", "user_inbox.md"}
+NOTE_NAMES = {"pi_notes.md", "user_inbox.md", "run_notes.md"}
 
 
 def _run_root(explicit: Optional[Path] = None) -> Path:
@@ -21,11 +23,12 @@ def _run_root(explicit: Optional[Path] = None) -> Path:
 
 
 def _resolve_output_dir(default: str = "experiment_results") -> Path:
-    try:
-        resolved, _, _ = resolve_output_path(subdir=None, name="", allow_quarantine=False, unique=False)
-        return resolved if resolved.name == default else resolved
-    except Exception:
-        pass
+    if resolve_output_path:
+        try:
+            resolved, _, _ = resolve_output_path(subdir=None, name="", allow_quarantine=False, unique=False)
+            return resolved if resolved.name == default else resolved
+        except Exception:
+            pass
     return BaseTool.resolve_output_dir(None, default=default) if BaseTool else Path(default)
 
 
@@ -126,12 +129,11 @@ def write_note_file(content: str, name: str = "pi_notes.md", append: bool = Fals
         return {"error": str(exc), "path": ""}
     canonical, shadow = ensure_note_files(normalized, run_root)
     try:
+        warning: Optional[str] = None
         if append and canonical.exists():
             existing, backup = _read_text_with_backup(canonical)
             if backup:
                 warning = f"Recovered from backup {backup}"
-            else:
-                warning = None
             if existing and content:
                 if not existing.endswith("\n"):
                     existing += "\n"
@@ -141,7 +143,7 @@ def write_note_file(content: str, name: str = "pi_notes.md", append: bool = Fals
         _atomic_write(canonical, content)
         _ensure_shadow_link(shadow, canonical)
         result = {"path": str(canonical)}
-        if append and "warning" in locals() and warning:
+        if append and warning:
             result["warning"] = warning
         return result
     except Exception as exc:
@@ -151,3 +153,25 @@ def write_note_file(content: str, name: str = "pi_notes.md", append: bool = Fals
             return {"path": str(pending), "warning": f"write failed for canonical {canonical}: {exc}"}
         except Exception as pending_exc:
             return {"error": f"failed to write note: {pending_exc}", "path": str(canonical)}
+
+
+def append_run_note(category: str, text: str, actor: str = "system", run_root: Optional[Path] = None) -> dict:
+    """
+    Append a run note to experiment_results/run_notes.md. Keeps manifest free of reflections.
+    """
+    try:
+        normalized = _normalize_name("run_notes.md")
+    except ValueError as exc:
+        return {"error": str(exc), "path": ""}
+    canonical, shadow = ensure_note_files(normalized, run_root)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    header = f"### [{ts}] {actor} :: {category}\n"
+    body = text.strip() + ("\n" if text.strip() else "")
+    payload = header + body + "\n"
+    try:
+        with open(canonical, "a", encoding="utf-8") as f:
+            f.write(payload)
+        _ensure_shadow_link(shadow, canonical)
+        return {"path": str(canonical), "note_len": len(payload)}
+    except Exception as exc:
+        return {"error": str(exc), "path": str(canonical)}
