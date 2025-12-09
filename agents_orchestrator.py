@@ -1973,29 +1973,197 @@ def head_artifact(path: str, max_lines: int = 20, max_bytes: int = 200_000):
 
 
 @function_tool
-def read_npy_artifact(path: str, max_elements: int = 50_000, max_bytes: int = 5_000_000):
+def read_npy_artifact(
+    path: str,
+    max_elements: int = 100_000,
+    max_bytes: int = 50_000_000,
+    summary_only: bool = True,
+    slice_spec_json: Optional[str] = None,
+    full_data: bool = False,
+):
     """
-    Load a small .npy file safely and return its data or shape.
-    - If file too large (elements or bytes), returns metadata (shape, dtype) instead of full data.
-    - Only supports .npy; refuses pickled objects.
+    Load .npy safely with hard caps and structured errors.
+    Defaults to summary-only (shape/dtype/estimated_bytes + small sample stats).
+    - For full data, set full_data=True or summary_only=False; requests exceeding caps return an error with a suggested sliced call.
+    - Supports an optional slice JSON string: {"axis": int, "start": int, "stop": int, "step": int}.
     """
     p = BaseTool.resolve_input_path(path, allow_dir=False)
+    base: Dict[str, Any] = {"path": str(p)}
     try:
-        size = p.stat().st_size
+        base["size_bytes"] = p.stat().st_size
     except Exception:
-        size = None
-    if size is not None and size > max_bytes:
-        return {"path": str(p), "error": f"file too large ({size} bytes)", "size_bytes": size}
+        pass
+
+    if p.suffix.lower() != ".npy":
+        return {**base, "status": "error", "error_type": "unsupported_type", "message": "read_npy_artifact only supports .npy files"}
+
     try:
         import numpy as np  # type: ignore
-        arr = np.load(p, allow_pickle=False)
-        shape = tuple(arr.shape)
-        dtype = str(arr.dtype)
-        if arr.size > max_elements:
-            return {"path": str(p), "shape": shape, "dtype": dtype, "note": "too large, data omitted"}
-        return {"path": str(p), "shape": shape, "dtype": dtype, "data": arr.tolist()}
     except Exception as exc:
-        return {"path": str(p), "error": str(exc)}
+        return {**base, "status": "error", "error_type": "import_error", "message": f"numpy unavailable: {exc}"}
+
+    try:
+        arr = np.load(p, mmap_mode="r", allow_pickle=False)
+    except FileNotFoundError:
+        return {**base, "status": "error", "error_type": "missing_file", "message": "file not found"}
+    except ValueError as exc:
+        return {**base, "status": "error", "error_type": "parse_error", "message": str(exc)}
+    except Exception as exc:
+        return {**base, "status": "error", "error_type": "load_error", "message": str(exc)}
+
+    try:
+        total_elements = int(np.prod(arr.shape, dtype=np.int64))
+    except Exception:
+        total_elements = int(arr.size)
+    itemsize = int(getattr(arr, "dtype", np.dtype("float64")).itemsize)
+    estimated_bytes = int(total_elements * itemsize)
+
+    meta: Dict[str, Any] = {
+        **base,
+        "status": "ok",
+        "shape": tuple(int(x) for x in arr.shape),
+        "dtype": str(arr.dtype),
+        "elements": total_elements,
+        "estimated_bytes": estimated_bytes,
+    }
+
+    view = arr
+    view_shape = arr.shape
+    view_elements = total_elements
+    view_bytes = estimated_bytes
+    slice_info: Optional[Dict[str, Optional[int]]] = None
+
+    if slice_spec_json:
+        try:
+            import json as _json
+            slice_spec = _json.loads(slice_spec_json)
+        except Exception as exc:
+            return {**meta, "status": "error", "error_type": "invalid_slice", "message": f"failed to parse slice_spec_json: {exc}"}
+    else:
+        slice_spec = None
+
+    if slice_spec is not None:
+        if not isinstance(slice_spec, dict) or "axis" not in slice_spec:
+            return {**meta, "status": "error", "error_type": "invalid_slice", "message": "slice must be a dict with axis/start/stop/step"}
+        try:
+            axis_raw = slice_spec.get("axis", 0)
+            start_raw = slice_spec.get("start", 0)
+            stop_raw = slice_spec.get("stop", None)
+            step_raw = slice_spec.get("step", 1)
+
+            axis = int(0 if axis_raw is None else axis_raw)
+            start = int(0 if start_raw is None else start_raw)
+            stop = None if stop_raw is None else int(stop_raw)
+            step = int(1 if step_raw is None else step_raw)
+        except Exception:
+            return {**meta, "status": "error", "error_type": "invalid_slice", "message": "slice values must be integers"}
+        if axis < 0 or axis >= arr.ndim:
+            return {**meta, "status": "error", "error_type": "invalid_slice", "message": f"axis {axis} out of bounds for array with ndim={arr.ndim}"}
+        indexers: List[Any] = [slice(None)] * arr.ndim
+        indexers[axis] = slice(start, stop, step)
+        try:
+            view = arr[tuple(indexers)]
+            slice_info = {"axis": axis, "start": start, "stop": stop, "step": step}
+            view_shape = tuple(int(x) for x in view.shape)
+            try:
+                view_elements = int(np.prod(view_shape, dtype=np.int64))
+            except Exception:
+                view_elements = int(view.size)
+            view_bytes = int(view_elements * itemsize)
+        except Exception as exc:
+            return {**meta, "status": "error", "error_type": "slice_error", "message": str(exc)}
+
+    # Helper: suggest a smaller slice along axis 0 when data exceeds caps
+    def _suggest_slice() -> Dict[str, Any]:
+        if arr.ndim == 0 or arr.shape[0] == 0:
+            return {"path": str(p), "summary_only": True}
+        try:
+            per_row = int(np.prod(arr.shape[1:], dtype=np.int64)) if arr.ndim > 1 else 1
+            rows = max(1, max_elements // max(1, per_row))
+            stop = min(arr.shape[0], rows)
+        except Exception:
+            stop = min(arr.shape[0], 1)
+        return {
+            "path": str(p),
+            "summary_only": True,
+            "slice": {"axis": 0, "start": 0, "stop": int(stop), "step": 1},
+        }
+
+    # Determine response mode
+    returning_full = full_data or not summary_only
+    size_exceeds_caps = view_elements > max_elements or view_bytes > max_bytes
+
+    if returning_full:
+        if size_exceeds_caps:
+            return {
+                **meta,
+                "status": "error",
+                "error_type": "size_cap",
+                "message": f"refused full_data: slice has {view_elements} elements / {view_bytes} bytes over caps (max_elements={max_elements}, max_bytes={max_bytes})",
+                "slice_shape": view_shape,
+                "view_elements": view_elements,
+                "view_bytes": view_bytes,
+                "suggested_call": _suggest_slice(),
+            }
+        try:
+            data = view.tolist()
+            resp: Dict[str, Any] = {
+                **meta,
+                "status": "ok",
+                "mode": "full",
+                "data": data,
+                "view_elements": view_elements,
+                "view_bytes": view_bytes,
+            }
+            if slice_info:
+                resp["slice"] = slice_info
+            return resp
+        except Exception as exc:
+            return {**meta, "status": "error", "error_type": "convert_error", "message": str(exc)}
+
+    # Summary path (default)
+    sample_cap = min(2048, max_elements)
+    try:
+        flat_view = np.asarray(view).reshape(-1)
+        sample_count = int(min(sample_cap, flat_view.shape[0]))
+        sample = np.asarray(flat_view[:sample_count])
+    except Exception as exc:
+        return {**meta, "status": "error", "error_type": "summary_error", "message": str(exc)}
+
+    summary: Dict[str, Any] = {
+        "mode": "summary",
+        "sample_count": sample_count,
+        "first_values": sample[: min(10, sample_count)].tolist() if sample_count else [],
+    }
+    if sample_count:
+        try:
+            numeric = np.issubdtype(sample.dtype, np.number) or np.issubdtype(sample.dtype, np.bool_)
+            if numeric:
+                sample_numeric = sample.astype(np.float64, copy=False)
+                summary["min"] = float(np.min(sample_numeric))
+                summary["max"] = float(np.max(sample_numeric))
+                summary["mean"] = float(np.mean(sample_numeric))
+                summary["std"] = float(np.std(sample_numeric))
+                try:
+                    summary["percentiles"] = [float(x) for x in np.percentile(sample_numeric, [0, 25, 50, 75, 100])]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    resp: Dict[str, Any] = {
+        **meta,
+        "mode": "summary",
+        "summary": summary,
+        "slice_shape": view_shape,
+        "view_elements": view_elements,
+        "view_bytes": view_bytes,
+    }
+    if slice_info:
+        resp["slice"] = slice_info
+    if size_exceeds_caps:
+        resp["note"] = "data omitted due to caps; request a slice or lower max_elements/max_bytes for full data"
+    return resp
 
 
 @function_tool
