@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 import argparse
+import csv
 import json
 import os
 import os.path as osp
@@ -213,6 +214,16 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "interpretation.md",
         "description": "Markdown interpretation output.",
     },
+    "model_spec_yaml": {
+        "rel_dir": "experiment_results/models",
+        "pattern": "{model_key}_spec.yaml",
+        "description": "Model specification (YAML/JSON-compatible).",
+    },
+    "parameter_source_table": {
+        "rel_dir": "experiment_results/parameters",
+        "pattern": "{model_key}_param_sources.csv",
+        "description": "Parameter provenance ledger.",
+    },
     "verification_note": {
         "rel_dir": "experiment_results",
         "pattern": "{artifact_id}_verification.md",
@@ -313,6 +324,189 @@ def _fill_figure_dir(output_dir: Optional[str]) -> str:
     name = output_dir or "figures"
     path, _, _ = resolve_output_path(subdir=None, name=name, allow_quarantine=False, unique=False)
     return str(path)
+
+
+def _model_metadata_from_key(model_key: str) -> Dict[str, Any]:
+    """
+    Lightweight metadata for built-in biological models to seed spec/ledger files.
+    """
+    description_map = {
+        "cooperation_evolution": "Replicator dynamics for a Prisoner’s Dilemma cooperation model.",
+        "predator_prey": "Lotka-Volterra predator-prey ODEs with four rate parameters.",
+        "epidemiology_sir": "Classic SIR epidemiological ODE model.",
+    }
+    equations_map = {
+        "cooperation_evolution": [
+            "dx_coop/dt = x_coop*(w_coop - avg_w)",
+            "dx_defect/dt = x_defect*(w_defect - avg_w)",
+            "w_coop = x_coop*(benefit-cost) + x_defect*benefit",
+            "w_defect = x_coop*0 + x_defect*benefit",
+        ],
+        "predator_prey": [
+            "dprey/dt = alpha*prey - beta*prey*predator",
+            "dpredator/dt = -gamma*predator + delta*prey*predator",
+        ],
+        "epidemiology_sir": [
+            "dS/dt = -beta*S*I",
+            "dI/dt = beta*S*I - gamma*I",
+            "dR/dt = gamma*I",
+        ],
+    }
+    param_units_map = {
+        "cooperation_evolution": {
+            "benefit": "utility",
+            "cost": "utility",
+            "mutation_rate": "probability",
+        },
+        "predator_prey": {
+            "alpha": "1/time",
+            "beta": "1/(time*population)",
+            "gamma": "1/time",
+            "delta": "1/time",
+        },
+        "epidemiology_sir": {
+            "beta": "1/(time*population)",
+            "gamma": "1/time",
+        },
+    }
+
+    params: Dict[str, Any] = {}
+    initial_conditions: Dict[str, Any] = {}
+    try:
+        from ai_scientist.perform_biological_modeling import create_sample_models
+
+        models = create_sample_models()
+        model = models.get(model_key)
+        if model:
+            params = getattr(model, "parameters", {}) or {}
+            initial_conditions = getattr(model, "initial_conditions", {}) or {}
+    except Exception:
+        # Best-effort; fall back to defaults below.
+        pass
+
+    states = list(initial_conditions.keys()) if initial_conditions else []
+    if model_key == "cooperation_evolution":
+        states = states or ["strategy_0", "strategy_1"]
+    elif model_key == "epidemiology_sir":
+        states = states or ["susceptible", "infected", "recovered"]
+    elif model_key == "predator_prey":
+        states = states or ["prey", "predator"]
+
+    return {
+        "description": description_map.get(model_key, f"Model {model_key} specification."),
+        "equations": equations_map.get(model_key, []),
+        "params": params,
+        "param_units": param_units_map.get(model_key, {}),
+        "initial_conditions": initial_conditions,
+        "states": states,
+    }
+
+
+def _ensure_model_spec_and_params(model_key: str) -> Dict[str, Any]:
+    """
+    Ensure model specification YAML (JSON-compatible) and parameter source ledger exist.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    spec_path, _, _ = resolve_output_path(
+        subdir="models",
+        name=f"{model_key}_spec.yaml",
+        run_root=exp_dir,
+        allow_quarantine=False,
+        unique=False,
+    )
+    param_path, _, _ = resolve_output_path(
+        subdir="parameters",
+        name=f"{model_key}_param_sources.csv",
+        run_root=exp_dir,
+        allow_quarantine=False,
+        unique=False,
+    )
+
+    meta = _model_metadata_from_key(model_key)
+    created_spec = False
+    created_params = False
+
+    if not spec_path.exists():
+        spec_content = {
+            "model_key": model_key,
+            "description": meta.get("description", ""),
+            "state_variables": meta.get("states", []),
+            "equations": meta.get("equations", []),
+            "parameters": meta.get("params", {}),
+            "initial_conditions": meta.get("initial_conditions", {}),
+            "notes": "Auto-generated template; replace with full equations, units, and citation links for each term.",
+        }
+        spec_path.write_text(json.dumps(spec_content, indent=2))
+        created_spec = True
+
+    existing_param_names: set[str] = set()
+    if param_path.exists():
+        try:
+            with param_path.open() as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    name = (row.get("param_name") or "").strip()
+                    if name:
+                        existing_param_names.add(name)
+        except Exception:
+            existing_param_names = set()
+
+    if not param_path.exists():
+        fieldnames = [
+            "param_name",
+            "value",
+            "units",
+            "source_type",
+            "lit_claim_id",
+            "reference_id",
+            "notes",
+        ]
+        param_path.parent.mkdir(parents=True, exist_ok=True)
+        with param_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            existing_param_names = set()
+        created_params = True
+
+    # Append any missing parameters not yet logged
+    params = meta.get("params", {}) or {}
+    units_map = meta.get("param_units", {}) or {}
+    missing_names = [n for n in params.keys() if n not in existing_param_names]
+    if missing_names:
+        fieldnames = [
+            "param_name",
+            "value",
+            "units",
+            "source_type",
+            "lit_claim_id",
+            "reference_id",
+            "notes",
+        ]
+        with param_path.open("a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            # If file was corrupted/missing header, ensure it's written
+            if param_path.stat().st_size == 0:
+                writer.writeheader()
+            for name in missing_names:
+                writer.writerow(
+                    {
+                        "param_name": name,
+                        "value": params.get(name, ""),
+                        "units": units_map.get(name, "dimensionless"),
+                        "source_type": "free_hyperparameter",
+                        "lit_claim_id": "",
+                        "reference_id": "",
+                        "notes": "Auto-generated; update with provenance and set source_type to lit_value/dimensionless_scaling/fit_to_data as appropriate.",
+                    }
+                )
+        created_params = created_params or bool(missing_names)
+
+    return {
+        "spec_path": str(spec_path),
+        "param_path": str(param_path),
+        "created_spec": created_spec,
+        "created_params": created_params,
+    }
 
 
 def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1872,6 +2066,20 @@ def run_biological_model(
     metadata_json: Optional[str] = None,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
+    ledger = _ensure_model_spec_and_params(model_key)
+    if ledger.get("created_spec"):
+        _append_manifest_entry(
+            name=ledger["spec_path"],
+            metadata_json=json.dumps({"kind": "model_spec_yaml", "created_by": "modeler", "status": "ok"}),
+            allow_missing=False,
+        )
+    if ledger.get("created_params"):
+        _append_manifest_entry(
+            name=ledger["param_path"],
+            metadata_json=json.dumps({"kind": "parameter_source_table", "created_by": "modeler", "status": "ok"}),
+            allow_missing=False,
+        )
+
     res = RunBiologicalModelTool().use_tool(
         model_key=model_key,
         time_end=time_end,
@@ -3069,6 +3277,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
+            "3b. Before first sim of a given model_key, generate model_spec_yaml and parameter_source_table (one row per parameter with source_type and lit/claim links). Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
             "5b. Reserve every persistent artifact via 'reserve_typed_artifact' (transport_* kinds for sims, sensitivity_sweep_table/intervention_table for sweeps, verification_note for proof-of-work); do NOT invent filenames or call reserve_output for data assets.\n"
@@ -3190,6 +3399,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
             "2b. Read lit_reference_verification.csv/json; if any reference has found==False or match_score below the reported threshold, mark the draft as unsupported until fixed.\n"
+            "2c. Verify that every simulation/model parameter appearing in figures/tables has a row in parameter_source_table with a declared source_type and (when lit_value) lit_claim_id/reference_id.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
