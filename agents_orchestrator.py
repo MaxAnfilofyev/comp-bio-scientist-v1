@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import os.path as osp
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 import time
@@ -11,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import ast
 import difflib
+from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
@@ -60,6 +62,181 @@ from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
+
+# --- Canonical Artifact Types (VI-01) ---
+# Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
+# Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
+ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
+    "lit_summary_main": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_summary.json",
+        "description": "Primary literature summary.",
+    },
+    "lit_summary_csv": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_summary.csv",
+        "description": "CSV-formatted literature summary.",
+    },
+    "claim_graph_main": {
+        "rel_dir": "experiment_results",
+        "pattern": "claim_graph.json",
+        "description": "Claim graph JSON.",
+    },
+    "graph_pickle": {
+        "rel_dir": "experiment_results/graphs",
+        "pattern": "{graph_id}.gpickle",
+        "description": "Pickled graph for simulations.",
+    },
+    "graph_topology_json": {
+        "rel_dir": "experiment_results/graphs",
+        "pattern": "{graph_id}_topology.json",
+        "description": "Graph topology summary JSON.",
+    },
+    "biological_model_solution": {
+        "rel_dir": "experiment_results/models",
+        "pattern": "{model_key}_solution.json",
+        "description": "Solution from built-in biological model.",
+    },
+    "transport_manifest": {
+        "rel_dir": "experiment_results/simulations/transport_runs",
+        "pattern": "manifest.json",
+        "description": "Transport run manifest index.",
+    },
+    "transport_sim_json": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "{baseline}_sim.json",
+        "description": "Simulation JSON for a transport run.",
+    },
+    "transport_sim_status": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "{baseline}_sim.status.json",
+        "description": "Status JSON for a transport run.",
+    },
+    "transport_failure_matrix": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "{baseline}_sim_failure_matrix.npy",
+        "description": "Failure matrix array.",
+    },
+    "transport_time_vector": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "{baseline}_sim_time_vector.npy",
+        "description": "Time vector array.",
+    },
+    "transport_nodes_order": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "nodes_order_{baseline}_sim.txt",
+        "description": "Node ordering text file.",
+    },
+    "transport_per_compartment": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "per_compartment.npz",
+        "description": "Per-compartment export (binary/continuous/time).",
+    },
+    "transport_node_index_map": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "node_index_map.json",
+        "description": "Node index map for per-compartment outputs.",
+    },
+    "transport_topology_summary": {
+        "rel_dir": "experiment_results/simulations/transport_runs/{baseline}/transport_{transport}/seed_{seed}",
+        "pattern": "topology_summary.json",
+        "description": "Topology summary for per-compartment outputs.",
+    },
+    "sensitivity_sweep_table": {
+        "rel_dir": "experiment_results/simulations/sensitivity_sweep",
+        "pattern": "sweep__{label}.csv",
+        "description": "Sensitivity sweep CSV output.",
+    },
+    "intervention_table": {
+        "rel_dir": "experiment_results/simulations/interventions",
+        "pattern": "intervention__{label}.csv",
+        "description": "Intervention tester CSV output.",
+    },
+    "plot_intermediate": {
+        "rel_dir": "experiment_results/figures",
+        "pattern": "{slug}.png",
+        "description": "Intermediate plot or diagnostic figure.",
+    },
+    "manuscript_figure_png": {
+        "rel_dir": "experiment_results/figures_for_manuscript",
+        "pattern": "fig_{figure_id}.png",
+        "description": "PNG figure for manuscript.",
+    },
+    "manuscript_figure_svg": {
+        "rel_dir": "experiment_results/figures_for_manuscript",
+        "pattern": "fig_{figure_id}.svg",
+        "description": "SVG figure for manuscript.",
+    },
+    "figures_readme": {
+        "rel_dir": "experiment_results/figures_for_manuscript",
+        "pattern": "README.md",
+        "description": "Figures README/index.",
+    },
+    "interpretation_json": {
+        "rel_dir": "experiment_results",
+        "pattern": "interpretation.json",
+        "description": "Structured interpretation output.",
+    },
+    "interpretation_md": {
+        "rel_dir": "experiment_results",
+        "pattern": "interpretation.md",
+        "description": "Markdown interpretation output.",
+    },
+    "verification_note": {
+        "rel_dir": "experiment_results",
+        "pattern": "{artifact_id}_verification.md",
+        "description": "Proof-of-work verification note.",
+    },
+    "writeup_pdf": {
+        "rel_dir": "experiment_results",
+        "pattern": "manuscript.pdf",
+        "description": "Final manuscript PDF.",
+    },
+}
+
+def _pattern_to_regex(pattern: str) -> re.Pattern[str]:
+    regex_parts: List[str] = []
+    formatter = Formatter()
+    for literal, field, _format_spec, _conv in formatter.parse(pattern):
+        if literal:
+            regex_parts.append(re.escape(literal))
+        if field:
+            # allow alphanumerics, dash, underscore, dot in placeholder substitutions
+            regex_parts.append(r"(?P<%s>[A-Za-z0-9._-]+)" % field)
+    regex = "".join(regex_parts)
+    return re.compile(rf"^{regex}$")
+
+def _format_artifact_path(kind: str, meta: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Resolve (rel_dir, name) for an artifact kind using the registry.
+    """
+    entry = ARTIFACT_TYPE_REGISTRY.get(kind)
+    if not entry:
+        raise KeyError(f"Unknown artifact kind '{kind}'")
+    rel_dir_template = entry["rel_dir"]
+    pattern_template = entry["pattern"]
+    try:
+        rel_dir = rel_dir_template.format(**meta)
+    except KeyError as exc:
+        raise KeyError(f"Missing placeholder '{exc.args[0]}' for rel_dir of kind '{kind}'") from exc
+    try:
+        name = pattern_template.format(**meta)
+    except KeyError as exc:
+        raise KeyError(f"Missing placeholder '{exc.args[0]}' for pattern of kind '{kind}'") from exc
+    if "/" in name or name.strip() == "":
+        raise ValueError("Pattern must resolve to a filename without directories.")
+    regex = _pattern_to_regex(pattern_template)
+    if not regex.fullmatch(name):
+        raise ValueError(f"Resolved name '{name}' does not match pattern '{pattern_template}'.")
+    return rel_dir, name
+
+
+def _artifact_kind_catalog() -> str:
+    parts = []
+    for kind in sorted(ARTIFACT_TYPE_REGISTRY.keys()):
+        entry = ARTIFACT_TYPE_REGISTRY[kind]
+        parts.append(f"{kind}: {entry['rel_dir']}/{entry['pattern']}")
+    return "; ".join(parts)
 
 # --- Configuration & Helpers ---
 
@@ -299,7 +476,7 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
         target_path = BaseTool.resolve_input_path(name, allow_dir=True)
     except FileNotFoundError:
         if not allow_missing:
-            return {"error": f"Referenced file not found: {name}. Use reserve_output + append_manifest after creation, or set allow_missing=True if intentional."}
+            return {"error": f"Referenced file not found: {name}. Use reserve_typed_artifact/reserve_output + append_manifest after creation, or set allow_missing=True if intentional."}
         target_path = BaseTool.resolve_output_dir(None) / name
 
     meta: Dict[str, Any] = {}
@@ -2248,10 +2425,48 @@ def summarize_artifact(path: str, max_lines: int = 5):
 
 
 @function_tool
+def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
+    """
+    Reserve a canonical artifact path using the artifact type registry (VI-01).
+    Provide meta_json to fill any {placeholders} in rel_dir/pattern. Errors on unknown kinds.
+    """
+    meta: Dict[str, Any] = {}
+    if meta_json:
+        try:
+            parsed = json.loads(meta_json)
+        except json.JSONDecodeError as exc:
+            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
+        if not isinstance(parsed, dict):
+            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
+        meta = parsed
+    try:
+        rel_dir, name = _format_artifact_path(kind, meta)
+    except Exception as exc:
+        return {"error": str(exc), "kind": kind}
+    try:
+        target, quarantined, note = resolve_output_path(
+            subdir=rel_dir, name=name, allow_quarantine=True, unique=unique
+        )
+    except Exception as exc:
+        return {"error": f"Failed to reserve path: {exc}", "kind": kind}
+    result: Dict[str, Any] = {
+        "reserved_path": str(target),
+        "kind": kind,
+        "name": name,
+        "rel_dir": rel_dir,
+        "quarantined": quarantined,
+    }
+    if note:
+        result["note"] = note
+    return result
+
+
+@function_tool
 def reserve_output(name: str, subdir: Optional[str] = None):
     """
     Return a canonical output path under experiment_results (or a subdir), auto-uniqued and sanitized.
-    Agents must use this instead of manual path joining. Rejects traversal and routes to _unrouted on failure.
+    Prefer reserve_typed_artifact for persistent artifacts; use reserve_output only for scratch logs.
+    Rejects traversal and routes to _unrouted on failure.
     """
     target, quarantined, note = resolve_output_path(subdir=subdir, name=name)
     result = {"reserved_path": str(target), "quarantined": quarantined}
@@ -2583,6 +2798,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
     """
     Constructs the agents with strict context partitioning.
     """
+    artifact_catalog = _artifact_kind_catalog()
     common_settings = ModelSettings(tool_choice="auto")
     role_max_turns = 40  # cap for sub-agent turn depth when invoked as a tool
     # Extract richer context from Idea JSON and format lists for Prompt ingestion
@@ -2603,7 +2819,9 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
         "Assume provided input paths exist; only list_artifacts if path is missing."
     )
     path_guardrails = (
-        "FILE IO POLICY: Build write paths via 'reserve_output' or 'write_text_artifact'; do not hand-roll paths or use '../'. "
+        "FILE IO POLICY: Every persistent artifact must be reserved via 'reserve_typed_artifact(kind=..., meta_json=...)' using the registry below; do NOT invent filenames or bypass the registry. "
+        f"Known kinds: {artifact_catalog}. "
+        "Use 'reserve_output' only for scratch logs or temporary debugging. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
         "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note."
     )
     
@@ -2634,7 +2852,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
-            "3. Output 'lit_summary.json' to experiment_results/.\n"
+            "3. Use 'reserve_typed_artifact(kind=\"lit_summary_main\")' for lit summaries and 'reserve_typed_artifact(kind=\"claim_graph_main\")' for claim graphs; do not invent filenames.\n"
             "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (name + metadata/description).\n"
             "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
             f"6. {reflection_instruction}"
@@ -2645,6 +2863,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             list_artifacts,
             read_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2674,6 +2893,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
+            "5b. Reserve every persistent artifact via 'reserve_typed_artifact' (transport_* kinds for sims, sensitivity_sweep_table/intervention_table for sweeps, verification_note for proof-of-work); do NOT invent filenames or call reserve_output for data assets.\n"
             "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete. Every run must also emit per_compartment.npz + node_index_map.json + topology_summary.json (binary_states, continuous_states/time); validate with validate_per_compartment_outputs before marking status=complete.\n"
             "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
             "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
@@ -2691,6 +2911,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2731,6 +2952,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3b. Use the transport run manifest (read_transport_manifest / resolve_sim_path / update_transport_manifest) to decide what to plot or skip; resolve sim.json via resolve_sim_path instead of guessing paths, and error if the requested transport/seed is missing.\n"
             "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
+            "3e. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
@@ -2745,6 +2967,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2787,7 +3010,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
             "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value.\n"
             "7. VERIFY PROOF OF WORK: Reject any result artifact that lacks a corresponding `_verification.md` or `_log.md` file explaining how it was derived.\n"
-            f"8. {reflection_instruction}"
+            "8. Reserve any review artifacts/notes with 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
+            f"9. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -2797,6 +3021,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2822,7 +3047,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
             "3. If interpretation fails, report the error clearly.\n"
-            "4. Use 'write_text_artifact' to save interpretations (e.g., theory_interpretation.txt) under experiment_results/.\n"
+            "4. Reserve interpretation outputs via 'reserve_typed_artifact' (interpretation_json or interpretation_md) and use the reserved path with 'write_text_artifact'.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description.\n"
             f"6. {reflection_instruction}"
         ),
@@ -2834,6 +3059,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             read_manifest_entry,
@@ -2862,7 +3088,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Prefer small, dependency-light snippets; avoid large libraries or network access.\n"
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
             "5. Log code patterns or library constraints to Project Knowledge.\n"
-            f"6. {reflection_instruction}"
+            "6. Reserve any persisted helper outputs via 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
+            f"7. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -2870,6 +3097,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             list_artifacts,
             read_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             write_text_artifact,
@@ -2892,8 +3120,9 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "Directives:\n"
             "1. Target the 'blank_theoretical_biology_latex' template.\n"
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
-            "3. Ensure compile success. Debug LaTeX errors autonomously.\n"
-            f"4. {reflection_instruction}"
+            "3. Reserve outputs (figures README, manuscript PDF) via 'reserve_typed_artifact' before writing; do not invent filenames.\n"
+            "4. Ensure compile success. Debug LaTeX errors autonomously.\n"
+            f"5. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -2902,6 +3131,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             write_text_artifact,
@@ -2950,6 +3180,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             head_artifact,
             summarize_artifact,
             reserve_output,
+            reserve_typed_artifact,
             append_manifest,
             read_manifest,
             check_status,
