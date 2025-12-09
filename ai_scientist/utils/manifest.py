@@ -112,6 +112,55 @@ def _normalize_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None)
     return normalized
 
 
+def _normalize_v2_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Lean schema for manifest v2: one row per artifact path.
+    Required: path; Optional: name (defaults to basename), kind, created_by, status, created_at, size_bytes.
+    """
+    path = entry.get("path") or entry.get("name")
+    if not path:
+        return None
+    name = os.path.basename(entry.get("name") or path)
+    kind = entry.get("kind") or entry.get("type")
+    created_by = entry.get("created_by") or entry.get("source") or entry.get("actor")
+    status = entry.get("status") or "ok"
+    created_at = entry.get("created_at") or _iso_now()
+    size_bytes = entry.get("size_bytes")
+    if size_bytes is None:
+        try:
+            size_bytes = Path(path).stat().st_size
+        except Exception:
+            size_bytes = None
+    return {
+        "path": path,
+        "name": name,
+        "kind": kind,
+        "created_by": created_by,
+        "status": status,
+        "created_at": created_at,
+        "size_bytes": size_bytes,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
+def unique_path_check(*, base_folder: Optional[str | Path] = None) -> Dict[str, Any]:
+    """
+    Return counts for total vs distinct paths to ensure manifest deduplication.
+    """
+    entries = load_entries(base_folder=base_folder, limit=None)
+    total = len(entries)
+    paths = [str(e.get("path")) for e in entries if e.get("path")]
+    distinct = len(set(paths))
+    dup_paths = []
+    seen: set[str] = set()
+    for p in paths:
+        if p in seen:
+            dup_paths.append(p)
+        else:
+            seen.add(p)
+    return {"total": total, "distinct_paths": distinct, "duplicate_paths": dup_paths}
+
+
 def _load_legacy_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
     if not manifest_path.exists():
         return {}
@@ -290,6 +339,16 @@ def bootstrap_manifest(base_folder: Optional[str | Path] = None, shard_size: int
     return index
 
 
+def _update_shard_meta(shard_meta: Dict[str, Any], entries: List[Dict[str, Any]]) -> None:
+    shard_meta["count"] = len(entries)
+    if entries:
+        shard_meta["ts_min"] = min(e.get("created_at") or e.get("timestamp") or "" for e in entries)
+        shard_meta["ts_max"] = max(e.get("created_at") or e.get("timestamp") or "" for e in entries)
+    else:
+        shard_meta["ts_min"] = None
+        shard_meta["ts_max"] = None
+
+
 def _active_shard(index: Dict[str, Any], manifest_dir: Path, shard_size: int) -> Dict[str, Any]:
     shards = index.get("shards", [])
     if shards:
@@ -311,23 +370,57 @@ def append_manifest_entry(
     dedupe_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Append (or update) a manifest entry into a sharded NDJSON manifest.
+    Legacy append path. Delegates to append_or_update (manifest v2 lean schema).
     """
-    exp_dir, manifest_dir, index_path, quarantine_dir, legacy_path = _manifest_paths(base_folder)
+    return append_or_update(entry, base_folder=base_folder, shard_size=shard_size)
+
+
+def append_or_update(
+    entry: Dict[str, Any],
+    *,
+    base_folder: Optional[str | Path] = None,
+    shard_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Manifest v2: upsert by path with a lean schema (path, name, kind, created_by, created_at, status, size_bytes).
+    Deduplicates across shards to keep one row per artifact.
+    """
+    exp_dir, manifest_dir, index_path, quarantine_dir, _ = _manifest_paths(base_folder)
     index = bootstrap_manifest(base_folder, shard_size or DEFAULT_SHARD_SIZE)
-    key = dedupe_key or entry.get("path") or entry.get("name")
-    norm = _normalize_entry(entry)
+    norm = _normalize_v2_entry(entry)
     if not norm:
         return {"error": "invalid_entry", "entry": entry}
+
+    path_key = norm["path"]
+    shard_sz = int(index.get("shard_size") or shard_size or DEFAULT_SHARD_SIZE)
 
     lock = _acquire_lock(index_path)
     if lock is None:
         return {"error": "manifest_locked"}
     try:
-        shard_sz = int(index.get("shard_size") or shard_size or DEFAULT_SHARD_SIZE)
+        # First, remove any existing entry for this path across all shards.
+        for shard_meta in list(index.get("shards", [])):
+            shard_path = Path(shard_meta.get("path", ""))
+            if not shard_path.exists():
+                continue
+            shard_entries, shard_status, errors = _read_shard(shard_path)
+            if shard_status == "corrupt":
+                quarantine_res = _quarantine_shard(shard_path, quarantine_dir)
+                shard_meta["status"] = "quarantined"
+                _atomic_write_json(
+                    exp_dir / "_health" / "manifest_health.json",
+                    {"errors": errors, "quarantine": quarantine_res, "shard": str(shard_path)},
+                )
+                continue
+            filtered = [e for e in shard_entries if e.get("path") != path_key]
+            if len(filtered) != len(shard_entries):
+                filtered.sort(key=lambda e: e.get("created_at") or e.get("timestamp") or "")
+                _write_shard(shard_path, filtered)
+                _update_shard_meta(shard_meta, filtered)
+
+        # Append/update in the active shard
         shard_meta = _active_shard(index, manifest_dir, shard_sz)
         shard_path = Path(shard_meta["path"])
-
         shard_entries: List[Dict[str, Any]] = []
         shard_status = shard_meta.get("status", "ok")
         if shard_path.exists():
@@ -343,29 +436,23 @@ def append_manifest_entry(
                 shard_path = Path(shard_meta["path"])
                 shard_entries = []
                 shard_status = "ok"
-        deduped = False
-        if key:
-            shard_entries = [e for e in shard_entries if e.get("path") != key]
-            if len(shard_entries) < shard_meta.get("count", 0):
-                deduped = True
+        shard_entries = [e for e in shard_entries if e.get("path") != path_key]
         shard_entries.append(norm)
-        shard_entries.sort(key=lambda e: e.get("timestamp", ""), reverse=False)
+        shard_entries.sort(key=lambda e: e.get("created_at") or e.get("timestamp") or "")
         count, err = _write_shard(shard_path, shard_entries)
         if err:
             return {"error": err, "shard": str(shard_path)}
 
         shard_meta["path"] = str(shard_path)
-        shard_meta["count"] = count
         shard_meta["status"] = shard_status
-        shard_meta["ts_min"] = shard_entries[0].get("timestamp")
-        shard_meta["ts_max"] = shard_entries[-1].get("timestamp")
+        _update_shard_meta(shard_meta, shard_entries)
         index["updated_at"] = _iso_now()
         _atomic_write_json(index_path, index)
         return {
             "manifest_index": str(index_path),
             "shard": str(shard_path),
             "count": count,
-            "deduped": deduped,
+            "deduped": True,
             "schema_version": SCHEMA_VERSION,
         }
     finally:
@@ -375,15 +462,14 @@ def append_manifest_entry(
 def _matches_filters(entry: Dict[str, Any], role: Optional[str], path_glob: Optional[str], since_ts: Optional[datetime]) -> bool:
     if since_ts:
         try:
-            ts = datetime.fromisoformat(entry.get("timestamp", ""))
+            ts = datetime.fromisoformat(entry.get("created_at") or entry.get("timestamp", ""))
             if ts < since_ts:
                 return False
         except Exception:
             pass
     if role:
-        meta = entry.get("metadata") or {}
-        src = str(meta.get("source") or meta.get("actor") or "").lower()
-        if role.lower() not in src and role.lower() not in str(meta).lower():
+        src = str(entry.get("created_by") or "").lower()
+        if role.lower() not in src:
             return False
     if path_glob:
         if not (fnmatch.fnmatch(entry.get("path", ""), path_glob) or fnmatch.fnmatch(entry.get("name", ""), path_glob)):
@@ -446,8 +532,7 @@ def inspect_manifest(
         ext = os.path.splitext(entry.get("name", ""))[1].lower()
         if ext:
             count_by_ext[ext] = count_by_ext.get(ext, 0) + 1
-        meta = entry.get("metadata") or {}
-        src = str(meta.get("source") or meta.get("actor") or "unknown").lower() or "unknown"
+        src = str(entry.get("created_by") or "unknown").lower() or "unknown"
         count_by_role[src] = count_by_role.get(src, 0) + 1
 
         if summary_only and len(samples) < sample_limit:

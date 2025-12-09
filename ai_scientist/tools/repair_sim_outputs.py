@@ -268,7 +268,7 @@ def _process_sim(sim_path: Path, force: bool, failure_threshold: float = 0.2) ->
                 export_result = export_sim_timeseries(
                     sim_json_path=sim_path,
                     graph_path=None,
-                    output_dir=sim_dir,
+                    output_dir=str(sim_dir),
                     failure_threshold=failure_threshold,
                     write_per_compartment=False,
                 )
@@ -419,7 +419,23 @@ def repair_sim_outputs(
                 updated_entries.append(entry)
 
     for entry in updated_entries:
-        manifest_utils.append_manifest_entry(entry, base_folder=exp_dir, dedupe_key=entry.get("path"))
+        path = entry.get("path")
+        if not path:
+            continue
+        try:
+            size_bytes = Path(path).stat().st_size
+        except Exception:
+            size_bytes = None
+        lean_entry = {
+            "path": path,
+            "name": os.path.basename(path),
+            "kind": entry.get("type") or entry.get("kind"),
+            "created_by": "repair_sim_outputs",
+            "status": "ok",
+            "size_bytes": size_bytes,
+            "created_at": datetime.now().isoformat(),
+        }
+        manifest_utils.append_or_update(lean_entry, base_folder=exp_dir)
 
     log_lines = [
         f"manifest: {exp_dir/'manifest'/'manifest_index.json'}",

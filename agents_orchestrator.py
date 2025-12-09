@@ -451,15 +451,21 @@ def _scan_and_auto_update_manifest(exp_dir: Path, skip: bool = False) -> List[st
             elif suffix in [".md", ".txt", ".log"]:
                 etype = "text"
             
-            # Create Entry
+            # Create Entry (manifest v2 lean schema)
+            try:
+                size_bytes = full_path.stat().st_size
+            except Exception:
+                size_bytes = None
             entry = {
                 "name": name,
                 "path": path_str,
-                "type": etype,
-                "annotations": [{"source": "auto_watcher", "note": "Recovered orphaned file"}],
-                "timestamp": datetime.now().isoformat()
+                "kind": etype,
+                "created_by": "auto_watcher",
+                "status": "ok",
+                "size_bytes": size_bytes,
+                "created_at": datetime.now().isoformat(),
             }
-            res = manifest_utils.append_manifest_entry(entry, base_folder=exp_dir)
+            res = manifest_utils.append_or_update(entry, base_folder=exp_dir)
             if not res.get("error"):
                 added_files.append(name)
                 known_paths.add(path_str)
@@ -481,17 +487,33 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
 
     meta: Dict[str, Any] = {}
     if metadata_json:
+        if len(metadata_json) > 400:
+            return {"error": "metadata_json too long; keep kind/created_by/status short", "raw_len": len(metadata_json)}
         try:
-            meta = json.loads(metadata_json)
-        except Exception:
-            meta = {"raw": metadata_json}
+            parsed_meta = json.loads(metadata_json)
+            if isinstance(parsed_meta, dict):
+                meta = parsed_meta
+            else:
+                return {"error": "metadata_json must be a JSON object", "raw": metadata_json}
+        except Exception as exc:
+            return {"error": f"Invalid metadata_json: {exc}", "raw": metadata_json}
+
     path_str = str(target_path)
     name_only = os.path.basename(name or path_str)
-    entry: Dict[str, Any] = {"name": name_only, "path": path_str, "type": meta.get("type"), "annotations": []}
-    annotation = {k: v for k, v in meta.items() if k != "type"}
-    if annotation:
-        entry["annotations"].append(annotation)
-    res = manifest_utils.append_manifest_entry(entry, base_folder=exp_dir, dedupe_key=path_str)
+    try:
+        size_bytes = target_path.stat().st_size
+    except Exception:
+        size_bytes = None
+    entry: Dict[str, Any] = {
+        "name": name_only,
+        "path": path_str,
+        "kind": meta.get("kind") or meta.get("type"),
+        "created_by": meta.get("created_by") or meta.get("source") or meta.get("actor"),
+        "status": meta.get("status") or "ok",
+        "size_bytes": size_bytes,
+        "created_at": meta.get("created_at") or datetime.now().isoformat(),
+    }
+    res = manifest_utils.append_or_update(entry, base_folder=exp_dir)
     if res.get("error"):
         return res
     return {
@@ -2510,6 +2532,7 @@ def check_manifest():
     missing = []
     missing_type = []
     by_name: Dict[str, list[str]] = {}
+    duplicates_by_path: Dict[str, int] = {}
     for entry in entries:
         path = entry.get("path", "")
         try:
@@ -2518,12 +2541,14 @@ def check_manifest():
             exists = False
         if not exists:
             missing.append(path)
-        if not entry.get("type"):
+        if not entry.get("kind"):
             missing_type.append(path)
         name = entry.get("name") or os.path.basename(path or "")
         by_name.setdefault(name, []).append(path)
+        duplicates_by_path[path] = duplicates_by_path.get(path, 0) + 1
 
     duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+    duplicate_paths = [p for p, count in duplicates_by_path.items() if count > 1]
     health_entries: List[Dict[str, Any]] = []
     if missing:
         health_entries.append({"missing_files": missing})
@@ -2531,6 +2556,8 @@ def check_manifest():
         health_entries.append({"missing_type": missing_type})
     if duplicates:
         health_entries.append({"duplicate_names": duplicates})
+    if duplicate_paths:
+        health_entries.append({"duplicate_paths": duplicate_paths})
     if health_entries:
         log_missing_or_corrupt(health_entries)
     return {
@@ -2539,6 +2566,7 @@ def check_manifest():
         "missing_files": missing,
         "missing_type": missing_type,
         "duplicate_names": duplicates,
+        "duplicate_paths": duplicate_paths,
     }
 
 
@@ -2553,6 +2581,18 @@ def read_manifest():
         "summary": data.get("summary", {}),
         "note": "Entries capped at 500; use inspect_manifest for filtered views.",
     }
+
+
+@function_tool
+def check_manifest_unique_paths():
+    """
+    Validate that manifest paths are unique (COUNT(DISTINCT path) == COUNT(*)).
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    result = manifest_utils.unique_path_check(base_folder=exp_dir)
+    ok = result["total"] == result["distinct_paths"]
+    result["ok"] = ok
+    return result
 
 
 def _write_text_artifact_raw(name: str, content: str, subdir: Optional[str] = None, metadata_json: Optional[str] = None) -> Dict[str, Any]:
@@ -2853,7 +2893,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
             "3. Use 'reserve_typed_artifact(kind=\"lit_summary_main\")' for lit summaries and 'reserve_typed_artifact(kind=\"claim_graph_main\")' for claim graphs; do not invent filenames.\n"
-            "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (name + metadata/description).\n"
+            "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (include kind + created_by + status).\n"
             "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
             f"6. {reflection_instruction}"
         ),
@@ -2868,6 +2908,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            check_manifest_unique_paths,
             assemble_lit_data,
             validate_lit_summary,
             search_semantic_scholar,
@@ -2898,7 +2939,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
             "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
             "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
-            "8. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + metadata/description.\n"
+            "8. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + kind + created_by + status.\n"
             "9. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
             f"10. {proof_of_work_instruction}\n"
             f"11. {reflection_instruction}"
@@ -2916,6 +2957,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            check_manifest_unique_paths,
             build_graphs,
             run_biological_model,
             run_comp_sim,
@@ -2954,7 +2996,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
             "3e. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
-            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + metadata/description.\n"
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
             f"7. {proof_of_work_instruction}\n"
             f"8. {reflection_instruction}"
@@ -2972,6 +3014,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            check_manifest_unique_paths,
             scan_transport_manifest,
             read_transport_manifest,
             resolve_baseline_path,
@@ -3008,7 +3051,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
-            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + metadata/description) only when it adds value.\n"
+            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + kind + created_by + status) only when it adds value.\n"
             "7. VERIFY PROOF OF WORK: Reject any result artifact that lacks a corresponding `_verification.md` or `_log.md` file explaining how it was derived.\n"
             "8. Reserve any review artifacts/notes with 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
             f"9. {reflection_instruction}"
@@ -3026,6 +3069,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            check_manifest_unique_paths,
             read_manuscript,
             check_claim_graph,
             run_biological_stats,
@@ -3048,7 +3092,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
             "3. If interpretation fails, report the error clearly.\n"
             "4. Reserve interpretation outputs via 'reserve_typed_artifact' (interpretation_json or interpretation_md) and use the reserved path with 'write_text_artifact'.\n"
-            "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + metadata/description.\n"
+            "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + kind + created_by + status.\n"
             f"6. {reflection_instruction}"
         ),
         tools=[
@@ -3064,6 +3108,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manifest,
             read_manifest_entry,
             check_manifest,
+            check_manifest_unique_paths,
             write_text_artifact,
             write_interpretation_text,
             write_figures_readme,
@@ -3084,7 +3129,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             f"{path_context}\n{path_guardrails}\n"  # INJECT PATHS
             "Directives:\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
-            "2. If you add tools/helpers, document them briefly and log via 'append_manifest'.\n"
+            "2. If you add tools/helpers, document them briefly and log via 'append_manifest' (name + kind + created_by + status).\n"
             "3. Prefer small, dependency-light snippets; avoid large libraries or network access.\n"
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
             "5. Log code patterns or library constraints to Project Knowledge.\n"
@@ -3100,6 +3145,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_typed_artifact,
             append_manifest,
             read_manifest,
+            check_manifest_unique_paths,
             write_text_artifact,
             coder_create_python,
             run_ruff,
@@ -3134,6 +3180,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             reserve_typed_artifact,
             append_manifest,
             read_manifest,
+            check_manifest_unique_paths,
             write_text_artifact,
             write_figures_readme,
             check_status,
@@ -3184,6 +3231,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             append_manifest,
             read_manifest,
             check_status,
+            check_manifest_unique_paths,
             read_note,
             write_pi_notes,
             manage_project_knowledge,
