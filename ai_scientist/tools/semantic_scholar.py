@@ -68,7 +68,8 @@ class SemanticScholarSearchTool(BaseTool):
             params={
                 "query": query,
                 "limit": self.max_results,
-                "fields": "title,authors,venue,year,abstract,citationCount",
+                # 'doi' is returned inside externalIds; requesting it directly triggers 400 on search endpoint.
+                "fields": "title,authors,venue,year,abstract,citationCount,externalIds",
             },
         )
         print(f"Response Status Code: {rsp.status_code}")
@@ -115,14 +116,15 @@ def search_for_papers(query, result_limit=10) -> Union[None, List[Dict]]:
         return None
     
     rsp = requests.get(
-        "https://api.semanticscholar.org/graph/v1/paper/search",
-        headers=headers,
-        params={
-            "query": query,
-            "limit": result_limit,
-            "fields": "title,authors,venue,year,abstract,citationStyles,citationCount",
-        },
-    )
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            headers=headers,
+            params={
+                "query": query,
+                "limit": result_limit,
+                # 'doi' is nested under externalIds; requesting it directly causes API 400.
+                "fields": "title,authors,venue,year,abstract,citationStyles,citationCount,externalIds",
+            },
+        )
     print(f"Response Status Code: {rsp.status_code}")
     print(
         f"Response Content: {rsp.text[:500]}"

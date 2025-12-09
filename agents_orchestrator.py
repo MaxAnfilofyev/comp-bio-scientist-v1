@@ -55,6 +55,7 @@ from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs as validate_per_compartment_outputs_internal
+from ai_scientist.tools.reference_verification import ReferenceVerificationTool
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file, append_run_note
@@ -76,6 +77,16 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "rel_dir": "experiment_results",
         "pattern": "lit_summary.csv",
         "description": "CSV-formatted literature summary.",
+    },
+    "lit_reference_verification_table": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_reference_verification.csv",
+        "description": "Reference verification table (CSV).",
+    },
+    "lit_reference_verification_json": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_reference_verification.json",
+        "description": "Reference verification table (JSON).",
     },
     "claim_graph_main": {
         "rel_dir": "experiment_results",
@@ -1651,22 +1662,57 @@ def assemble_lit_data(
     seed_paths: Optional[List[str]] = None,
     max_results: int = 25,
     use_semantic_scholar: bool = True,
+    run_verification: bool = True,
+    verification_max_results: int = 5,
 ):
     """Searches for literature and creates a lit_summary."""
     if not queries and not seed_paths:
         return "Error: You provided no 'queries' or 'seed_paths'. Please provide specific keywords or paper IDs."
         
-    return LitDataAssemblyTool().use_tool(
+    result = LitDataAssemblyTool().use_tool(
         queries=queries,
         seed_paths=seed_paths,
         max_results=max_results,
         use_semantic_scholar=use_semantic_scholar,
     )
+    if run_verification:
+        try:
+            verify_res = verify_references(
+                lit_path=(result.get("json") if isinstance(result, dict) else None),
+                max_results=verification_max_results,
+            )
+            if isinstance(result, dict):
+                result["reference_verification"] = verify_res
+        except Exception as exc:
+            if isinstance(result, dict):
+                result["reference_verification_error"] = f"Verification failed: {exc}"
+    return result
 
 @function_tool
 def validate_lit_summary(path: str):
     """Validates the structure of the literature summary."""
     return LitSummaryValidatorTool().use_tool(path=path)
+
+
+@function_tool
+def verify_references(
+    lit_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    max_results: int = 5,
+    score_threshold: float = 0.65,
+):
+    """
+    Verify lit_summary entries via Semantic Scholar; writes lit_reference_verification.csv/json.
+    """
+    res = ReferenceVerificationTool().use_tool(
+        lit_path=lit_path,
+        output_dir=output_dir,
+        max_results=max_results,
+        score_threshold=score_threshold,
+    )
+    _append_artifact_from_result(res, "csv", '{"kind":"lit_reference_verification_table","created_by":"archivist"}', allow_missing=False)
+    _append_artifact_from_result(res, "json", '{"kind":"lit_reference_verification_json","created_by":"archivist"}', allow_missing=False)
+    return res
 
 @function_tool
 def run_comp_sim(
@@ -2977,10 +3023,13 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
             "3. Use 'reserve_typed_artifact(kind=\"lit_summary_main\")' for lit summaries and 'reserve_typed_artifact(kind=\"claim_graph_main\")' for claim graphs; do not invent filenames.\n"
-            "4. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (include kind + created_by + status).\n"
-            "5. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
-            "6. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
-            f"7. {reflection_instruction}"
+            "4. Immediately run 'verify_references' on lit_summary to produce lit_reference_verification.csv/json. Treat this as REQUIRED provenance.\n"
+            "5. Reject readiness if more than 20% of references are missing (found==False) or any match_score < 0.5; report FAILURE with counts.\n"
+            "6. If verification repeatedly fails for a venue/source, log a reflection via manage_project_knowledge with the specific venue.\n"
+            "7. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (include kind + created_by + status).\n"
+            "8. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
+            "9. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"10. {reflection_instruction}"
         ),
         tools=[
             get_run_paths,
@@ -2997,6 +3046,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_manifest_unique_paths,
             assemble_lit_data,
             validate_lit_summary,
+            verify_references,
             search_semantic_scholar,
             update_claim_graph,
             manage_project_knowledge,
@@ -3139,6 +3189,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "Directives:\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
+            "2b. Read lit_reference_verification.csv/json; if any reference has found==False or match_score below the reported threshold, mark the draft as unsupported until fixed.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
@@ -3166,6 +3217,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             read_manuscript,
             check_claim_graph,
             run_biological_stats,
+            verify_references,
             write_text_artifact,
             manage_project_knowledge,
         ],
