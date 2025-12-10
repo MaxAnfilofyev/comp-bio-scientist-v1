@@ -50,6 +50,16 @@ Installation usually takes no more than one hour.
 
 During runs, agents write progress summaries to `pi_notes.md` and user feedback to `user_inbox.md`. These files live canonically under `experiment_results/`; the orchestrator maintains root-level symlinks or copies for convenience. Avoid writing them manually—use the orchestrator tools so paths stay consistent across resumes.
 
+### Typed Artifacts & Health Checks
+
+Outputs are routed through typed helpers so agents cannot invent paths. Use `reserve_typed_artifact` / `reserve_and_register_artifact` (preferred) plus `list_artifacts_by_kind` to stay within the canonical registry (figures, sims, lit summaries, parameter sets, etc.). Notes and reflections belong in `run_notes.md` or `project_knowledge.md`, never in the manifest. A manifest health checker is available via:
+
+```bash
+python -m ai_scientist.lab_tools.check_run_health --base-folder <run_root>
+```
+
+It validates registry naming, one-row-per-path manifest entries, missing files, and uncatalogued artifacts (excluding scratch dirs).
+
 ### Output Pathing & Health Reports
 
 All file writes now flow through sanitized helpers (`reserve_output`, `write_text_artifact`, resolver-backed tool wrappers) rather than manual joins. Paths reject traversal, auto-unique on collisions, and fall back to `experiment_results/_unrouted/` if the primary location is unavailable, with a note recorded. Simulation, plotting, graph-building, and lit-assembly tools use the same layer. `check_manifest` also emits a health report under `experiment_results/_health/verification_missing_report_post_run.json` when it detects missing/duplicate entries so runs degrade gracefully instead of halting.
@@ -155,6 +165,10 @@ For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpre
 * Manifest shape: `path` is the key, `name` is just the basename (no directories), annotations hold the descriptive fields, and legacy `metadata` only carries `{"type": ...}` for compatibility—avoid duplicating annotation content there.
 * Robust PI visibility: when sub-agents (Modeler/Analyst/etc.) hit `max_turns` or return sparse text, the orchestrator now surfaces their final message plus a summary of tool calls (`tools_called: ...`) so the PI sees what actually ran.
 * Awareness of plot aggregation (`perform_plotting.py`), modeling/stats utilities (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reader tool, and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
+* Traceability & provenance:
+  * Hypothesis→Experiment→Artifact map is written to `experiment_results/hypothesis_trace.json` (agents can update via `update_hypothesis_trace`; sim/plot helpers accept optional hypothesis/experiment ids).
+  * Metrics: `compute_model_metrics` aggregates sweeps/model outputs into `experiment_results/simulations/{label}_metrics.csv` and `experiment_results/models/{model_key}_metrics.json`, so figures/text can reference named metrics (`critical_transport_est`, `mean_frac_failed`, etc.) instead of raw CSVs.
+  * Manuscript-ready provenance summary: `generate_provenance_summary` compiles literature/model/spec/sim/stats artifacts into `experiment_results/provenance_summary.md`; Reviewer regenerates it if missing.
 
 Typical invocation:
 ```bash
@@ -230,4 +244,3 @@ First, perform the [Generate Research Ideas](#generate-research-ideas) step. Cre
 **What should I do if I have problems accessing the Semantic Scholar API?**
 
 The Semantic Scholar API is used to assess the novelty of generated ideas and to gather citations during the paper write-up phase. If you don't have an API key, encounter rate limits, you may be able to skip these phases.
-

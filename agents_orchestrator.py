@@ -59,8 +59,6 @@ from ai_scientist.tools.per_compartment_validator import validate_per_compartmen
 from ai_scientist.tools.reference_verification import ReferenceVerificationTool
 from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
-# Cached idea for hypothesis trace bootstrapping
-_ACTIVE_IDEA: Optional[Dict[str, Any]] = None
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file, append_run_note
@@ -69,6 +67,8 @@ from ai_scientist.utils.transport_index import index_transport_runs, resolve_tra
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
 
+# Cached idea for hypothesis trace bootstrapping
+_ACTIVE_IDEA: Optional[Dict[str, Any]] = None
 # --- Canonical Artifact Types (VI-01) ---
 # Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
 # Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
@@ -2066,7 +2066,7 @@ def assemble_lit_data(
     )
     if run_verification:
         try:
-            verify_res = verify_references(
+            verify_res = ReferenceVerificationTool().use_tool(
                 lit_path=(result.get("json") if isinstance(result, dict) else None),
                 max_results=verification_max_results,
             )
@@ -2429,7 +2429,7 @@ def run_biological_model(
             )
         if compute_metrics and isinstance(res, dict) and res.get("output_json"):
             try:
-                compute_model_metrics(
+                ComputeModelMetricsTool().use_tool(
                     input_path=res["output_json"],
                     model_key=model_key,
                     label=model_key,
@@ -2477,7 +2477,7 @@ def run_sensitivity_sweep(
             )
         if compute_metrics and isinstance(res, dict) and res.get("output_csv"):
             try:
-                compute_model_metrics(
+                ComputeModelMetricsTool().use_tool(
                     input_path=res["output_csv"],
                     label=Path(res["output_csv"]).stem.replace(".csv", ""),
                 )
@@ -2524,7 +2524,7 @@ def run_intervention_tests(
             )
         if compute_metrics and isinstance(res, dict) and res.get("output_csv"):
             try:
-                compute_model_metrics(
+                ComputeModelMetricsTool().use_tool(
                     input_path=res["output_csv"],
                     label=Path(res["output_csv"]).stem.replace(".csv", ""),
                 )
@@ -3145,12 +3145,7 @@ def list_artifacts_by_kind(kind: str, limit: int = 100):
     return {"kind": kind, "paths": [e.get("path") for e in filtered[:limit]], "total": len(filtered)}
 
 
-@function_tool
-def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
-    """
-    Reserve a canonical artifact path using the artifact type registry (VI-01).
-    Provide meta_json to fill any {placeholders} in rel_dir/pattern. Errors on unknown kinds.
-    """
+def _reserve_typed_artifact_impl(kind: str, meta_json: Optional[str], unique: bool) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
     if meta_json:
         try:
@@ -3183,6 +3178,15 @@ def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: b
 
 
 @function_tool
+def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
+    """
+    Reserve a canonical artifact path using the artifact type registry (VI-01).
+    Provide meta_json to fill any {placeholders} in rel_dir/pattern. Errors on unknown kinds.
+    """
+    return _reserve_typed_artifact_impl(kind=kind, meta_json=meta_json, unique=unique)
+
+
+@function_tool
 def reserve_and_register_artifact(kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True):
     """
     Reserve a canonical artifact path using the registry and immediately register it in manifest v2 with provided status.
@@ -3197,7 +3201,7 @@ def reserve_and_register_artifact(kind: str, meta_json: Optional[str] = None, st
             return {"error": "meta_json must decode to an object/dict.", "kind": kind}
         meta = parsed
 
-    reserve = reserve_typed_artifact(kind=kind, meta_json=meta_json, unique=unique)
+    reserve = _reserve_typed_artifact_impl(kind=kind, meta_json=meta_json, unique=unique)
     if reserve.get("error"):
         return reserve
     path = reserve.get("reserved_path")
