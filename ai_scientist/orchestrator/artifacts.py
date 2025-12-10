@@ -10,6 +10,12 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.manifest import append_or_update, load_entries
 from ai_scientist.utils.pathing import resolve_output_path
 
+from ai_scientist.orchestrator.context_specs import (
+    active_role,
+    ensure_write_permission,
+    record_context_access,
+)
+
 # Canonical artifact registry (VI-01)
 ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
     "lit_summary_main": {
@@ -309,16 +315,25 @@ def _reserve_typed_artifact_impl(
     result["metadata"] = normalized_meta
     if note:
         result["note"] = note
+    record_context_access(active_role(), kind, result["reserved_path"], "write", artifact_id=normalized_meta.get("id"))
     return result
 
 
 def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
+    role = active_role()
+    allowed, reason = ensure_write_permission(kind, role)
+    if not allowed:
+        return {"error": reason, "kind": kind}
     return _reserve_typed_artifact_impl(kind=kind, meta_json=meta_json, unique=unique)
 
 
 def reserve_and_register_artifact(
     kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True
 ):
+    role = active_role()
+    allowed, reason = ensure_write_permission(kind, role)
+    if not allowed:
+        return {"error": reason, "kind": kind}
     parsed_meta, err = _load_meta_dict(meta_json)
     if err:
         return {"error": err, "kind": kind}

@@ -62,6 +62,10 @@ from ai_scientist.orchestrator.context import (
     _fill_figure_dir,
     _fill_output_dir,
 )
+from ai_scientist.orchestrator.context_specs import (
+    active_role,
+    truncate_paths_for_role,
+)
 
 from ai_scientist.orchestrator.hypothesis import (
     _update_hypothesis_trace_with_sim,
@@ -167,13 +171,31 @@ def check_manifest_unique_paths():
 
 @function_tool
 def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
-    from .manifest_service import list_artifacts
-    return list_artifacts(suffix, subdir)
+    from .manifest_service import list_artifacts as _list_artifacts
+    result = _list_artifacts(suffix, subdir)
+    role = active_role()
+    files = result.get("files", []) or []
+    truncated = truncate_paths_for_role(role, files)
+    if len(truncated) < len(files):
+        note = result.get("note", "")
+        extra = "Context view limited by role spec."
+        result["note"] = f"{note + ' ' if note else ''}{extra}"
+    result["files"] = truncated
+    return result
 
 @function_tool
 def list_artifacts_by_kind(kind: str, limit: int = 100):
-    from .manifest_service import list_artifacts_by_kind
-    return list_artifacts_by_kind(kind, limit)
+    from .manifest_service import list_artifacts_by_kind as _list_artifacts_by_kind
+    result = _list_artifacts_by_kind(kind, limit)
+    role = active_role()
+    paths = result.get("paths", []) or []
+    truncated = truncate_paths_for_role(role, paths, kind=kind)
+    if len(truncated) < len(paths):
+        note = result.get("note", "")
+        extra = "Context view limited by role spec."
+        result["note"] = f"{note + ' ' if note else ''}{extra}"
+    result["paths"] = truncated
+    return result
 
 @function_tool
 def get_artifact_index(max_entries: int = 2000):
