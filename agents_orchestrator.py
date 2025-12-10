@@ -3,7 +3,6 @@ import json
 import os
 import os.path as osp
 import re
-import subprocess
 from pathlib import Path
 from datetime import datetime
 import asyncio
@@ -11,10 +10,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import ast
 import difflib
-import hashlib
-import platform
-import sys
-import zipfile
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
@@ -88,7 +83,6 @@ from ai_scientist.orchestrator.hypothesis import (
     update_hypothesis_trace_impl,
     _update_hypothesis_trace_with_sim,
     _update_hypothesis_trace_with_figures,
-    load_hypothesis_trace,
     resolve_lit_summary_path,
     evaluate_lit_ready,
     log_lit_gate_decision,
@@ -107,8 +101,18 @@ from ai_scientist.orchestrator.manuscript_processor import (
     _persist_manuscript_seed,
 )
 
+from ai_scientist.orchestrator.release import (
+    freeze_release as freeze_release_impl,
+    check_release_reproducibility as check_release_reproducibility_impl,
+    generate_reproduction_section as generate_reproduction_section_impl,
+    safe_sha256,
+    load_release_manifest as load_release_manifest_impl,
+)
+
 from ai_scientist.orchestrator.manifest_service import (
-    _normalize_manifest_entry as _normalize_manifest_entry_impl,
+    _append_artifact_from_result,
+    _append_figures_from_result,
+    _append_manifest_entry,
 )
 
 from ai_scientist.orchestrator.transport import (
@@ -210,211 +214,6 @@ def manage_project_knowledge(
 def append_run_note_tool(message: str, actor: str = "") -> str:
     append_run_note(message, actor or "tool")
     return "Note appended"
-
-
-
-
-
-
-
-def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
-    """
-    Backward-compatible manifest loader. Prefers sharded manifest via manifest_utils, and
-    falls back to the legacy file_manifest.json if needed.
-    """
-    try:
-        entries = manifest_utils.load_entries(base_folder=BaseTool.resolve_output_dir(None))
-        manifest_map = {e["path"]: e for e in entries if isinstance(e, dict) and e.get("path")}
-        if manifest_map:
-            return manifest_map
-    except Exception:
-        pass
-
-    if not manifest_path.exists():
-        return {}
-    try:
-        with open(manifest_path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return {}
-
-    manifest_map: Dict[str, Dict[str, Any]] = {}
-    if isinstance(data, dict):
-        for key, val in data.items():
-            if isinstance(val, dict):
-                norm = _normalize_manifest_entry_impl(val, fallback_path=key)
-                if norm:
-                    manifest_map[norm["path"]] = norm
-        return manifest_map
-
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                norm = _normalize_manifest_entry_impl(item)
-                if norm:
-                    manifest_map[norm["path"]] = norm
-    return manifest_map
-
-# --- WATCHER: Auto-Scan Logic ---
-def _scan_and_auto_update_manifest(exp_dir: Path, skip: bool = False) -> List[str]:
-    """
-    Background Watcher: Scans experiment_results for orphaned files (files not in manifest).
-    Adds them with inferred types and 'auto_watcher' annotation.
-    Returns list of added filenames.
-    """
-    if (
-        skip
-        or os.environ.get("AISC_SKIP_WATCHER", "").strip().lower()
-        in {"1", "true", "yes"}
-    ):
-        # Explicit opt-out to avoid long manifest scans during troubleshooting.
-        return []
-    added_files = []
-
-    manifest_root = exp_dir / "manifest"
-
-    # Preload manifest entries so we only write new files and avoid slow rewrites.
-    known_paths: set[str] = set()
-    try:
-        existing_entries = manifest_utils.load_entries(base_folder=exp_dir)
-        for entry in existing_entries:
-            raw_path = entry.get("path")
-            if not raw_path:
-                continue
-            p = Path(raw_path)
-            known_paths.add(str(p))
-            try:
-                known_paths.add(str(p.resolve()))
-            except Exception:
-                pass
-            if not p.is_absolute():
-                try:
-                    known_paths.add(str((exp_dir.parent / p).resolve()))
-                except Exception:
-                    pass
-    except Exception:
-        known_paths = set()
-
-    for root, _, files in os.walk(exp_dir):
-        if manifest_root in Path(root).parents or Path(root) == manifest_root:
-            continue
-        for name in files:
-            if name == "file_manifest.json":
-                continue
-            if Path(root) == manifest_root:
-                continue
-
-            full_path = Path(root) / name
-            path_str = str(full_path)
-            resolved_str = None
-            try:
-                resolved_str = str(full_path.resolve())
-            except Exception:
-                resolved_str = None
-
-            # Skip anything already indexed (by stored or resolved path).
-            if path_str in known_paths or (resolved_str and resolved_str in known_paths):
-                continue
-
-            # Infer type
-            suffix = full_path.suffix.lower()
-            etype = "unknown"
-            if suffix in [".png", ".pdf", ".svg"]:
-                etype = "figure"
-            elif suffix in [".csv", ".json", ".npy", ".npz"]:
-                etype = "data"
-            elif suffix in [".py"]:
-                etype = "code"
-            elif suffix in [".md", ".txt", ".log"]:
-                etype = "text"
-            
-            # Create Entry (manifest v2 lean schema)
-            try:
-                size_bytes = full_path.stat().st_size
-            except Exception:
-                size_bytes = None
-            entry = {
-                "name": name,
-                "path": path_str,
-                "kind": etype,
-                "created_by": "auto_watcher",
-                "status": "ok",
-                "size_bytes": size_bytes,
-                "created_at": datetime.now().isoformat(),
-            }
-            res = manifest_utils.append_or_update(entry, base_folder=exp_dir)
-            if not res.get("error"):
-                added_files.append(name)
-                known_paths.add(path_str)
-                if resolved_str:
-                    known_paths.add(resolved_str)
-
-    return added_files
-
-
-def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
-    exp_dir = BaseTool.resolve_output_dir(None)
-
-    try:
-        target_path = BaseTool.resolve_input_path(name, allow_dir=True)
-    except FileNotFoundError:
-        if not allow_missing:
-            return {"error": f"Referenced file not found: {name}. Use reserve_typed_artifact/reserve_output + append_manifest after creation, or set allow_missing=True if intentional."}
-        target_path = BaseTool.resolve_output_dir(None) / name
-
-    meta: Dict[str, Any] = {}
-    if metadata_json:
-        if len(metadata_json) > 400:
-            return {"error": "metadata_json too long; keep kind/created_by/status short", "raw_len": len(metadata_json)}
-        try:
-            parsed_meta = json.loads(metadata_json)
-            if isinstance(parsed_meta, dict):
-                meta = parsed_meta
-            else:
-                return {"error": "metadata_json must be a JSON object", "raw": metadata_json}
-        except Exception as exc:
-            return {"error": f"Invalid metadata_json: {exc}", "raw": metadata_json}
-
-    path_str = str(target_path)
-    name_only = os.path.basename(name or path_str)
-    try:
-        size_bytes = target_path.stat().st_size
-    except Exception:
-        size_bytes = None
-    entry: Dict[str, Any] = {
-        "name": name_only,
-        "path": path_str,
-        "kind": meta.get("kind") or meta.get("type"),
-        "created_by": meta.get("created_by") or meta.get("source") or meta.get("actor"),
-        "status": meta.get("status") or "ok",
-        "size_bytes": size_bytes,
-        "created_at": meta.get("created_at") or datetime.now().isoformat(),
-    }
-    res = manifest_utils.append_or_update(entry, base_folder=exp_dir)
-    if res.get("error"):
-        return res
-    return {
-        "manifest_index": res.get("manifest_index"),
-        "shard": res.get("shard"),
-        "n_entries": res.get("count"),
-        "deduped": res.get("deduped", False),
-    }
-
-
-def _append_artifact_from_result(result: Any, key: str, metadata_json: Optional[str], allow_missing: bool = True):
-    if not metadata_json or not isinstance(result, dict):
-        return
-    out = result.get(key)
-    if isinstance(out, str):
-        _append_manifest_entry(name=out, metadata_json=metadata_json, allow_missing=allow_missing)
-
-
-def _append_figures_from_result(result: Any, metadata_json: Optional[str]):
-    if not metadata_json or not isinstance(result, dict):
-        return
-    for _, v in result.items():
-        if isinstance(v, str) and v.endswith((".png", ".pdf", ".svg")):
-            _append_manifest_entry(name=v, metadata_json=metadata_json, allow_missing=True)
 
 
 # _bootstrap_note_links is imported from context
@@ -1299,487 +1098,16 @@ def generate_provenance_summary():
     return generate_provenance_summary_impl()
 
 
-def _safe_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _detect_repo_root() -> Path:
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if res.stdout.strip():
-            return Path(res.stdout.strip()).resolve()
-    except Exception:
-        pass
-    return Path.cwd().resolve()
-
-
-def _collect_manifest_artifacts(exp_dir: Path) -> set[Path]:
-    paths: set[Path] = set()
-    try:
-        entries = manifest_utils.load_entries(base_folder=exp_dir, limit=None)
-    except Exception:
-        entries = []
-    for entry in entries:
-        p_str = entry.get("path") or entry.get("name")
-        if not p_str:
-            continue
-        try:
-            p = BaseTool.resolve_input_path(str(p_str), allow_dir=True)
-        except FileNotFoundError:
-            continue
-        try:
-            resolved = p.resolve()
-        except Exception:
-            resolved = p
-        if resolved.is_file():
-            paths.add(resolved)
-    return paths
-
-
-def _collect_paths_from_trace(trace: Dict[str, Any]) -> set[Path]:
-    collected: set[Path] = set()
-
-    def _walk(obj: Any):
-        if isinstance(obj, dict):
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for v in obj:
-                _walk(v)
-        elif isinstance(obj, str):
-            try:
-                p = BaseTool.resolve_input_path(obj, allow_dir=True)
-            except FileNotFoundError:
-                return
-            try:
-                resolved = p.resolve()
-            except Exception:
-                resolved = p
-            if resolved.is_file():
-                collected.add(resolved)
-
-    _walk(trace)
-    return collected
-
-
-def _write_env_manifest(path: Path, tag: str) -> Dict[str, Any]:
-    """
-    Capture environment details (python, OS, dependency snapshot) into a JSON manifest.
-    """
-    repo_root = _detect_repo_root()
-    req_path = repo_root / "requirements.txt"
-    env_yml_path = repo_root / "environment.yml"
-    freeze_output: Optional[str] = None
-    try:
-        res = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        freeze_output = res.stdout.strip()
-    except Exception:
-        freeze_output = None
-
-    manifest: Dict[str, Any] = {
-        "tag": tag,
-        "created_at": datetime.now().isoformat(),
-        "python_version": sys.version,
-        "platform": platform.platform(),
-        "os_uname": list(platform.uname()),
-    }
-    if req_path.exists():
-        manifest["requirements_txt"] = req_path.read_text()
-    if env_yml_path.exists():
-        manifest["environment_yml"] = env_yml_path.read_text()
-    if freeze_output:
-        manifest["pip_freeze"] = freeze_output.splitlines()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2))
-    return manifest
-
-
-def _create_code_archive(repo_root: Path, archive_path: Path, diff_path: Optional[Path]) -> None:
-    """
-    Zip the repository tree while skipping bulky runtime outputs.
-    """
-    skip_dirs = {
-        ".git",
-        "__pycache__",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".venv",
-        "venv",
-        "env",
-        "experiment_results",
-        "experiments",
-        "figures",
-    }
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(repo_root):
-            rel_root = Path(root).relative_to(repo_root)
-            dirs[:] = [d for d in dirs if d not in skip_dirs]
-            if "releases" in rel_root.parts and "experiment_results" in rel_root.parts:
-                continue
-            for name in files:
-                p = Path(root) / name
-                if any(part in skip_dirs for part in p.parts):
-                    continue
-                if not p.is_file():
-                    continue
-                arcname = p.relative_to(repo_root)
-                zf.write(p, arcname)
-        if diff_path and diff_path.exists():
-            zf.write(diff_path, Path("release_meta") / diff_path.name)
-
-
-def _gather_git_state(repo_root: Path, release_root: Path) -> Dict[str, Any]:
-    git_info: Dict[str, Any] = {"commit": None, "dirty": False}
-    status_lines: List[str] = []
-    try:
-        commit_res = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if commit_res.stdout.strip():
-            git_info["commit"] = commit_res.stdout.strip()
-        status_res = subprocess.run(
-            ["git", "-C", str(repo_root), "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if status_res.stdout.strip():
-            git_info["dirty"] = True
-            status_lines = status_res.stdout.strip().splitlines()
-            git_info["status_summary"] = status_lines[:50]
-            diff_chunks: List[str] = []
-            cached_res = subprocess.run(
-                ["git", "-C", str(repo_root), "diff", "--cached"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            worktree_res = subprocess.run(
-                ["git", "-C", str(repo_root), "diff"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            for res in (cached_res, worktree_res):
-                if res.stdout:
-                    diff_chunks.append(res.stdout)
-            if status_lines:
-                diff_chunks.append("# Untracked/dirty summary\n" + "\n".join(status_lines))
-            diff_text = "\n\n".join(diff_chunks).strip()
-            if diff_text:
-                diff_path = release_root / "diff.patch"
-                diff_path.write_text(diff_text)
-                git_info["diff_path"] = str(diff_path)
-        else:
-            git_info["dirty"] = False
-    except Exception as exc:
-        git_info["error"] = str(exc)
-    return git_info
-
-
-def _copy_release_sources(
-    sources: List[Path],
-    release_root: Path,
-    repo_root: Path,
-    artifacts_root: Path,
-    include_large: bool,
-    large_threshold: int,
-    hard_limit: int,
-) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
-    entries: List[Dict[str, Any]] = []
-    missing: List[str] = []
-    skipped: List[Dict[str, Any]] = []
-    seen: set[Path] = set()
-    base_folder = BaseTool.resolve_output_dir(None).parent
-    for src in sources:
-        try:
-            resolved = src.resolve()
-        except Exception:
-            resolved = src
-        if resolved in seen:
-            continue
-        if release_root in resolved.parents or resolved == release_root:
-            continue
-        if not resolved.exists():
-            missing.append(str(src))
-            continue
-        if resolved.is_dir():
-            continue
-        try:
-            size_bytes = resolved.stat().st_size
-        except Exception:
-            size_bytes = None
-        if size_bytes is not None and size_bytes > hard_limit:
-            skipped.append({"path": str(resolved), "reason": "over_hard_limit", "size_bytes": size_bytes})
-            continue
-        if size_bytes is not None and size_bytes > large_threshold and not include_large:
-            skipped.append({"path": str(resolved), "reason": "too_large", "size_bytes": size_bytes})
-            continue
-        try:
-            rel = resolved.relative_to(repo_root)
-        except ValueError:
-            try:
-                rel = resolved.relative_to(base_folder)
-            except Exception:
-                rel = Path(resolved.name)
-        dest = artifacts_root / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(resolved, dest)
-        checksum = _safe_sha256(dest)
-        entries.append(
-            {
-                "path": str(dest.relative_to(release_root)),
-                "source": str(resolved),
-                "size_bytes": size_bytes,
-                "checksum": checksum,
-            }
-        )
-        seen.add(resolved)
-    return entries, missing, skipped
-
-
-def _relative_to_release(path: Path, release_root: Path) -> str:
-    try:
-        return str(path.relative_to(release_root))
-    except ValueError:
-        return path.name
-
-
-def _load_release_manifest(release_root: Path, tag: str) -> Dict[str, Any]:
-    manifest_path = release_root / "release_manifest.json"
-    if not manifest_path.exists():
-        # Try a reserved path in case the registry placed it elsewhere.
-        reserve = _reserve_typed_artifact_impl("release_manifest", json.dumps({"tag": tag}), unique=False)
-        alt_path = reserve.get("reserved_path")
-        if alt_path:
-            manifest_path = Path(alt_path)
-    if not manifest_path.exists():
-        return {"error": "missing_release_manifest", "path": str(manifest_path)}
-    try:
-        data = json.loads(manifest_path.read_text())
-    except Exception as exc:
-        return {"error": f"invalid_release_manifest: {exc}", "path": str(manifest_path)}
-    data["__path"] = str(manifest_path)
-    return data
-
-
-def _verify_release_files(manifest: Dict[str, Any], release_root: Path) -> Tuple[List[str], List[Dict[str, Any]]]:
-    missing: List[str] = []
-    mismatched: List[Dict[str, Any]] = []
-    files = manifest.get("files", []) or []
-    for entry in files:
-        rel = entry.get("path") or entry.get("source")
-        if not rel:
-            continue
-        p = Path(rel)
-        target = p if p.is_absolute() else release_root / p
-        if not target.exists():
-            missing.append(str(target))
-            continue
-        expected = entry.get("checksum")
-        try:
-            actual = _safe_sha256(target)
-        except Exception as exc:
-            mismatched.append({"path": str(target), "expected": expected, "error": str(exc)})
-            continue
-        if expected and actual != expected:
-            mismatched.append({"path": str(target), "expected": expected, "actual": actual})
-    return missing, mismatched
-
-
-def _read_env_manifest(env_path: Path) -> Dict[str, Any]:
-    if not env_path.exists():
-        return {}
-    try:
-        return json.loads(env_path.read_text())
-    except Exception:
-        return {}
-
-
 @function_tool
 def freeze_release(tag: str, description: str = "", include_large_artifacts: bool = False):
     """
     Freeze the current run into experiment_results/releases/{tag}, capturing code, environment, manifest-linked artifacts, and git state.
     """
-    if not tag or not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
-        return {"error": "invalid_tag", "tag": tag}
-
-    exp_dir = BaseTool.resolve_output_dir(None)
-    release_root = exp_dir / "releases" / tag
-    release_root.mkdir(parents=True, exist_ok=True)
-    artifacts_root = release_root / "artifacts"
-    artifacts_root.mkdir(parents=True, exist_ok=True)
-
-    # Ensure provenance summary is up to date.
-    prov_res = cast(Any, generate_provenance_summary)()
-    prov_path = Path(prov_res.get("path", "")) if isinstance(prov_res, dict) else exp_dir / "provenance_summary.md"
-
-    # Gather required sources.
-    base_root = Path(os.environ.get("AISC_BASE_FOLDER", "") or ".").resolve()
-    key_sources = [
-        base_root / "project_knowledge.md",
-        exp_dir / "hypothesis_trace.json",
-        exp_dir / "claim_graph.json",
-        prov_path,
-    ]
-    manifest_sources = _collect_manifest_artifacts(exp_dir)
-    trace = load_hypothesis_trace()
-    hypothesis_sources = _collect_paths_from_trace(trace)
-
-    all_sources: List[Path] = []
-    for p in key_sources:
-        if p not in all_sources:
-            all_sources.append(p)
-    for src in sorted(manifest_sources | hypothesis_sources):
-        all_sources.append(src)
-
-    repo_root = _detect_repo_root()
-    large_threshold = int(os.environ.get("AISC_RELEASE_LARGE_THRESHOLD_MB", "500")) * 1024 * 1024
-    hard_limit = int(os.environ.get("AISC_RELEASE_HARD_LIMIT_MB", "2048")) * 1024 * 1024
-
-    copied_entries, missing, skipped = _copy_release_sources(
-        all_sources,
-        release_root,
-        repo_root,
-        artifacts_root,
-        include_large_artifacts,
-        large_threshold,
-        hard_limit,
+    return freeze_release_impl(
+        tag=tag,
+        description=description,
+        include_large_artifacts=include_large_artifacts,
     )
-
-    git_state = _gather_git_state(repo_root, release_root)
-
-    # Environment manifest
-    env_reserve = _reserve_typed_artifact_impl("env_manifest", json.dumps({"tag": tag}), unique=False)
-    env_path = Path(env_reserve.get("reserved_path") or (release_root / "env_manifest.json"))
-    if not str(env_path).startswith(str(release_root)):
-        env_path = release_root / env_path.name
-    _write_env_manifest(env_path, tag)
-    env_checksum = _safe_sha256(env_path)
-    _append_manifest_entry(
-        name=str(env_path),
-        metadata_json=json.dumps({"kind": "env_manifest", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
-        allow_missing=False,
-    )
-
-    # Code archive
-    code_reserve = _reserve_typed_artifact_impl("code_release_archive", json.dumps({"tag": tag}), unique=False)
-    code_archive_path = Path(code_reserve.get("reserved_path") or (release_root / "code_release.zip"))
-    if not str(code_archive_path).startswith(str(release_root)):
-        code_archive_path = release_root / code_archive_path.name
-    _create_code_archive(repo_root, code_archive_path, Path(git_state.get("diff_path", "")) if git_state.get("diff_path") else None)
-    code_checksum = _safe_sha256(code_archive_path)
-    _append_manifest_entry(
-        name=str(code_archive_path),
-        metadata_json=json.dumps({"kind": "code_release_archive", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
-        allow_missing=False,
-    )
-
-    # Diff patch registration (if present)
-    if git_state.get("diff_path"):
-        _append_manifest_entry(
-            name=str(git_state["diff_path"]),
-            metadata_json=json.dumps({"kind": "release_diff_patch", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
-            allow_missing=False,
-        )
-        copied_entries.append(
-            {
-                "path": _relative_to_release(Path(git_state["diff_path"]), release_root),
-                "source": git_state["diff_path"],
-                "size_bytes": Path(git_state["diff_path"]).stat().st_size if Path(git_state["diff_path"]).exists() else None,
-                "checksum": _safe_sha256(Path(git_state["diff_path"])) if Path(git_state["diff_path"]).exists() else None,
-            }
-        )
-
-    copied_entries.append(
-        {
-            "path": _relative_to_release(code_archive_path, release_root),
-            "source": str(repo_root),
-            "size_bytes": code_archive_path.stat().st_size,
-            "checksum": code_checksum,
-            "kind": "code_release_archive",
-        }
-    )
-    copied_entries.append(
-        {
-            "path": _relative_to_release(env_path, release_root),
-            "source": str(env_path),
-            "size_bytes": env_path.stat().st_size,
-            "checksum": env_checksum,
-            "kind": "env_manifest",
-        }
-    )
-
-    prov_release_path = None
-    if prov_path.exists():
-        for entry in copied_entries:
-            if Path(entry.get("source", "")).resolve() == prov_path.resolve():
-                prov_release_path = entry.get("path")
-                break
-
-    release_manifest_data: Dict[str, Any] = {
-        "tag": tag,
-        "description": description,
-        "created_at": datetime.now().isoformat(),
-        "release_dir": str(release_root),
-        "git": git_state,
-        "provenance_summary_path": prov_release_path or (str(prov_path) if prov_path.exists() else None),
-        "code_archive_path": _relative_to_release(code_archive_path, release_root),
-        "env_manifest_path": _relative_to_release(env_path, release_root),
-        "include_large_artifacts": include_large_artifacts,
-        "skipped": {"missing": missing, "too_large": skipped},
-        "files": copied_entries,
-    }
-
-    release_manifest_reserve = _reserve_typed_artifact_impl("release_manifest", json.dumps({"tag": tag}), unique=False)
-    release_manifest_path = Path(release_manifest_reserve.get("reserved_path") or (release_root / "release_manifest.json"))
-    if not str(release_manifest_path).startswith(str(release_root)):
-        release_manifest_path = release_root / release_manifest_path.name
-    release_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    release_manifest_path.write_text(json.dumps(release_manifest_data, indent=2))
-    release_manifest_checksum = _safe_sha256(release_manifest_path)
-    _append_manifest_entry(
-        name=str(release_manifest_path),
-        metadata_json=json.dumps({"kind": "release_manifest", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
-        allow_missing=False,
-    )
-
-    return {
-        "release_dir": str(release_root),
-        "code_archive": str(code_archive_path),
-        "env_manifest": str(env_path),
-        "release_manifest": str(release_manifest_path),
-        "release_manifest_checksum": release_manifest_checksum,
-        "missing": missing,
-        "skipped": skipped,
-        "git": git_state,
-    }
-
-
-def _select_first(paths: List[Path], suffix: str) -> Optional[Path]:
-    for p in paths:
-        if p.suffix.lower() == suffix.lower():
-            return p
-    return None
 
 
 @function_tool
@@ -1787,141 +1115,7 @@ def check_release_reproducibility(tag: str, quick: bool = True):
     """
     Verify a frozen release bundle: checksum all files listed in release_manifest.json and optionally run a quick repro smoke test.
     """
-    if not tag or not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
-        return {"error": "invalid_tag", "tag": tag}
-
-    exp_dir = BaseTool.resolve_output_dir(None)
-    release_root = exp_dir / "releases" / tag
-    if not release_root.exists():
-        return {"error": "release_not_found", "path": str(release_root)}
-
-    manifest = _load_release_manifest(release_root, tag)
-    if manifest.get("error"):
-        return manifest
-
-    missing, mismatched = _verify_release_files(manifest, release_root)
-
-    quick_steps: List[Dict[str, Any]] = []
-    quick_errors: List[str] = []
-    env_path = release_root / manifest.get("env_manifest_path", "env_manifest.json")
-    env_hash = _safe_sha256(env_path) if env_path.exists() else None
-
-    files = manifest.get("files", []) or []
-    resolved_files: List[Path] = []
-    for entry in files:
-        rel = entry.get("path")
-        if not rel:
-            continue
-        p = Path(rel)
-        resolved_files.append(p if p.is_absolute() else release_root / p)
-
-    if quick:
-        csv_candidate = _select_first(resolved_files, ".csv")
-        if csv_candidate and csv_candidate.exists():
-            try:
-                res = cast(Any, compute_model_metrics)(input_path=str(csv_candidate))
-                quick_steps.append({"step": "compute_model_metrics", "path": str(csv_candidate), "result": res})
-            except Exception as exc:
-                quick_errors.append(f"compute_model_metrics:{exc}")
-        solution_candidate = None
-        for p in resolved_files:
-            if p.name.endswith("_solution.json") and p.exists():
-                solution_candidate = p
-                break
-        if solution_candidate:
-            try:
-                res = cast(Any, run_biological_plotting)(
-                    solution_path=str(solution_candidate),
-                    output_dir=str(release_root / "repro_figures"),
-                    make_phase_portrait=False,
-                )
-                quick_steps.append({"step": "run_biological_plotting", "path": str(solution_candidate), "result": res})
-            except Exception as exc:
-                quick_errors.append(f"run_biological_plotting:{exc}")
-
-    status = "ok"
-    reasons: List[str] = []
-    if missing or mismatched:
-        status = "partial"
-        if mismatched:
-            reasons.append("checksum_mismatch")
-        if missing:
-            reasons.append("missing_files")
-    if quick_errors:
-        status = "partial" if status == "ok" else status
-        reasons.extend(quick_errors)
-
-    summary_lines = [
-        f"# Release Repro Status: {tag}",
-        f"- status: {status}",
-        f"- tag: {tag}",
-        f"- git_commit: {manifest.get('git', {}).get('commit')}",
-        f"- env_checksum: {env_hash}",
-        f"- checked_at: {datetime.now().isoformat()}",
-        f"- missing_files: {len(missing)}",
-        f"- checksum_mismatches: {len(mismatched)}",
-        f"- quick_errors: {quick_errors}",
-    ]
-    report_content = "\n".join(summary_lines)
-    report_reserve = _reserve_typed_artifact_impl("release_repro_status_md", json.dumps({"tag": tag}), unique=False)
-    report_path = Path(report_reserve.get("reserved_path") or (release_root / "repro_status.md"))
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report_content)
-    _append_manifest_entry(
-        name=str(report_path),
-        metadata_json=json.dumps({"kind": "release_repro_status_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": status}),
-        allow_missing=False,
-    )
-
-    if status != "ok":
-        suggestion = "Missing or corrupted release files; consider re-running freeze_release or adding the absent artifacts to the release registry."
-        cast(Any, manage_project_knowledge)(
-            action="add",
-            category="constraint",
-            observation=f"Release {tag} repro check failed: {reasons or (missing or mismatched)}",
-            solution=suggestion,
-            actor=os.environ.get("AISC_ACTIVE_ROLE", "publisher"),
-        )
-
-    return {
-        "status": status,
-        "missing": missing,
-        "mismatched": mismatched,
-        "quick_steps": quick_steps,
-        "quick_errors": quick_errors,
-        "repro_report": str(report_path),
-        "env_checksum": env_hash,
-        "release_manifest": manifest.get("__path"),
-        "reasons": reasons,
-    }
-
-
-def _build_figure_mapping_table(files: List[Dict[str, Any]], release_root: Path) -> str:
-    rows = ["| Figure artifact | Tool/command | Source path |", "| --- | --- | --- |"]
-    for entry in files:
-        rel = entry.get("path")
-        if not rel:
-            continue
-        p = Path(rel)
-        if p.suffix.lower() not in {".png", ".pdf", ".svg"}:
-            continue
-        tool = "run_biological_plotting"
-        name = p.name
-        if "sweep" in name or "intervention" in name:
-            tool = "run_sensitivity_sweep"
-        if "transport" in name:
-            tool = "run_compartmental_sim"
-        rows.append(f"| {name} | {tool} | {rel} |")
-    if len(rows) == 2:
-        rows.append("| (no figures found in release manifest) | - | - |")
-    return "\n".join(rows)
-
-
-def _word_limit(text: str, max_words: int = 400) -> str:
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-    return " ".join(words[:max_words])
+    return check_release_reproducibility_impl(tag=tag, quick=quick)
 
 
 @function_tool
@@ -1929,94 +1123,33 @@ def generate_reproduction_section(tag: str, style: str = "methods_and_supp"):
     """
     Generate manuscript-ready reproduction instructions (methods paragraph + supplementary protocol) for a release tag.
     """
-    if not tag or not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
-        return {"error": "invalid_tag", "tag": tag}
+    result = generate_reproduction_section_impl(tag=tag, style=style)
+    if result.get("error"):
+        return result
 
-    exp_dir = BaseTool.resolve_output_dir(None)
-    release_root = exp_dir / "releases" / tag
-    if not release_root.exists():
-        return {"error": "release_not_found", "path": str(release_root)}
-
-    manifest = _load_release_manifest(release_root, tag)
-    if manifest.get("error"):
-        return manifest
-
-    env_rel = manifest.get("env_manifest_path") or "env_manifest.json"
-    env_path = release_root / env_rel if not Path(env_rel).is_absolute() else Path(env_rel)
-    env_data = _read_env_manifest(env_path)
-    env_hash = _safe_sha256(env_path) if env_path.exists() else None
-    python_version = str(env_data.get("python_version") or "").split()[0] or "3.10"
-    git_commit = manifest.get("git", {}).get("commit", "unknown")
-    doi = manifest.get("doi") or manifest.get("zenodo_doi")
-
-    files = manifest.get("files", []) or []
-    figure_table = _build_figure_mapping_table(files, release_root)
-
-    methods_lines = [
-        f"Code and data for this study are bundled as release `{tag}` (git commit `{git_commit}`) under `experiment_results/releases/{tag}`.",
-        f"Environment details (Python {python_version}) are captured in `env_manifest.json` (checksum {env_hash or 'n/a'}), and the full code snapshot is in `code_release.zip`.",
-    ]
-    if doi:
-        methods_lines.append(f"The archived bundle is available at {doi}.")
-    methods_lines.append(
-        "To reproduce results, install the recorded environment, unpack the code archive, and run the provided tooling for simulations (e.g., `run_compartmental_sim`, `run_sensitivity_sweep`) and analysis (`compute_model_metrics`, `run_biological_plotting`) against the artifacts listed in `release_manifest.json`."
-    )
-    methods_text = _word_limit("\n\n".join(methods_lines), 400)
-
-    env_major_minor = ".".join(python_version.split(".")[:2]) if python_version else "3.10"
-    commands = [
-        f"conda create -n {tag} python={env_major_minor}",
-        f"conda activate {tag}",
-        "unzip code_release.zip -d code_release",
-        "cd code_release",
-        "pip install -r requirements.txt",
-        'export AISC_BASE_FOLDER="$(pwd)/.."',
-        'export AISC_EXP_RESULTS="$AISC_BASE_FOLDER/experiment_results"',
-        '# re-run plotting/statistics against release artifacts',
-        f'python ai_scientist/tools/biological_stats.py --task adjust_pvalues --input "$AISC_EXP_RESULTS/releases/{tag}/artifacts/<stats_table>.csv"',
-        'python perform_plotting.py --base_folder "$AISC_BASE_FOLDER"',
-        '# regenerate manuscript (optional)',
-        'python agents_orchestrator.py --load_manuscript ai_scientist/ideas/manuscript_v3.md --resume --base_folder "$AISC_BASE_FOLDER" --model gpt-5o-mini --max_cycles 5 --skip_lit_gate  # or --load_idea <idea>.json',
-    ]
-    commands_block = "\n".join(commands)
-
-    supp_parts = [
-        f"# Reproduction Protocol for {tag}",
-        "## Setup",
-        "```bash",
-        commands_block,
-        "```",
-        "## Figure/tool mapping",
-        figure_table,
-        "## Notes",
-        "- Use only artifacts present in `release_manifest.json`; avoid referencing external paths.",
-        "- Swap `<idea>.json`/`<stats_table>.csv` for the files provided in the release bundle.",
-    ]
-    supp_text = "\n\n".join(supp_parts)
-
-    subdir = str(Path("releases") / tag)
+    subdir = result.get("subdir")
     methods_res = cast(Any, write_text_artifact)(
         name="reproduction_methods.md",
-        content=methods_text,
+        content=result.get("methods_section_md", ""),
         subdir=subdir,
         metadata_json=json.dumps({"kind": "repro_methods_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
     )
     protocol_res = cast(Any, write_text_artifact)(
         name="reproduction_protocol.md",
-        content=supp_text,
+        content=result.get("supplementary_protocol_md", ""),
         subdir=subdir,
         metadata_json=json.dumps({"kind": "repro_protocol_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
     )
-
     return {
-        "methods_section_md": methods_text,
-        "supplementary_protocol_md": supp_text,
+        "methods_section_md": result.get("methods_section_md"),
+        "supplementary_protocol_md": result.get("supplementary_protocol_md"),
         "methods_path": methods_res.get("path"),
         "protocol_path": protocol_res.get("path"),
-        "env_checksum": env_hash,
-        "git_commit": git_commit,
-        "doi": doi,
+        "env_checksum": result.get("env_checksum"),
+        "git_commit": result.get("git_commit"),
+        "doi": result.get("doi"),
     }
+
 
 @function_tool
 def sim_postprocess(
@@ -2107,7 +1240,7 @@ def run_writeup_task(
     if release_tag:
         exp_dir = BaseTool.resolve_output_dir(None)
         release_root = exp_dir / "releases" / release_tag
-        manifest = _load_release_manifest(release_root, release_tag)
+        manifest = load_release_manifest_impl(release_root, release_tag)
         if not manifest.get("error"):
             release_meta = {
                 "release_tag": release_tag,
@@ -2117,7 +1250,7 @@ def run_writeup_task(
             env_rel = manifest.get("env_manifest_path") or "env_manifest.json"
             env_path = release_root / env_rel if not Path(env_rel).is_absolute() else Path(env_rel)
             if env_path.exists():
-                release_meta["release_env_checksum"] = _safe_sha256(env_path)
+                release_meta["release_env_checksum"] = safe_sha256(env_path)
             code_checksum = None
             for entry in manifest.get("files", []) or []:
                 p = entry.get("path", "")

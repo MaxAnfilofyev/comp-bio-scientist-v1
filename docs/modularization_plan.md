@@ -134,16 +134,16 @@ Move transport manifests, baseline resolution, and run layout:
 Move release bundling, reproducibility, and reproduction text:
 
 #### Functions to move:
-- [_] Low-level helpers: `_safe_sha256`, `_detect_repo_root`, `_collect_manifest_artifacts`, `_collect_paths_from_trace`, `_write_env_manifest`, `_create_code_archive`, `_gather_git_state`, `_copy_release_sources`, `_relative_to_release`, `_load_release_manifest`, `_verify_release_files`, `_read_env_manifest`
-- [_] Template helpers: `_select_first`, `_build_figure_mapping_table`, `_word_limit`
+- [x] Low-level helpers: `_safe_sha256`, `_detect_repo_root`, `_collect_manifest_artifacts`, `_collect_paths_from_trace`, `_write_env_manifest`, `_create_code_archive`, `_gather_git_state`, `_copy_release_sources`, `_relative_to_release`, `_load_release_manifest`, `_verify_release_files`, `_read_env_manifest`
+- [x] Template helpers: `_select_first`, `_build_figure_mapping_table`, `_word_limit`
 
 #### `@function_tool` wrappers to delegate:
-- [_] `freeze_release`
-- [_] `check_release_reproducibility`
-- [_] `generate_reproduction_section`
+- [x] `freeze_release`
+- [x] `check_release_reproducibility`
+- [x] `generate_reproduction_section`
 
 #### Expected dependencies:
-- [_] Will call into `manifest_service` for collection, but keep implementation self-contained
+- [x] Will call into `manifest_service` for collection, but keep implementation self-contained
 
 ---
 
@@ -260,7 +260,7 @@ Update this section as work progresses:
 - Phase 2: ✅ DONE
 - Phase 3: ✅ DONE
 - Phase 4: ✅ DONE
-- Phase 5: ⏳ PENDING
+- Phase 5: ✅ DONE
 - Phase 6: ⏳ PENDING
 - Phase 7: ⏳ PENDING
 - Phase 8: ⏳ PENDING
