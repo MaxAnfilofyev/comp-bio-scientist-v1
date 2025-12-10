@@ -258,6 +258,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "{label}_metrics.csv",
         "description": "Aggregated metrics for parameter sweeps or batches.",
     },
+    "provenance_summary_md": {
+        "rel_dir": "experiment_results",
+        "pattern": "provenance_summary.md",
+        "description": "Manuscript-ready provenance summary (literature, models, sims, stats).",
+    },
 }
 
 def _pattern_to_regex(pattern: str) -> re.Pattern[str]:
@@ -2209,6 +2214,75 @@ def compute_model_metrics(
             )
     return res
 
+
+def _collect_provenance_sections() -> Dict[str, Any]:
+    """
+    Gather manifest-derived provenance snippets for reviewer/publisher to summarize.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    sections: Dict[str, Any] = {
+        "literature": [],
+        "models": [],
+        "simulations": [],
+        "stats": [],
+    }
+    try:
+        manifest = manifest_utils.inspect_manifest(base_folder=exp_dir, summary_only=False, limit=5000).get("entries", [])
+    except Exception:
+        manifest = []
+    for entry in manifest:
+        name = entry.get("name", "")
+        path = entry.get("path", "")
+        kind = (entry.get("kind") or entry.get("type") or "").lower()
+        if "lit_summary" in name or "lit_summary" in kind or "lit_reference_verification" in name:
+            sections["literature"].append(path or name)
+        if "model_spec" in kind or name.endswith("_spec.yaml"):
+            sections["models"].append(path or name)
+        if "model_metrics" in kind or name.endswith("_metrics.json"):
+            sections["models"].append(path or name)
+        if "parameters" in path and "param_sources" in name:
+            sections["models"].append(path or name)
+        if "sweep" in path or "transport_runs" in path or "sim.json" in name or "intervention" in name:
+            sections["simulations"].append(path or name)
+        if "metrics" in name or "stats" in kind:
+            sections["stats"].append(path or name)
+    return sections
+
+
+def _render_provenance_markdown(sections: Dict[str, Any]) -> str:
+    def fmt_section(title: str, items: List[str]) -> str:
+        if not items:
+            return f"## {title}\n- Missing or not generated.\n"
+        lines = "\n".join(f"- {i}" for i in sorted(set(items)))
+        return f"## {title}\n{lines}\n"
+
+    parts = [
+        "# Provenance Summary\n",
+        fmt_section("Literature Sources", sections.get("literature", [])),
+        fmt_section("Model Definitions", sections.get("models", [])),
+        fmt_section("Simulation Protocols", sections.get("simulations", [])),
+        fmt_section("Statistical Analyses", sections.get("stats", [])),
+    ]
+    return "\n".join(parts)
+
+
+@function_tool
+def generate_provenance_summary():
+    """
+    Aggregate provenance from manifest and write experiment_results/provenance_summary.md.
+    """
+    sections = _collect_provenance_sections()
+    content = _render_provenance_markdown(sections)
+    exp_dir = BaseTool.resolve_output_dir(None)
+    out_path = exp_dir / "provenance_summary.md"
+    out_path.write_text(content)
+    _append_manifest_entry(
+        name=str(out_path),
+        metadata_json=json.dumps({"kind": "provenance_summary_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "reviewer"), "status": "ok"}),
+        allow_missing=False,
+    )
+    return {"path": str(out_path), "sections": sections}
+
 @function_tool
 def sim_postprocess(
     sim_json_path: str,
@@ -3679,6 +3753,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
+            "7. When plots are ready, confirm provenance_summary.md exists or ask Reviewer to generate it.\n"
             f"7. {proof_of_work_instruction}\n"
             "8. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
             f"9. {reflection_instruction}"
@@ -3737,6 +3812,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2c. Verify that every simulation/model parameter appearing in figures/tables has a row in parameter_source_table with a declared source_type and (when lit_value) lit_claim_id/reference_id.\n"
             "2d. Check hypothesis_trace.json: any hypothesis marked 'supported' must list sim_runs and figures that exist on disk; flag gaps.\n"
             "2e. Ensure metrics artifacts exist for referenced sweeps/models (sweep_metrics_csv or model_metrics_json). If missing, flag and request compute_model_metrics.\n"
+            "2f. Generate provenance_summary.md via 'generate_provenance_summary'; if major inputs (lit_summary, model_spec, sims) are missing, flag the section and request fixes.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
@@ -3767,6 +3843,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             verify_references,
             compute_model_metrics,
             update_hypothesis_trace,
+            generate_provenance_summary,
             write_text_artifact,
             manage_project_knowledge,
         ],
@@ -3949,6 +4026,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             mirror_artifacts,
             write_text_artifact,  # Added this tool to allow PI to write plans directly
             update_hypothesis_trace,
+            generate_provenance_summary,
             # New interactive tools
             wait_for_human_review,
             check_user_inbox,
