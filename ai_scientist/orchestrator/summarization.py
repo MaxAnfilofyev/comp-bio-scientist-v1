@@ -112,3 +112,69 @@ def _build_summary_text(module: str, entries: List[Dict[str, Any]], last_cutoff:
     lines.append("## Key takeaways")
     lines.append(f"- {len(entries)} new entries consolidated into this memo.")
     return "\n".join(lines)
+
+
+INTEGRATION_MEMO_KIND = "integration_memo_md"
+
+
+def _entry_timestamp(entry: Dict[str, Any]) -> Optional[str]:
+    return _normalize_timestamp(entry)
+
+
+def latest_module_summary(module: str, base_folder: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    exp_dir = BaseTool.resolve_output_dir(None) if base_folder is None else base_folder
+    entries = load_entries(base_folder=exp_dir, limit=None)
+    module_summaries = [
+        e
+        for e in entries
+        if e.get("kind") == INTEGRATION_MEMO_KIND and _entry_module(e) == module and e.get("status") == "canonical"
+    ]
+    if not module_summaries:
+        return None
+    sorted_summaries = _sorted_by_timestamp(module_summaries)
+    return sorted_summaries[-1]
+
+
+def latest_module_artifact_timestamp(module: str, base_folder: Optional[str] = None) -> Optional[str]:
+    exp_dir = BaseTool.resolve_output_dir(None) if base_folder is None else base_folder
+    entries = load_entries(base_folder=exp_dir, limit=None)
+    module_entries = [
+        e
+        for e in entries
+        if _entry_module(e) == module and e.get("kind") != INTEGRATION_MEMO_KIND
+    ]
+    if not module_entries:
+        return None
+    timestamps = [_normalize_timestamp(entry) for entry in module_entries]
+    timestamps = [ts for ts in timestamps if ts]
+    return max(timestamps, default=None)
+
+
+def ensure_module_summary_current(
+    module: str, base_folder: Optional[str] = None
+) -> Dict[str, Any]:
+    summary = latest_module_summary(module, base_folder=base_folder)
+    if not summary:
+        return {
+            "status": "missing",
+            "message": f"No canonical integration memo found for module '{module}'.",
+        }
+    summarized_up_to = (
+        summary.get("metadata", {}).get("summarized_up_to") or _normalize_timestamp(summary)
+    )
+    latest_artifact_ts = latest_module_artifact_timestamp(module, base_folder=base_folder)
+    if latest_artifact_ts and summarized_up_to and latest_artifact_ts > summarized_up_to:
+        return {
+            "status": "stale",
+            "message": (
+                f"Module '{module}' has new artifacts (latest at {latest_artifact_ts}) "
+                f"after the integration memo (summarized up to {summarized_up_to})."
+            ),
+            "summary": summary,
+            "latest_artifact": latest_artifact_ts,
+        }
+    return {
+        "status": "ok",
+        "message": f"Canonical summary for module '{module}' is current as of {summarized_up_to}.",
+        "summary": summary,
+    }

@@ -17,6 +17,7 @@ from ai_scientist.orchestrator.artifacts import _artifact_kind_catalog
 from ai_scientist.orchestrator.context_specs import (
     format_context_spec_for_prompt,
     get_context_view_spec,
+    get_module_for_role,
 )
 from ai_scientist.orchestrator.tool_wrappers import (
     append_manifest,
@@ -72,6 +73,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     scan_transport_manifest,
     sim_postprocess,
     summarize_artifact,
+    ensure_module_summary,
     update_claim_graph,
     update_hypothesis_trace,
     update_transport_manifest,
@@ -206,7 +208,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status via append_manifest. "
         "Use 'reserve_output' only for PI/Coder scratch logs; other roles must stay within typed helpers. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
         "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note. "
-        "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead."
+        "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead. "
+        "Prefer 'summarize_artifact' to collect condensed views and call 'ensure_module_summary' for the relevant module before requesting full content."
     )
     metadata_reminder = (
         "METADATA REMINDER: When calling 'reserve_typed_artifact' or 'reserve_and_register_artifact', pass 'meta_json' including "
@@ -218,6 +221,17 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             raise ValueError(f"Missing context view spec for role: {role_name}")
         return format_context_spec_for_prompt(spec)
 
+    def _summary_advisory(role_name: str) -> str:
+        module = get_module_for_role(role_name)
+        base_text = (
+            "SUMMARY STRATEGY: Use 'summarize_artifact' to gather condensed context first and prefer the resulting summary."
+        )
+        if module:
+            base_text += (
+                f" Before ingesting raw content for {role_name}, verify the latest module memo via "
+                f"'ensure_module_summary(module=\"{module}\")'. Proceed with full content only when the spec explicitly needs it."
+            )
+        return base_text
     reflection_instruction = (
         "SELF-REFLECTION: When finished (or if stuck), ask: 'What missing tool or knowledge would have made this trivial?' "
         "If you have a concrete, new insight, log it via manage_project_knowledge(action='add', category='reflection', "
@@ -238,7 +252,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"Goal: Verify novelty of '{title}' and map claims to citations.\n"
             f"Context: {abstract}\n"
             f"Related Work to Consider: {related_work}\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Archivist')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n"
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
@@ -283,7 +297,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"Goal: Execute simulations for '{title}'.\n"
             f"Hypothesis: {hypothesis}\n"
             f"Experimental Plan:\n{experiments_plan}\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Modeler')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Modeler')}\n{_summary_advisory('Modeler')}\n"
             "Directives:\n"
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
@@ -347,7 +361,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Analyst')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Analyst')}\n{_summary_advisory('Analyst')}\n"
             "Directives:\n"
             "1. Read data from provided input paths. Do NOT list files to find them; assume the path is correct.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
@@ -410,7 +424,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Holistic Reviewer.\n"
             "Goal: Identify logical gaps and structural flaws.\n"
             f"Risk Factors & Limitations to Check:\n{risk_factors}\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Reviewer')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Reviewer')}\n{_summary_advisory('Reviewer')}\n"
             "Directives:\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
@@ -462,7 +476,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Mathematical-Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Interpreter')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Interpreter')}\n{_summary_advisory('Interpreter')}\n"
             "Directives:\n"
             "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
@@ -503,7 +517,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Utility Engineer.\n"
             "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Coder')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Coder')}\n{_summary_advisory('Coder')}\n"
             "Directives:\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
             "2. If you add tools/helpers, document them briefly and log via 'append_manifest' (name + kind + created_by + status).\n"
@@ -541,7 +555,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Production Editor.\n"
             "Goal: Compile final PDF.\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Publisher')}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Publisher')}\n{_summary_advisory('Publisher')}\n"
             "Directives:\n"
             "1. Target the 'blank_theoretical_biology_latex' template.\n"
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
@@ -587,6 +601,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
             "3b. Maintain hypothesis_trace.json: when drafting the plan, ensure every idea experiment is mapped to a hypothesis/experiment id (H*, E*) in hypothesis_trace.json (skeleton allowed). Update as new experiments/figures/sim runs become planned.\n"
             "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
+            "   - Before delegating to a module, call 'ensure_module_summary' with the module name from the context spec (e.g., 'modeling', 'analysis', 'writeup'). If it reports 'missing' or 'stale', wait for the integration memo to materialize or re-run the summarizer before proceeding.\n"
             "   - Before any modeling/simulation, run 'check_lit_ready' (defaults: confirmed refs >=70%, <=3 unverified). If it returns not_ready, stop and fix lit/references or pass --skip_lit_gate explicitly.\n"
             "   - Before running built-in models, ensure 'check_model_provenance' passes (no missing params or free_hyperparameter rows). If enforcement is intentionally disabled, log the failure pattern first.\n"
             "   - Missing Lit Review -> Archivist\n"
@@ -636,6 +651,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             wait_for_human_review,
             check_user_inbox,
             append_run_note_tool,
+            ensure_module_summary,
             archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
             modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),

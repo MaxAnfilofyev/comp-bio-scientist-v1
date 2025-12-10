@@ -21,6 +21,7 @@ class ContextViewSpec:
     summary_preferred: bool
     summary_limit: int
     description: str = ""
+    module_name: str = "general"
 
     def allows_read(self, kind: Optional[str]) -> bool:
         if not kind:
@@ -55,7 +56,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=6,
         summary_preferred=True,
         summary_limit=3,
-        description="Focus on paper notes, lit_summary, and the claim graph."
+        description="Focus on paper notes, lit_summary, and the claim graph.",
+        module_name="literature"
     ),
     "Modeler": ContextViewSpec(
         role="Modeler",
@@ -93,7 +95,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=14,
         summary_preferred=False,
         summary_limit=0,
-        description="Read transport manifests and graph specs; reserve transport outputs and sweep tables."
+        description="Read transport manifests and graph specs; reserve transport outputs and sweep tables.",
+        module_name="modeling"
     ),
     "Analyst": ContextViewSpec(
         role="Analyst",
@@ -120,7 +123,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=10,
         summary_preferred=True,
         summary_limit=5,
-        description="Consume validated sim outputs and metrics; produce manuscript figures."
+        description="Consume validated sim outputs and metrics; produce manuscript figures.",
+        module_name="analysis"
     ),
     "Reviewer": ContextViewSpec(
         role="Reviewer",
@@ -140,7 +144,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=12,
         summary_preferred=True,
         summary_limit=4,
-        description="Survey manuscripts, provenance, claim graphs, and hypothesis traces to flag gaps."
+        description="Survey manuscripts, provenance, claim graphs, and hypothesis traces to flag gaps.",
+        module_name="review"
     ),
     "Interpreter": ContextViewSpec(
         role="Interpreter",
@@ -158,7 +163,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=8,
         summary_preferred=True,
         summary_limit=4,
-        description="Produce theoretical interpretations from summaries and idea text."
+        description="Produce theoretical interpretations from summaries and idea text.",
+        module_name="interpretation"
     ),
     "Coder": ContextViewSpec(
         role="Coder",
@@ -167,7 +173,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=20,
         summary_preferred=False,
         summary_limit=0,
-        description="Full read/write scope limited by PI oversight."
+        description="Full read/write scope limited by PI oversight.",
+        module_name="plumbing"
     ),
     "Publisher": ContextViewSpec(
         role="Publisher",
@@ -186,7 +193,8 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=25,
         summary_preferred=False,
         summary_limit=0,
-        description="Generate final manuscript PDF and release artifacts."
+        description="Generate final manuscript PDF and release artifacts.",
+        module_name="writeup"
     ),
     "Principal Investigator": ContextViewSpec(
         role="Principal Investigator",
@@ -195,13 +203,21 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
         max_artifacts=30,
         summary_preferred=True,
         summary_limit=8,
-        description="Orchestrate the project with overview access to artifacts and summaries."
+        description="Orchestrate the project with overview access to artifacts and summaries.",
+        module_name="oversight"
     ),
 }
 
 
 def get_context_view_spec(role: str) -> Optional[ContextViewSpec]:
     return ROLE_CONTEXT_SPECS.get(role)
+
+
+def get_module_for_role(role: str) -> Optional[str]:
+    spec = get_context_view_spec(role)
+    if spec is None:
+        return None
+    return spec.module_name
 
 
 def format_context_spec_for_prompt(spec: ContextViewSpec) -> str:

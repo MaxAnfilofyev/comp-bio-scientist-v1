@@ -59,6 +59,8 @@ from ai_scientist.orchestrator.artifacts import (
     reserve_and_register_artifact as _reserve_and_register_impl,
 )
 
+from ai_scientist.orchestrator.summarization import ensure_module_summary_current
+
 from ai_scientist.orchestrator.context import (
     _fill_figure_dir,
     _fill_output_dir,
@@ -197,6 +199,12 @@ def list_artifacts_by_kind(kind: str, limit: int = 100):
         result["note"] = f"{note + ' ' if note else ''}{extra}"
     result["paths"] = truncated
     return result
+
+
+@function_tool
+def ensure_module_summary(module: str) -> str:
+    result = ensure_module_summary_current(module)
+    return json.dumps(result)
 
 @function_tool
 def get_artifact_index(max_entries: int = 2000):
