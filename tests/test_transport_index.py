@@ -1,7 +1,4 @@
-import json
 from pathlib import Path
-
-import pytest
 
 from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
 

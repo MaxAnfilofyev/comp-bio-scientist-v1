@@ -1,6 +1,5 @@
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
 import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import networkx as nx

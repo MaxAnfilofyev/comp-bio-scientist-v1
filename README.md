@@ -85,10 +85,7 @@ Ensure you provide the necessary API keys as environment variables for the model
 ```bash
 export OPENAI_API_KEY="YOUR_OPENAI_KEY_HERE"
 export S2_API_KEY="YOUR_S2_KEY_HERE"
-# Set AWS credentials if using Bedrock
-# export AWS_ACCESS_KEY_ID="YOUR_AWS_ACCESS_KEY_ID"
-# export AWS_SECRET_ACCESS_KEY="YOUR_AWS_SECRET_KEY"
-# export AWS_REGION_NAME="your-aws-region"
+
 ```
 You can also place these in a local `.env` file (loaded automatically if `python-dotenv` is installed), for example:
 ```
@@ -121,37 +118,6 @@ Before running the full AI Scientist-v2 experiment pipeline, you first use the `
 
 This ideation step guides the AI Scientist towards specific areas of interest and produces concrete research directions to be tested in the main experimental pipeline.
 
-## Run AI Scientist-v2 Paper Generation Experiments (Tree Search)
-
-Using the JSON file generated in the previous ideation step, you can now launch the main AI Scientist-v2 pipeline. This involves running experiments via agentic tree search, analyzing results, and generating a paper draft.
-
-Specify the models used for the write-up and review phases via command-line arguments.
-The configuration for the best-first tree search (BFTS) is located in `bfts_config.yaml`. Adjust parameters in this file as needed.
-
-Key tree search configuration parameters in `bfts_config.yaml`:
-
--   `agent` config:
-    -   Set `num_workers` (number of parallel exploration paths) and `steps` (maximum number of nodes to explore). For example, if `num_workers=3` and `steps=21`, the tree search will explore up to 21 nodes, expanding 3 nodes concurrently at each step.
-    -   `num_seeds`: Should generally be the same as `num_workers` if `num_workers` is less than 3. Otherwise, set `num_seeds` to 3.
-    -   Note: Other agent parameters like `k_fold_validation`, `expose_prediction`, and `data_preview` are not used in the current version.
--   `search` config:
-    -   `max_debug_depth`: The maximum number of times the agent will attempt to debug a failing node before abandoning that search path.
-    -   `debug_prob`: The probability of attempting to debug a failing node.
-    -   `num_drafts`: The number of initial root nodes (i.e., the number of independent trees to grow) during Stage 1.
-
-Example command to run AI-Scientist-v2 using a generated idea file (e.g., `my_research_topic.json`). Please review `bfts_config.yaml` for detailed tree search parameters (the default config includes `claude-3-5-sonnet` for experiments). Do not set `load_code` if you do not want to initialize experimentation with a code snippet.
-
-```bash
-python launch_scientist_bfts.py \
- --load_ideas "ai_scientist/ideas/my_research_topic.json" \
- --load_code \
- --add_dataset_ref \
- --model_writeup o1-preview-2024-09-12 \
- --model_citation gpt-4o-2024-11-20 \
- --model_review gpt-5o-2024-11-20 \
- --model_agg_plots o3-mini-2025-01-31 \
- --num_cite_rounds 20
-```
 
 ## Tool-Driven Orchestration (Agents)
 
@@ -160,7 +126,7 @@ For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpre
 * Delegates tasks via tools/handoffs until the reviewer reports no gaps and a PDF exists.
 * Uses idea context (Title/Hypothesis/Abstract/Experiments/Risks) and targets the `blank_theoretical_biology_latex` template by default.
 * Enforces output conventions (artifacts in `experiment_results/`, figures in `figures/` when aggregated, PDFs at run root) and structured status files.
-* Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`), Coder (`coder_create_python`, `run_ruff`, `run_pyright` for quick lint/type checks), plus shared helpers (`get_run_paths`, `resolve_path`, `list_artifacts`, `read_artifact` w/ summary mode, `read_npy_artifact` with summary-first caps + slice support for `.npy` loads, `reserve_output` with sanitized/auto-unique/quarantine pathing, `write_text_artifact` + conveniences, `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader. Manifest is path-keyed; use `read_manifest_entry`/`check_manifest` to inspect before logging new artifacts.
+* Tool highlights: Archivist (`AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `VerifyReferences`, `CheckLitReady`, `UpdateClaimGraph`), Modeler (`BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`), Analyst (`RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`), Interpreter (`interpret_biological_results` wrapper for theoretical runs), Reviewer (`ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`), Coder (`coder_create_python`, `run_ruff`, `run_pyright` for quick lint/type checks), plus shared helpers (`get_run_paths`, `resolve_path`, `list_artifacts`, `read_artifact` w/ summary mode, `read_npy_artifact` with summary-first caps + slice support for `.npy` loads, `reserve_output` with sanitized/auto-unique/quarantine pathing, `write_text_artifact` + conveniences, `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`, `check_status`). Graph-based tools expect a file path (not a directory) and accept `.gpickle`, `.graphml`, `.gml`, `.npz`, or `.npy` via the shared loader. Manifest is path-keyed; use `read_manifest_entry`/`check_manifest` to inspect before logging new artifacts.
 * Simulation standardization: all sim runs must emit `per_compartment.npz` (`binary_states`, `continuous_states`, `time`) plus `node_index_map.json` and `topology_summary.json` (schema v1.0) with an ordering checksum of the morphology IDs; `validate_per_compartment_outputs` enforces shape/time alignment and checksum agreement before a run is marked complete or used for plotting. If arrays are missing from legacy sim.json files, use `repair_sim_outputs` (tool or CLI `python ai_scientist/perform_repair_sim_outputs.py --manifest <path>`) to bulk run `sim_postprocess`, validate per-compartment outputs, and update the manifest/tool_summary safely (lock-aware, idempotent).
 * Manifest shape: `path` is the key, `name` is just the basename (no directories), annotations hold the descriptive fields, and legacy `metadata` only carries `{"type": ...}` for compatibility—avoid duplicating annotation content there.
 * Robust PI visibility: when sub-agents (Modeler/Analyst/etc.) hit `max_turns` or return sparse text, the orchestrator now surfaces their final message plus a summary of tool calls (`tools_called: ...`) so the PI sees what actually ran.
@@ -169,6 +135,7 @@ For a tool-driven, multi-agent workflow (PI + Archivist/Modeler/Analyst/Interpre
   * Hypothesis→Experiment→Artifact map is written to `experiment_results/hypothesis_trace.json` (agents can update via `update_hypothesis_trace`; sim/plot helpers accept optional hypothesis/experiment ids).
   * Metrics: `compute_model_metrics` aggregates sweeps/model outputs into `experiment_results/simulations/{label}_metrics.csv` and `experiment_results/models/{model_key}_metrics.json`, so figures/text can reference named metrics (`critical_transport_est`, `mean_frac_failed`, etc.) instead of raw CSVs.
   * Manuscript-ready provenance summary: `generate_provenance_summary` compiles literature/model/spec/sim/stats artifacts into `experiment_results/provenance_summary.md`; Reviewer regenerates it if missing.
+* Literature gate (publishable runs): `check_lit_ready` enforces that lit_summary coverage and reference verification meet minimum thresholds (defaults: confirmed ≥ 70%, at most 3 unverified). Modeling/sim tools enforce the gate unless `--skip_lit_gate` is passed or `AISC_SKIP_LIT_GATE=true`. Thresholds can be tuned via `AISC_LIT_GATE_CONFIRMED_THRESHOLD` and `AISC_LIT_GATE_MAX_UNVERIFIED`. Gate outcomes are logged to `project_knowledge.md` and reflected in `provenance_summary.md` under Literature.
 
 Typical invocation:
 ```bash
@@ -181,28 +148,6 @@ python agents_orchestrator.py \
 ```
 
 ### Computational biology (theoretical modeling) quick start
-
-Run the theory-first pipeline (mathematical/computational biology) by toggling the research/writeup modes:
-
-```bash
-python launch_scientist_bfts.py \
-  --load_ideas "ai_scientist/ideas/theoretical_biology/evolution_of_cooperation.json" \
-  --research-type theoretical \
-  --writeup-type theoretical_biology \
-  --model_writeup o1-preview-2024-09-12 \
-  --model_review gpt-4o-2024-11-20
-```
-
-What changes:
-- Uses theoretical modeling prompts/templates (conceptualization → model → simulation → analysis → interpretation).
-- Adds a mathematical-biological interpretation pass (`interpretation.json` and `interpretation.md`) that links equilibria/stability/thresholds to biological predictions.
-- Uses the computational-biology plotter (`ai_scientist/perform_biological_plotting.py`) to generate phase portraits, time-series plots, and parameter sweeps.
-
-Sanity check the stack locally (no GPUs needed):
-```bash
-python test_cooperation_model.py
-```
-This exercises the evolutionary game-theory model and predator–prey ODEs, and saves figures to `./figures/`.
 
 Local checks for code changes (run from repo root):
 ```bash

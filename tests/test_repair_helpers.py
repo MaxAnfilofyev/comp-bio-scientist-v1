@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from ai_scientist.utils.repair_helpers import normalize_sim_dir, safe_move_into_sim_dir

@@ -322,6 +322,7 @@ def parse_args():
     p.add_argument("--idea_idx", type=int, default=0, help="Index if the idea file contains a list of ideas.")
     p.add_argument("--input", default=None, help="Initial input message to the PI agent.")
     p.add_argument("--human_in_the_loop", action="store_true", help="Enable interactive mode where agents ask for confirmation before expensive tasks.")
+    p.add_argument("--skip_lit_gate", action="store_true", help="Allow modeling/sim tools to bypass literature readiness gate.")
     return p.parse_args()
 
 def _fill_output_dir(output_dir: Optional[str]) -> str:
@@ -2083,6 +2084,275 @@ def validate_lit_summary(path: str):
     return LitSummaryValidatorTool().use_tool(path=path)
 
 
+def _resolve_lit_summary_path(path: Optional[str]) -> Path:
+    """
+    Resolve the lit summary path, preferring JSON then CSV under the active run.
+    """
+    if path:
+        return BaseTool.resolve_input_path(path)
+    exp_dir = BaseTool.resolve_output_dir(None)
+    for candidate in (exp_dir / "lit_summary.json", exp_dir / "lit_summary.csv"):
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("lit_summary.json/csv not found under experiment_results.")
+
+
+def _resolve_verification_path(path: Optional[str]) -> Path:
+    """
+    Resolve the reference verification output path.
+    """
+    if path:
+        return BaseTool.resolve_input_path(path)
+    exp_dir = BaseTool.resolve_output_dir(None)
+    for candidate in (exp_dir / "lit_reference_verification.json", exp_dir / "lit_reference_verification.csv"):
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("lit_reference_verification.json/csv not found under experiment_results.")
+
+
+def _load_verification_rows(path: Path) -> List[Dict[str, Any]]:
+    if path.suffix.lower() == ".json":
+        data = json.loads(path.read_text())
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [data]
+        raise ValueError("lit_reference_verification.json must be a list or object.")
+    if path.suffix.lower() == ".csv":
+        with path.open() as f:
+            reader = csv.DictReader(f)
+            return [dict(row) for row in reader]
+    raise ValueError("Unsupported verification file type; use .json or .csv.")
+
+
+def _verification_row_confirmed(row: Dict[str, Any], score_threshold: float) -> bool:
+    status = str(row.get("status") or "").strip().lower()
+    if status in {"confirmed", "found", "verified", "ok"}:
+        return True
+    if status in {"not found", "missing", "unclear"}:
+        return False
+
+    found = row.get("found")
+    if isinstance(found, str):
+        if found.strip().lower() in {"true", "1", "yes", "y"}:
+            return True
+        if found.strip().lower() in {"false", "0", "no", "n"}:
+            return False
+    if isinstance(found, bool):
+        return found
+
+    score_raw = row.get("match_score")
+    if score_raw is None:
+        return False
+    try:
+        score = float(score_raw)
+        return score >= score_threshold
+    except Exception:
+        return False
+
+
+def _record_lit_gate_in_provenance(status_line: str):
+    """
+    Write/update a Lit gate line under the Literature section of provenance_summary.md.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    out_path = exp_dir / "provenance_summary.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_line = f"- Lit gate: {status_line}"
+
+    if not out_path.exists():
+        content = "# Provenance Summary\n\n## Literature Sources\n"
+        content += f"{gate_line}\n"
+        out_path.write_text(content)
+        return str(out_path)
+
+    lines = out_path.read_text().splitlines()
+    insert_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower().startswith("## literature"):
+            insert_idx = idx + 1
+            while insert_idx < len(lines) and lines[insert_idx].strip() == "":
+                insert_idx += 1
+            break
+
+    if insert_idx is None:
+        lines.extend(["", "## Literature Sources", gate_line])
+    else:
+        replaced = False
+        for j in range(insert_idx, len(lines)):
+            if lines[j].startswith("## "):
+                break
+            if "Lit gate:" in lines[j]:
+                lines[j] = gate_line
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(insert_idx, gate_line)
+    out_path.write_text("\n".join(lines) + "\n")
+    return str(out_path)
+
+
+def _log_lit_gate_decision(status: str, confirmed_pct: float, n_unverified: int, thresholds: Dict[str, Any], reasons: List[str]):
+    """
+    Persist the gate outcome to project_knowledge and provenance summary.
+    """
+    summary = (
+        f"Status={status.upper()}, confirmed={confirmed_pct:.1f}%, "
+        f"unverified={n_unverified}, thresholds: confirmed>={thresholds['confirmed_threshold']*100:.1f}%, "
+        f"max_unverified<={thresholds['max_unverified']}"
+    )
+    if reasons:
+        summary += f"; reasons: {', '.join(reasons)}"
+    try:
+        cast(Any, manage_project_knowledge)(
+            action="add",
+            category="decision",
+            observation="Literature gate evaluation before modeling/simulation.",
+            solution=summary,
+        )
+    except Exception:
+        pass
+    try:
+        _record_lit_gate_in_provenance(f"{status.upper()} (confirmed={confirmed_pct:.1f}%, max_unverified={thresholds['max_unverified']})")
+    except Exception:
+        pass
+
+
+def _coerce_float(value: Optional[float | str], default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _coerce_int(value: Optional[int | str], default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _evaluate_lit_ready(
+    lit_path: Optional[str],
+    verification_path: Optional[str],
+    confirmed_threshold: Optional[float],
+    max_unverified: Optional[int],
+) -> Dict[str, Any]:
+    thresholds = {
+        "confirmed_threshold": _coerce_float(
+            confirmed_threshold if confirmed_threshold is not None else os.environ.get("AISC_LIT_GATE_CONFIRMED_THRESHOLD", 0.7),
+            0.7,
+        ),
+        "max_unverified": _coerce_int(
+            max_unverified if max_unverified is not None else os.environ.get("AISC_LIT_GATE_MAX_UNVERIFIED", 3),
+            3,
+        ),
+    }
+    reasons: List[str] = []
+    result: Dict[str, Any] = {"status": "not_ready", "thresholds": thresholds, "reasons": reasons}
+
+    try:
+        lit_summary_path = _resolve_lit_summary_path(lit_path)
+    except Exception as exc:
+        reasons.append(f"Missing lit summary: {exc}")
+        result["error"] = str(exc)
+        return result
+
+    validator = LitSummaryValidatorTool().use_tool(path=str(lit_summary_path))
+    missing_fields = validator.get("missing_fields") or []
+    n_records = validator.get("n_records", 0)
+    result.update({"lit_summary_path": str(lit_summary_path), "validator": validator})
+    if n_records == 0:
+        reasons.append("Lit summary contains no records.")
+    if missing_fields:
+        reasons.append(f"Missing required fields: {', '.join(missing_fields)}")
+
+    try:
+        verification_resolved = _resolve_verification_path(verification_path)
+    except Exception as exc:
+        reasons.append(f"Missing verification outputs: {exc}")
+        result["error"] = str(exc)
+        return result
+
+    rows = _load_verification_rows(verification_resolved)
+    n_total = len(rows)
+    n_confirmed = sum(1 for row in rows if _verification_row_confirmed(row, thresholds["confirmed_threshold"]))
+    n_unverified = n_total - n_confirmed
+    confirmed_pct = (n_confirmed / n_total * 100.0) if n_total else 0.0
+
+    result.update(
+        {
+            "verification_path": str(verification_resolved),
+            "n_references": n_total,
+            "n_confirmed": n_confirmed,
+            "n_unverified": n_unverified,
+            "confirmed_pct": confirmed_pct,
+        }
+    )
+
+    if n_total == 0:
+        reasons.append("Reference verification table is empty.")
+    if confirmed_pct < thresholds["confirmed_threshold"] * 100.0:
+        reasons.append(
+            f"Confirmed percentage {confirmed_pct:.1f}% below threshold {thresholds['confirmed_threshold']*100:.1f}%."
+        )
+    if n_unverified > thresholds["max_unverified"]:
+        reasons.append(f"Unverified references {n_unverified} exceed limit {thresholds['max_unverified']}.")
+
+    result["status"] = "ready" if not reasons else "not_ready"
+    return result
+
+
+@function_tool
+def check_lit_ready(
+    lit_path: Optional[str] = None,
+    verification_path: Optional[str] = None,
+    confirmed_threshold: float = 0.7,
+    max_unverified: int = 3,
+):
+    """
+    Gatekeeper for modeling/sims: validates lit_summary and reference verification coverage.
+    """
+    result = _evaluate_lit_ready(
+        lit_path=lit_path,
+        verification_path=verification_path,
+        confirmed_threshold=confirmed_threshold,
+        max_unverified=max_unverified,
+    )
+    _log_lit_gate_decision(
+        status=result.get("status", "not_ready"),
+        confirmed_pct=result.get("confirmed_pct", 0.0),
+        n_unverified=result.get("n_unverified", 0),
+        thresholds=result.get("thresholds", {"confirmed_threshold": confirmed_threshold, "max_unverified": max_unverified}),
+        reasons=result.get("reasons", []),
+    )
+    return result
+
+
+def _should_skip_lit_gate(skip_flag: bool = False) -> bool:
+    env_skip = os.environ.get("AISC_SKIP_LIT_GATE", "").strip().lower() in {"1", "true", "yes", "on"}
+    return skip_flag or env_skip
+
+
+def _ensure_lit_gate_ready(skip_gate: bool = False):
+    if _should_skip_lit_gate(skip_gate):
+        return
+    gate = _evaluate_lit_ready(
+        lit_path=None,
+        verification_path=None,
+        confirmed_threshold=None,
+        max_unverified=None,
+    )
+    if gate.get("status") == "ready":
+        return
+    reasons = gate.get("reasons", [])
+    raise RuntimeError(f"Literature gate not satisfied: {', '.join(reasons) or 'see check_lit_ready for details.'}")
+
+
 @function_tool
 def verify_references(
     lit_path: Optional[str] = None,
@@ -2121,8 +2391,10 @@ def run_comp_sim(
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
     metrics: Optional[List[str]] = None,
+    skip_lit_gate: bool = False,
 ):
     """Runs a compartmental simulation and saves CSV data."""
+    _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunCompartmentalSimTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
@@ -2396,8 +2668,10 @@ def run_biological_model(
     experiment_id: Optional[str] = None,
     metrics: Optional[List[str]] = None,
     compute_metrics: bool = False,
+    skip_lit_gate: bool = False,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
+    _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     ledger = _ensure_model_spec_and_params(model_key)
     if ledger.get("created_spec"):
         _append_manifest_entry(
@@ -2452,8 +2726,10 @@ def run_sensitivity_sweep(
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
     compute_metrics: bool = True,
+    skip_lit_gate: bool = False,
 ):
     """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
+    _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunSensitivitySweepTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
@@ -2499,8 +2775,10 @@ def run_intervention_tests(
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
     compute_metrics: bool = True,
+    skip_lit_gate: bool = False,
 ):
     """Test parameter interventions vs a baseline and report delta frac_failed."""
+    _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunInterventionTesterTool().use_tool(
         graph_path=graph_path,
         output_dir=_fill_output_dir(output_dir),
@@ -3987,6 +4265,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
             "3b. Maintain hypothesis_trace.json: when drafting the plan, ensure every idea experiment is mapped to a hypothesis/experiment id (H*, E*) in hypothesis_trace.json (skeleton allowed). Update as new experiments/figures/sim runs become planned.\n"
             "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
+            "   - Before any modeling/simulation, run 'check_lit_ready' (defaults: confirmed refs >=70%, <=3 unverified). If it returns not_ready, stop and fix lit/references or pass --skip_lit_gate explicitly.\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
             "   - Missing Plots -> Analyst\n"
@@ -4059,6 +4338,7 @@ def main():
     
     # Set Interactive Flag for Tools
     os.environ["AISC_INTERACTIVE"] = str(args.human_in_the_loop).lower()
+    os.environ["AISC_SKIP_LIT_GATE"] = str(args.skip_lit_gate).lower()
     
     # Load Idea
     with open(args.load_idea) as f:

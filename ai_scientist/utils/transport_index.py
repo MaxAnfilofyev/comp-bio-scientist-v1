@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils.pathing import resolve_output_path

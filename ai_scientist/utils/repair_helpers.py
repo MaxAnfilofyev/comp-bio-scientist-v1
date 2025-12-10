@@ -1,7 +1,6 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils.pathing import resolve_output_path

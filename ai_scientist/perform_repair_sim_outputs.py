@@ -4,7 +4,6 @@ CLI entry point to bulk-repair simulation outputs that are missing exported arra
 
 import argparse
 import json
-from pathlib import Path
 
 from ai_scientist.tools.repair_sim_outputs import repair_sim_outputs
 
