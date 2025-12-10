@@ -1,9 +1,9 @@
-import os
 from pathlib import Path
 from typing import Any, Dict, List
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.perform_lit_data_assembly import assemble_lit_data
+from ai_scientist.utils.pathing import resolve_output_path
 
 
 class LitDataAssemblyTool(BaseTool):
@@ -46,19 +46,19 @@ class LitDataAssemblyTool(BaseTool):
 
     def _resolve_out_dir(self) -> Path:
         """
-        Resolve a fixed output directory for lit summaries:
-        - If AISC_EXP_RESULTS is set (by orchestrator), use it.
-        - Otherwise default to experiment_results.
+        Resolve a fixed output directory for lit summaries using the canonical run folder.
         """
-        base_env = os.environ.get("AISC_EXP_RESULTS", "")
-        out = Path(base_env) if base_env else Path("experiment_results")
-        return out
+        return BaseTool.resolve_output_dir(None)
 
     def use_tool(self, **kwargs: Any) -> Dict[str, Any]:
         out_dir = self._resolve_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = out_dir / "lit_summary.csv"
-        json_path = out_dir / "lit_summary.json"
+        csv_path, quarantined_csv, _ = resolve_output_path(
+            subdir=None, name="lit_summary.csv", run_root=out_dir, allow_quarantine=True, unique=True
+        )
+        json_path, quarantined_json, _ = resolve_output_path(
+            subdir=None, name="lit_summary.json", run_root=out_dir, allow_quarantine=True, unique=True
+        )
 
         queries: List[str] | None = kwargs.get("queries")
         seed_paths: List[str] | None = kwargs.get("seed_paths")
@@ -73,4 +73,6 @@ class LitDataAssemblyTool(BaseTool):
             max_results=max_results,
             use_semantic_scholar=use_semantic_scholar,
         )
+        if quarantined_csv or quarantined_json:
+            result["quarantined"] = True
         return result

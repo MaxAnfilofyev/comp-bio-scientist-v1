@@ -82,6 +82,19 @@ class BaseTool(ABC):
 
         candidates: List[Path] = []
         p = Path(path_str)
+
+        # Guard against double-default-subdir paths like experiment_results/experiment_results/<file>.
+        if default_subdir:
+            parts = list(p.parts)
+            dedup_parts: List[str] = []
+            for part in parts:
+                if dedup_parts and part == default_subdir and dedup_parts[-1] == default_subdir:
+                    continue
+                dedup_parts.append(part)
+            dedup_path = Path(*dedup_parts)
+            if dedup_path != p:
+                candidates.append(dedup_path)
+
         candidates.append(p)
 
         env_dir = os.environ.get("AISC_EXP_RESULTS", "")

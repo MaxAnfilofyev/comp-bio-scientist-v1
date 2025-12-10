@@ -2324,9 +2324,10 @@ def assemble_lit_data(
     return result
 
 @function_tool
-def validate_lit_summary(path: str):
+def validate_lit_summary():
     """Validates the structure of the literature summary."""
-    return LitSummaryValidatorTool().use_tool(path=path)
+    path = _resolve_lit_summary_path(None)
+    return LitSummaryValidatorTool().use_tool(path=str(path))
 
 
 def _resolve_lit_summary_path(path: Optional[str]) -> Path:
@@ -2353,6 +2354,18 @@ def _resolve_verification_path(path: Optional[str]) -> Path:
         if candidate.exists():
             return candidate
     raise FileNotFoundError("lit_reference_verification.json/csv not found under experiment_results.")
+
+
+def _resolve_claim_graph_path() -> Path:
+    """
+    Resolve the canonical claim_graph.json under the run root (base folder).
+    """
+    base = os.environ.get("AISC_BASE_FOLDER", "")
+    if base:
+        return Path(base) / "claim_graph.json"
+    exp_dir = BaseTool.resolve_output_dir(None)
+    base_dir = exp_dir.parent if exp_dir.name == "experiment_results" else exp_dir
+    return base_dir / "claim_graph.json"
 
 
 def _load_verification_rows(path: Path) -> List[Dict[str, Any]]:
@@ -2962,17 +2975,20 @@ def _ensure_lit_gate_ready(skip_gate: bool = False):
 
 @function_tool
 def verify_references(
-    lit_path: Optional[str] = None,
-    output_dir: Optional[str] = None,
     max_results: int = 5,
     score_threshold: float = 0.65,
 ):
     """
-    Verify lit_summary entries via Semantic Scholar; writes lit_reference_verification.csv/json.
+    Verify lit_summary entries via Semantic Scholar; writes lit_reference_verification.csv/json
+    using canonical lit_summary and output locations.
     """
+    # Resolve canonical inputs/outputs to avoid path gymnastics.
+    lit_summary_path = _resolve_lit_summary_path(None)
+    out_dir = BaseTool.resolve_output_dir(None)
+
     res = ReferenceVerificationTool().use_tool(
-        lit_path=lit_path,
-        output_dir=output_dir,
+        lit_path=str(lit_summary_path),
+        output_dir=str(out_dir),
         max_results=max_results,
         score_threshold=score_threshold,
     )
@@ -3085,7 +3101,7 @@ def compute_model_metrics(
         input_path=input_path,
         label=label,
         model_key=model_key,
-        output_dir=output_dir,
+        output_dir=_fill_output_dir(output_dir),
     )
     if isinstance(res, dict):
         if res.get("output_csv"):
@@ -4271,13 +4287,14 @@ def run_intervention_tests(
     return res
 
 @function_tool
-def run_validation_compare(lit_path: str, sim_path: str):
+def run_validation_compare(lit_path: Optional[str] = None, sim_path: str = ""):
     """Correlate lit_summary metrics with simulation frac_failed."""
-    res = RunValidationCompareTool().use_tool(lit_path=lit_path, sim_path=sim_path)
+    lit_resolved = _resolve_lit_summary_path(lit_path)
+    res = RunValidationCompareTool().use_tool(lit_path=str(lit_resolved), sim_path=sim_path)
     if isinstance(res, dict):
         _append_manifest_entry(
             name="validation_compare.json",
-            metadata_json=json.dumps({"type": "validation", "source": "analyst", "lit_path": lit_path, "sim_path": sim_path}),
+            metadata_json=json.dumps({"type": "validation", "source": "analyst", "lit_path": str(lit_resolved), "sim_path": sim_path}),
             allow_missing=True,
         )
     return res
@@ -4309,7 +4326,6 @@ def run_biological_stats(
 
 @function_tool
 def update_claim_graph(
-    path: Optional[str] = None,
     claim_id: str = "thesis",
     claim_text: str = "",
     parent_id: Optional[str] = None,
@@ -4318,9 +4334,9 @@ def update_claim_graph(
     notes: str = "",
 ):
     """Add or update a claim entry with support references."""
-    claim_path = path or os.path.join(os.environ.get("AISC_BASE_FOLDER", ""), "claim_graph.json")
+    claim_path = _resolve_claim_graph_path()
     return ClaimGraphTool().use_tool(
-        path=claim_path,
+        path=str(claim_path),
         claim_id=claim_id,
         claim_text=claim_text,
         parent_id=parent_id,
@@ -4330,10 +4346,10 @@ def update_claim_graph(
     )
 
 @function_tool
-def check_claim_graph(path: Optional[str] = None):
+def check_claim_graph():
     """Check claim_graph.json for claims lacking supporting evidence."""
-    claim_path = path or os.path.join(os.environ.get("AISC_BASE_FOLDER", ""), "claim_graph.json")
-    return ClaimGraphCheckTool().use_tool(path=claim_path)
+    claim_path = _resolve_claim_graph_path()
+    return ClaimGraphCheckTool().use_tool(path=str(claim_path))
 
 @function_tool
 def interpret_biology(base_folder: Optional[str] = None, config_path: Optional[str] = None):

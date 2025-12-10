@@ -80,6 +80,13 @@ def _fetch_semantic_scholar(
             print(f"[warn] Semantic Scholar query failed for '{q}': {e}", file=sys.stderr)
             continue
 
+        # Some backends may return None/empty on errors; guard to keep the tool resilient.
+        if not papers:
+            continue
+        if not isinstance(papers, list):
+            print(f"[warn] Unexpected Semantic Scholar response type {type(papers)} for query '{q}'", file=sys.stderr)
+            continue
+
         for p in papers:
             # Normalize fields; fall back to None if missing
             out.append(
