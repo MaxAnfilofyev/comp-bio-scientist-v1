@@ -63,13 +63,24 @@ def _ensure_shadow_link(shadow: Path, canonical: Path) -> None:
             if shadow.resolve() == canonical:
                 return
         except OSError:
-            shadow.unlink(missing_ok=True)
+            pass
+        shadow.unlink(missing_ok=True)
     if shadow.exists():
         shadow.unlink()
-    try:
-        shadow.symlink_to(canonical)
-    except OSError:
-        shutil.copy2(canonical, shadow)
+
+    def _try_symlink() -> bool:
+        try:
+            shadow.symlink_to(canonical)
+            return True
+        except OSError:
+            shadow.unlink(missing_ok=True)
+            return False
+
+    if _try_symlink():
+        return
+
+    shadow.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(canonical, shadow)
 
 
 def ensure_note_files(name: str, run_root: Optional[Path] = None) -> Tuple[Path, Path]:
