@@ -16,8 +16,9 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - Dynamic prompts include Title/Hypothesis/Abstract/Experiments/Risks and template alignment (default `blank_theoretical_biology_latex`). Output conventions enforced (artifacts -> `experiment_results/`, figures -> `figures/` when aggregated, PDFs at run root).
    - Each role returns structured status (status/artifacts/notes) and writes status files (e.g., `experiment_results/status_<role>.json` or appends to `tool_summary.txt`).
    - Resuming: pass `--resume` to pick the latest folder matching the idea name, or `--base_folder <experiments/...>` to restart from a specific existing run directory without creating a new timestamped folder.
-   - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
-   - Agent tool highlights:
+- Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
+  - Prompts now link to `docs/artifact_metadata_requirements.md` and every role/PI prompt embeds the per-role context spec plus a summary-first reminder (via `ensure_module_summary`/`summarize_artifact`) so work stays aligned with the new system design principles.
+- Agent tool highlights:
      - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`.
      - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`.
    - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
@@ -76,6 +77,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 - **Filesystem helpers** (agents_orchestrator.py wrappers)
   - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output` (sanitizes names, rejects `..`, auto-uniques, and quarantines to `experiment_results/_unrouted` with a note if the primary path is unavailable), `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`) which use the same sanitizer/quarantine behavior.
+  - `ensure_module_summary` (new helper) checks the latest `integration_memo_md` for a module; PI prompts now call it before delegating, and `reserve_and_register_artifact` triggers memo generation whenever a module crosses the summary threshold.
   - Manifest helpers: `inspect_manifest` (default summary-only; filters by role/path_glob/since; returns shard metadata) + `inspect_recent_manifest_entries` share the same sharded backend (`experiment_results/manifest/manifest_shard_*.ndjson` with `manifest_index.json`, auto-rotated ~10k entries/shard, legacy file_manifest.json auto-migrated). `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`/`get_artifact_index` all use this backend and drop health reports into `experiment_results/_health/verification_missing_report_post_run.json` when gaps are found.
   - `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`, `summarize_artifact` (lightweight heads/shapes).
   - PI/user inbox notes are canonical under `experiment_results` and maintained via the orchestrator wrappers (`read_note`, `write_pi_notes`, `check_user_inbox`) backed by `ai_scientist.utils.notes`. Root-level `pi_notes.md`/`user_inbox.md` are symlinks/copies only—agents should never write these paths directly.
@@ -117,17 +119,6 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - `journal.json`, `unified_tree_viz.html` (search trace).
 
 ## Typical CLI Invocation
-
-```bash
-python launch_scientist_bfts.py \
-  --load_ideas ai_scientist/ideas/my_idea.json \
-  --research-type theoretical \
-  --writeup-type theoretical_biology \
-  --run_lit_data_assembly \
-  --lit_seed_paths data/snc_vta_lit_seed.csv
-```
-
-Adjust `bfts_config.yaml` for search budget (num_workers, stage iters) and skip ML-centric steps for theoretical runs.***
 
 Agents orchestrator:
 ```bash
