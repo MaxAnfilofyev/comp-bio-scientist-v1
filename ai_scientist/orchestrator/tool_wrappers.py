@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import ast
 import difflib
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
     from agents.types import RunResult
@@ -66,6 +66,8 @@ from ai_scientist.orchestrator.context import (
     _fill_output_dir,
 )
 from ai_scientist.orchestrator.context_specs import (
+    ModuleName,
+    VALID_MODULE_NAMES,
     active_role,
     truncate_paths_for_role,
 )
@@ -202,7 +204,15 @@ def list_artifacts_by_kind(kind: str, limit: int = 100):
 
 
 @function_tool
-def ensure_module_summary(module: str) -> str:
+def ensure_module_summary(module: ModuleName) -> str:
+    if module not in VALID_MODULE_NAMES:
+        allowed = ", ".join(VALID_MODULE_NAMES)
+        return json.dumps(
+            {
+                "status": "unknown_module",
+                "message": f"Unknown module '{module}'. Valid module names: {allowed}.",
+            }
+        )
     result = ensure_module_summary_current(module)
     return json.dumps(result)
 
@@ -218,8 +228,8 @@ def check_project_state(base_folder: str) -> str:
 
 @function_tool
 def manage_project_knowledge(
-    action: str,
-    category: str = "general",
+    action: Literal["add", "read"],
+    category: Literal["general", "constraint", "decision", "failure_pattern", "reflection"] = "general",
     observation: str = "",
     solution: str = "",
     actor: str = "",

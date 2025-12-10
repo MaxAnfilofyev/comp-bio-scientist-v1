@@ -5,11 +5,34 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple, Literal
 
 from ai_scientist.tools.base_tool import BaseTool
 
 ACTIVE_ROLE_ENV = "AISC_ACTIVE_ROLE"
+
+ModuleName = Literal[
+    "analysis",
+    "general",
+    "interpretation",
+    "literature",
+    "modeling",
+    "oversight",
+    "plumbing",
+    "review",
+    "writeup",
+]
+VALID_MODULE_NAMES: Tuple[ModuleName, ...] = (
+    "general",
+    "literature",
+    "modeling",
+    "analysis",
+    "review",
+    "interpretation",
+    "plumbing",
+    "writeup",
+    "oversight",
+)
 
 # Minimal context view spec describing what each role may read/write and how much context to consume.
 @dataclass(frozen=True)
@@ -21,7 +44,7 @@ class ContextViewSpec:
     summary_preferred: bool
     summary_limit: int
     description: str = ""
-    module_name: str = "general"
+    module_name: ModuleName = "general"
 
     def allows_read(self, kind: Optional[str]) -> bool:
         if not kind:

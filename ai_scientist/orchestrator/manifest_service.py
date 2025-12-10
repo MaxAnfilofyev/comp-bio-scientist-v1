@@ -6,7 +6,7 @@ watcher logic, and project knowledge management.
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
@@ -338,8 +338,8 @@ def check_project_state(base_folder: str) -> str:
 
 
 def manage_project_knowledge(
-    action: str,
-    category: str = "general",
+    action: Literal["add", "read"],  # Define the allowed strings here
+    category: Literal["general", "constraint", "decision", "failure_pattern", "reflection"] = "general", # You can do the same for category
     observation: str = "",
     solution: str = "",
     actor: str = "",
