@@ -6,7 +6,6 @@ import re
 import subprocess
 from pathlib import Path
 from datetime import datetime
-import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
@@ -65,7 +64,7 @@ from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.utils.notes import NOTE_NAMES, read_note_file, write_note_file, append_run_note
 from ai_scientist.utils.pathing import resolve_output_path
-from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
+from ai_scientist.utils.transport_index import resolve_transport_sim
 from ai_scientist.utils import manifest as manifest_utils
 
 from ai_scientist.orchestrator.artifacts import (
@@ -110,6 +109,22 @@ from ai_scientist.orchestrator.manuscript_processor import (
 
 from ai_scientist.orchestrator.manifest_service import (
     _normalize_manifest_entry as _normalize_manifest_entry_impl,
+)
+
+from ai_scientist.orchestrator.transport import (
+    load_transport_manifest,
+    upsert_transport_manifest_entry,
+    build_seed_dir,
+    resolve_run_paths,
+    status_from_paths,
+    write_verification,
+    generate_run_recipe,
+    resolve_baseline_path_internal,
+    scan_transport_manifest as scan_transport_manifest_impl,
+    read_transport_manifest as read_transport_manifest_impl,
+    update_transport_manifest as update_transport_manifest_impl,
+    resolve_baseline_path as resolve_baseline_path_impl,
+    resolve_sim_path as resolve_sim_path_impl,
 )
 
 # Cached idea for hypothesis trace bootstrapping
@@ -402,153 +417,6 @@ def _append_figures_from_result(result: Any, metadata_json: Optional[str]):
             _append_manifest_entry(name=v, metadata_json=metadata_json, allow_missing=True)
 
 
-# --- Transport Run Manifest Helpers ---
-def _transport_manifest_path() -> Path:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    manifest_path = exp_dir / "simulations" / "transport_runs" / "manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    return manifest_path
-
-
-def _acquire_manifest_lock(manifest_path: Path, timeout: float = 5.0, poll: float = 0.2) -> Optional[Path]:
-    lock_path = manifest_path.with_suffix(manifest_path.suffix + ".lock")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(fd)
-            return lock_path
-        except FileExistsError:
-            time.sleep(poll)
-    return None
-
-
-def _atomic_write_json(target: Path, data: Any) -> Optional[str]:
-    lock = _acquire_manifest_lock(target)
-    if lock is None:
-        return "Failed to acquire manifest lock; concurrent write in progress."
-
-    tmp_path = target.with_suffix(target.suffix + ".tmp")
-    try:
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, target)
-    except Exception as exc:
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        finally:
-            try:
-                lock.unlink()
-            except Exception:
-                pass
-        return f"Failed to write manifest: {exc}"
-
-    try:
-        lock.unlink()
-    except Exception:
-        pass
-    return None
-
-
-def _load_transport_manifest() -> Dict[str, Any]:
-    manifest_path = _transport_manifest_path()
-    if not manifest_path.exists():
-        return {"schema_version": 1, "runs": []}
-    try:
-        with open(manifest_path) as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {"schema_version": 1, "runs": []}
-        data.setdefault("schema_version", 1)
-        data.setdefault("runs", [])
-        return data
-    except Exception:
-        return {"schema_version": 1, "runs": []}
-
-
-def _upsert_transport_manifest_entry(
-    baseline: str,
-    transport: float,
-    seed: int,
-    status: str,
-    paths: Dict[str, Optional[str]],
-    notes: str = "",
-    actor: Optional[str] = None,
-) -> Dict[str, Any]:
-    manifest = _load_transport_manifest()
-    runs: List[Dict[str, Any]] = manifest.get("runs", [])
-    actor_name = actor or os.environ.get("AISC_ACTIVE_ROLE", "") or "unknown"
-
-    found = None
-    for entry in runs:
-        if (
-            entry.get("baseline") == baseline
-            and entry.get("transport") == transport
-            and entry.get("seed") == seed
-        ):
-            found = entry
-            break
-
-    if found is None:
-        found = {"baseline": baseline, "transport": transport, "seed": seed}
-        runs.append(found)
-
-    found.update(
-        {
-            "status": status,
-            "paths": paths,
-            "updated_at": datetime.now().isoformat(),
-            "notes": notes or "",
-            "actor": actor_name,
-        }
-    )
-    manifest["runs"] = runs
-    manifest.setdefault("schema_version", 1)
-
-    err = _atomic_write_json(_transport_manifest_path(), manifest)
-    if err:
-        return {"error": err}
-    return {"manifest_path": str(_transport_manifest_path()), "entry": found}
-
-
-def _scan_transport_runs(root: Path) -> List[Dict[str, Any]]:
-    # Delegate to shared indexer so transport run discovery is consistent across tools.
-    run_root = root.parent.parent if root.name == "transport_runs" else root
-    idx = index_transport_runs(base_dir=run_root)
-    entries_dict = cast(Dict[str, Dict[str, Any]], idx.get("entries", {}) if isinstance(idx, dict) else {}) or {}
-    # Attach actor/updated_at for backward compatibility with older manifest consumers.
-    entries: List[Dict[str, Any]] = []
-    for entry in entries_dict.values():
-        if isinstance(entry, dict):
-            entry.setdefault("actor", "system-scan")
-            entry.setdefault("updated_at", datetime.now().isoformat())
-            entries.append(entry)
-    return entries
-
-
-def _build_seed_dir(baseline: str, transport: float, seed: int) -> Path:
-    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-    seed_dir = root / baseline / f"transport_{transport}" / f"seed_{seed}"
-    seed_dir.mkdir(parents=True, exist_ok=True)
-    return seed_dir
-
-
-def _resolve_run_paths(seed_dir: Path, baseline: str) -> Dict[str, Path]:
-    return {
-        "failure_matrix": seed_dir / f"{baseline}_sim_failure_matrix.npy",
-        "time_vector": seed_dir / f"{baseline}_sim_time_vector.npy",
-        "nodes_order": seed_dir / f"nodes_order_{baseline}_sim.txt",
-        "sim_json": seed_dir / f"{baseline}_sim.json",
-        "sim_status": seed_dir / f"{baseline}_sim.status.json",
-        "verification": seed_dir / f"{baseline}_sim_verification.md",
-    }
-
-def _run_root() -> Path:
-    base = os.environ.get("AISC_BASE_FOLDER", "")
-    return Path(base) if base else Path(".")
-
-
 # _bootstrap_note_links is imported from context
 
 
@@ -793,21 +661,7 @@ def scan_transport_manifest(write: bool = True):
     """
     Scan transport_runs and (optionally) write manifest.json with status of (baseline, transport, seed).
     """
-    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-    idx = index_transport_runs(base_dir=root.parent.parent if root.name == "transport_runs" else root)
-    entries_dict = cast(Dict[str, Dict[str, Any]], idx.get("entries", {}) if isinstance(idx, dict) else {})
-    entries = list(entries_dict.values())
-    manifest = {
-        "schema_version": 1,
-        "runs": entries,
-        "updated_at": datetime.now().isoformat(),
-        "index_path": idx.get("index_path") if isinstance(idx, dict) else None,
-    }
-    if write:
-        err = _atomic_write_json(_transport_manifest_path(), manifest)
-        if err:
-            return {"error": err, "manifest_path": str(_transport_manifest_path())}
-    return {"manifest_path": str(_transport_manifest_path()), "runs": entries}
+    return scan_transport_manifest_impl(write)
 
 
 @function_tool
@@ -817,95 +671,6 @@ def resolve_transport_run(baseline: str, transport: str, seed: str):
     """
     res = resolve_transport_sim(baseline=baseline, transport=float(transport), seed=int(seed))
     return res
-
-
-def _status_from_paths(paths: Dict[str, Optional[str]], required_keys: Optional[List[str]] = None) -> Tuple[str, List[str]]:
-    required = required_keys or ["failure_matrix", "time_vector", "nodes_order", "sim_json", "sim_status"]
-    missing = [k for k in required if not paths.get(k)]
-    status = "complete" if not missing else "partial"
-    return status, missing
-
-
-def _write_verification(seed_dir: Path, baseline: str, transport: float, seed: int, status: str, notes: str):
-    ver_path = _resolve_run_paths(seed_dir, baseline)["verification"]
-    lines = [
-        f"baseline: {baseline}",
-        f"transport: {transport}",
-        f"seed: {seed}",
-        f"status: {status}",
-        f"notes: {notes}",
-    ]
-    try:
-        ver_path.write_text("\n".join(lines))
-    except Exception:
-        pass
-
-
-def _generate_run_recipe(base_folder: str):
-    """
-    Generate a per-run run_recipe.json under experiment_results/simulations/transport_runs by scanning available morphologies
-    and seeding template/nodes_order from existing transport_runs if present. Overwrites safely each run startup.
-    """
-    base_path = Path(base_folder)
-    morph_dir, _, _ = resolve_output_path(subdir="morphologies", name="", run_root=base_path / "experiment_results", allow_quarantine=False, unique=False)
-    transport_runs_dir, _, _ = resolve_output_path(subdir="simulations/transport_runs", name="", run_root=base_path / "experiment_results", allow_quarantine=False, unique=False)
-    recipe_path = transport_runs_dir / "run_recipe.json"
-    transport_runs_dir.mkdir(parents=True, exist_ok=True)
-
-    allowed_suffixes = [".npy", ".npz", ".graphml", ".gpickle", ".gml"]
-    entries: List[Dict[str, str]] = []
-
-    # Helper to find an existing template in transport_runs for a baseline
-    def _find_template(baseline: str) -> Tuple[Optional[str], Optional[str]]:
-        root = transport_runs_dir / baseline
-        if not root.exists():
-            return None, None
-        for tdir in root.iterdir():
-            if not tdir.is_dir() or not tdir.name.startswith("transport_"):
-                continue
-            seed_dir = tdir / "seed_0"
-            if not seed_dir.exists():
-                continue
-            sim_json = seed_dir / f"{baseline}_sim.json"
-            nodes = seed_dir / f"nodes_order_{baseline}_sim.txt"
-            sim_str = str(sim_json) if sim_json.exists() else None
-            nodes_str = str(nodes) if nodes.exists() else None
-            if sim_str or nodes_str:
-                return sim_str, nodes_str
-        return None, None
-
-    if morph_dir.exists():
-        for f in morph_dir.iterdir():
-            if not f.is_file():
-                continue
-            if f.suffix.lower() not in allowed_suffixes:
-                continue
-            baseline = f.stem
-            tpl_json, tpl_nodes = _find_template(baseline)
-            entries.append(
-                {
-                    "baseline": baseline,
-                    "morphology_path": str(f),
-                    "template_json": tpl_json or "",
-                    "nodes_order_template": tpl_nodes or "",
-                    "output_root": str(
-                        base_path
-                        / "experiment_results"
-                        / "simulations"
-                        / "transport_sweep"
-                        / "transport_{transport}"
-                        / "seed_{seed}"
-                        / ""
-                    ),
-                }
-            )
-
-    try:
-        with open(recipe_path, "w") as fp:
-            json.dump(entries, fp, indent=2)
-    except Exception:
-        pass
-
 @function_tool
 def mirror_artifacts(
     src_paths: List[str],
@@ -986,47 +751,13 @@ def mirror_artifacts(
     return {"dest_dir": str(dest), "copied": copied, "skipped": skipped, "errors": errors}
 
 
-def _resolve_baseline_path_internal(baseline: str) -> Tuple[Optional[Path], List[str], Optional[str]]:
-    """
-    Resolve a baseline path. Accepts absolute/relative path or a name under experiment_results/morphologies/<baseline>.*.
-    Only allows graph formats: .npy, .npz, .graphml, .gpickle, .gml.
-    Returns (path_or_none, available_baselines, error_message_or_none).
-    """
-    allowed_suffixes = [".npy", ".npz", ".graphml", ".gpickle", ".gml"]
-    try:
-        p = BaseTool.resolve_input_path(baseline, allow_dir=False)
-        if p.suffix.lower() in allowed_suffixes:
-            return p, [], None
-        return None, [], f"Unsupported baseline format '{p.suffix}'. Allowed: {', '.join(allowed_suffixes)}"
-    except Exception:
-        pass
-
-    morph_dir = BaseTool.resolve_output_dir(None) / "morphologies"
-    candidates: List[Path] = []
-    if morph_dir.exists():
-        for f in morph_dir.iterdir():
-            if f.is_file():
-                candidates.append(f)
-    available = sorted({c.stem for c in candidates})
-
-    for suff in allowed_suffixes:
-        candidate = morph_dir / f"{baseline}{suff}"
-        if candidate.exists():
-            return candidate, available, None
-
-    return None, available, f"Baseline '{baseline}' not found. Provide a valid graph path or one of: {', '.join(available)}"
-
-
 @function_tool
 def resolve_baseline_path(baseline: str):
     """
     Resolve a baseline path by name or explicit path (searches experiment_results/morphologies for <baseline> with common suffixes).
     Returns {path} or an error with available baselines.
     """
-    path, available, err = _resolve_baseline_path_internal(baseline)
-    if path:
-        return {"path": str(path)}
-    return {"error": err or "baseline not found", "available_baselines": available}
+    return resolve_baseline_path_impl(baseline)
 
 
 @function_tool
@@ -1035,82 +766,7 @@ def resolve_sim_path(baseline: str, transport: float, seed: int):
     Resolve a sim.json path for (baseline, transport, seed) using the transport manifest with a scan fallback.
     Returns {path, status, missing, available_transports, available_pairs} or an error with suggestions.
     """
-    data = _load_transport_manifest()
-    runs = data.get("runs", [])
-    if not runs:
-        root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-        runs = _scan_transport_runs(root)
-
-    candidates = [r for r in runs if r.get("baseline") == baseline]
-    available_transports = sorted(
-        [t for t in (r.get("transport") for r in candidates if "transport" in r) if isinstance(t, (int, float))]
-    )
-    available_pairs = sorted(
-        [
-            (t, s)
-            for t, s in (
-                (r.get("transport"), r.get("seed")) for r in candidates if "transport" in r and "seed" in r
-            )
-            if isinstance(t, (int, float)) and isinstance(s, (int, float))
-        ]
-    )
-
-    entry = next(
-        (r for r in candidates if r.get("transport") == transport and r.get("seed") == seed),
-        None,
-    )
-    if entry is None:
-        return {
-            "error": f"Run not found for baseline={baseline}, transport={transport}, seed={seed}",
-            "available_transports": available_transports,
-            "available_pairs": available_pairs,
-        }
-
-    paths = entry.get("paths", {}) if isinstance(entry, dict) else {}
-    sim_path = paths.get("sim_json")
-    # Reconstruct expected path as fallback
-    expected = (
-        BaseTool.resolve_output_dir(None)
-        / "simulations"
-        / "transport_runs"
-        / baseline
-        / f"transport_{transport}"
-        / f"seed_{seed}"
-        / f"{baseline}_sim.json"
-    )
-    resolved_path: Optional[Path] = None
-    if sim_path:
-        p = Path(sim_path)
-        if not p.is_absolute():
-            p = Path(sim_path)
-        if p.exists():
-            resolved_path = p
-    if resolved_path is None and expected.exists():
-        resolved_path = expected
-
-    missing = [k for k in ["failure_matrix", "time_vector", "nodes_order", "sim_json", "sim_status"] if not paths.get(k)]
-    if resolved_path is None:
-        return {
-            "error": f"sim.json missing for baseline={baseline}, transport={transport}, seed={seed}",
-            "status": entry.get("status"),
-            "paths": paths,
-            "missing": missing,
-            "available_transports": available_transports,
-            "available_pairs": available_pairs,
-        }
-
-    if missing:
-        note = f"warning: missing {', '.join(missing)}"
-    else:
-        note = ""
-    return {
-        "path": str(resolved_path),
-        "status": entry.get("status"),
-        "missing": missing,
-        "note": note,
-        "available_transports": available_transports,
-        "available_pairs": available_pairs,
-    }
+    return resolve_sim_path_impl(baseline, transport, seed)
 
 
 @function_tool
@@ -1130,7 +786,7 @@ def run_transport_batch(
     """
     Batch wrapper: run transport sims for a baseline across transports/seeds, postprocess arrays if missing, and update the transport manifest.
     """
-    baseline_path_resolved, available_bases, err = _resolve_baseline_path_internal(baseline_path)
+    baseline_path_resolved, available_bases, err = resolve_baseline_path_internal(baseline_path)
     if baseline_path_resolved is None or err:
         return {
             "error": err or "Baseline not found",
@@ -1141,19 +797,19 @@ def run_transport_batch(
     tasks = []
     results: List[Dict[str, Any]] = []
 
-    manifest_data = _load_transport_manifest()
+    manifest_data = load_transport_manifest()
     existing = manifest_data.get("runs", [])
 
     def should_skip(entry: Optional[Dict[str, Any]], path_map: Dict[str, Path]) -> bool:
         entry_paths = entry.get("paths", {}) if isinstance(entry, dict) else {}
         paths_now = {k: entry_paths.get(k) or (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
-        status_now, missing = _status_from_paths(paths_now)
+        status_now, missing = status_from_paths(paths_now)
         return status_now == "complete" and not missing
 
     for t in transport_values:
         for s in seeds:
-            seed_dir = _build_seed_dir(baseline_name, t, s)
-            path_map = _resolve_run_paths(seed_dir, baseline_name)
+            seed_dir = build_seed_dir(baseline_name, t, s)
+            path_map = resolve_run_paths(seed_dir, baseline_name)
             entry = next((e for e in existing if e.get("baseline") == baseline_name and e.get("transport") == t and e.get("seed") == s), None)
             if should_skip(entry, path_map):
                 results.append({"baseline": baseline_name, "transport": t, "seed": s, "skipped": True, "reason": "manifest_complete"})
@@ -1180,7 +836,7 @@ def run_transport_batch(
                 export_arrays=export_arrays,
             )
             paths_now = {k: (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
-            status_now, missing = _status_from_paths(paths_now)
+            status_now, missing = status_from_paths(paths_now)
             if missing:
                 sim_json = path_map["sim_json"]
                 if sim_json.exists():
@@ -1190,12 +846,12 @@ def run_transport_batch(
                         graph_path=str(baseline_path_resolved),
                     )
                     paths_now = {k: (str(v) if v.exists() else None) for k, v in path_map.items() if k != "verification"}
-                    status_now, missing = _status_from_paths(paths_now)
+                    status_now, missing = status_from_paths(paths_now)
             status = status_now
             if missing:
                 notes = f"missing after postprocess: {', '.join(missing)}"
-            _write_verification(seed_dir, baseline_name, t, s, status, notes)
-            upd = _upsert_transport_manifest_entry(
+            write_verification(seed_dir, baseline_name, t, s, status, notes)
+            upd = upsert_transport_manifest_entry(
                 baseline=baseline_name,
                 transport=t,
                 seed=s,
@@ -1207,8 +863,8 @@ def run_transport_batch(
             return {"baseline": baseline_name, "transport": t, "seed": s, "status": status, "notes": notes, "manifest": upd}
         except Exception as exc:
             notes = f"error: {exc}"
-            _write_verification(seed_dir, baseline_name, t, s, "error", notes)
-            _upsert_transport_manifest_entry(
+            write_verification(seed_dir, baseline_name, t, s, "error", notes)
+            upsert_transport_manifest_entry(
                 baseline=baseline_name,
                 transport=t,
                 seed=s,
@@ -1237,23 +893,7 @@ def read_transport_manifest(baseline: Optional[str] = None, transport: Optional[
     Read transport_runs manifest (filters optional).
     If missing, auto-scan without writing.
     """
-    data = _load_transport_manifest()
-    runs = data.get("runs", [])
-    filtered = []
-    for entry in runs:
-        if baseline is not None and entry.get("baseline") != baseline:
-            continue
-        if transport is not None and entry.get("transport") != transport:
-            continue
-        if seed is not None and entry.get("seed") != seed:
-            continue
-        filtered.append(entry)
-    if not runs:
-        # fall back to a read-only scan
-        root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-        runs = _scan_transport_runs(root)
-        filtered = [e for e in runs if (baseline is None or e["baseline"] == baseline) and (transport is None or e["transport"] == transport) and (seed is None or e["seed"] == seed)]
-    return {"manifest_path": str(_transport_manifest_path()), "runs": filtered, "schema_version": data.get("schema_version", 1)}
+    return read_transport_manifest_impl(baseline, transport, seed)
 
 
 @function_tool
@@ -1269,50 +909,14 @@ def update_transport_manifest(
     """
     Upsert a single transport run entry. Paths not provided will be inferred from standard filenames in the seed folder.
     """
-    root = BaseTool.resolve_output_dir(None) / "simulations" / "transport_runs"
-    seed_dir = root / baseline / f"transport_{transport}" / f"seed_{seed}"
-
-    def _infer(path_name: str) -> Optional[str]:
-        try:
-            parsed_paths = json.loads(paths_json) if paths_json else {}
-        except Exception:
-            parsed_paths = {}
-        if isinstance(parsed_paths, dict) and path_name in parsed_paths:
-            return parsed_paths[path_name]
-        candidates = {
-            "failure_matrix": seed_dir / f"{baseline}_sim_failure_matrix.npy",
-            "time_vector": seed_dir / f"{baseline}_sim_time_vector.npy",
-            "nodes_order": seed_dir / f"nodes_order_{baseline}_sim.txt",
-            "sim_json": seed_dir / f"{baseline}_sim.json",
-            "sim_status": seed_dir / f"{baseline}_sim.status.json",
-        }
-        p = candidates.get(path_name)
-        return str(p) if p and p.exists() else None
-
-    resolved_paths = {
-        "failure_matrix": _infer("failure_matrix"),
-        "time_vector": _infer("time_vector"),
-        "nodes_order": _infer("nodes_order"),
-        "sim_json": _infer("sim_json"),
-        "sim_status": _infer("sim_status"),
-    }
-    missing = [k for k, v in resolved_paths.items() if v is None]
-    if status == "complete" and missing:
-        status = "partial"
-        if notes:
-            notes = notes + f"; missing: {', '.join(missing)}"
-        else:
-            notes = f"missing: {', '.join(missing)}"
-
-    actor_name = actor or os.environ.get("AISC_ACTIVE_ROLE", "") or "unknown"
-    return _upsert_transport_manifest_entry(
+    return update_transport_manifest_impl(
         baseline=baseline,
         transport=transport,
         seed=seed,
         status=status,
-        paths=resolved_paths,
+        paths_json=paths_json,
         notes=notes,
-        actor=actor_name,
+        actor=actor,
     )
 
 
@@ -1456,23 +1060,6 @@ def _checkpoint_required(name: str, summary: str, human_in_loop: bool) -> None:
             pass
         raise RuntimeError(f"Checkpoint '{name}' declined by human.")
 
-
-def _coerce_float(value: Optional[float | str], default: float) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _coerce_int(value: Optional[int | str], default: int) -> int:
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except Exception:
-        return default
 
 
 @function_tool
@@ -4228,7 +3815,7 @@ def main():
     # Ensure standard transport_runs README exists for this run
     _ensure_transport_readme(base_folder)
     # Generate per-run run_recipe.json from morphologies/templates
-    _generate_run_recipe(base_folder)
+    generate_run_recipe(base_folder)
     # Ensure canonical PI/user inbox files live under experiment_results with root-level symlinks
     _bootstrap_note_links()
     # Initialize hypothesis trace skeleton for this run

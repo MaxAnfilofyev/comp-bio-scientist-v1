@@ -4,9 +4,9 @@ This document tracks the remaining work to fully modularize the orchestrator by 
 
 ## Status Summary
 
-**Done:** Phase 1 (Context & artifacts consolidation) is complete. The orchestrator now properly delegates to `context.py` and `artifacts.py` modules instead of duplicating logic.
+**Done:** Phases 1-4 (Context/Artifacts, Manifest service, Hypothesis/Provenance, and Transport) are complete—each domain now lives in its respective module and `agents_orchestrator.py` routes through the new delegates.
 
-**Remaining:** Phases 2-8 cover the extraction of remaining utilities into focused modules while keeping `agents_orchestrator.py` compatible and functional.
+**Remaining:** Phases 5-8 cover Release tooling, consolidated tool wrappers, agent assembly, and CLI/main slimming.
 
 ---
 
@@ -108,22 +108,22 @@ Move hypothesis trace, manuscript seed, gates, and provenance logic:
 Move transport manifests, baseline resolution, and run layout:
 
 #### Functions to move:
-- [_] Transport manifest core: `_transport_manifest_path`, `_acquire_manifest_lock`, `_atomic_write_json`, `_load_transport_manifest`, `_upsert_transport_manifest_entry`, `_scan_transport_runs`
-- [_] Baseline/run helpers: `_resolve_baseline_path_internal`, `_build_seed_dir`, `_resolve_run_paths`, `_status_from_paths`, `_write_verification`, `_generate_run_recipe`
+- [x] Transport manifest core: `_transport_manifest_path`, `_acquire_manifest_lock`, `_atomic_write_json`, `_load_transport_manifest`, `_upsert_transport_manifest_entry`, `_scan_transport_runs`
+- [x] Baseline/run helpers: `_resolve_baseline_path_internal`, `_build_seed_dir`, `_resolve_run_paths`, `_status_from_paths`, `_write_verification`, `_generate_run_recipe`
 
 #### `@function_tool` wrappers to delegate:
-- [_] `scan_transport_manifest`
-- [_] `read_transport_manifest`
-- [_] `resolve_baseline_path`
-- [_] `resolve_sim_path`
-- [_] `update_transport_manifest`
-- [_] `run_transport_batch`
-- [_] `validate_per_compartment_outputs`
-- [_] `sim_postprocess` (transport-related batches)
-- [_] `repair_sim_outputs` (transport-related repair)
+- [x] `scan_transport_manifest`
+- [x] `read_transport_manifest`
+- [x] `resolve_baseline_path`
+- [x] `resolve_sim_path`
+- [x] `update_transport_manifest`
+- [x] `run_transport_batch`
+- [x] `validate_per_compartment_outputs`
+- [x] `sim_postprocess` (transport-related batches)
+- [x] `repair_sim_outputs` (transport-related repair)
 
 #### Integration:
-- [_] Wire transport manifest calls in sim wrappers through this module
+[x] Wire transport manifest calls in sim wrappers through this module
 
 ---
 
@@ -258,8 +258,8 @@ Update this section as work progresses:
 
 - Phase 1: ✅ DONE
 - Phase 2: ✅ DONE
-- Phase 3: ⏳ PENDING
-- Phase 4: ⏳ PENDING
+- Phase 3: ✅ DONE
+- Phase 4: ✅ DONE
 - Phase 5: ⏳ PENDING
 - Phase 6: ⏳ PENDING
 - Phase 7: ⏳ PENDING
