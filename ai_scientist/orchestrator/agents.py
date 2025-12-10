@@ -198,10 +198,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
     path_guardrails = (
         "FILE IO POLICY: Every persistent artifact must be reserved via 'reserve_typed_artifact(kind=..., meta_json=...)' using the registry below; do NOT invent filenames or bypass the registry. "
         f"Known kinds: {artifact_catalog}. "
+        "Refer to docs/artifact_metadata_requirements.md for the required metadata fields every artifact must carry. "
         "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status via append_manifest. "
         "Use 'reserve_output' only for PI/Coder scratch logs; other roles must stay within typed helpers. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
         "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note. "
         "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead."
+    )
+    metadata_reminder = (
+        "METADATA REMINDER: When calling 'reserve_typed_artifact' or 'reserve_and_register_artifact', pass 'meta_json' including "
+        "`id`, `type`, `version`, `parent_version`, `status`, `module`, `summary`, `content`, and `metadata` (see docs/artifact_metadata_requirements.md)."
     )
 
     reflection_instruction = (
@@ -224,7 +229,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"Goal: Verify novelty of '{title}' and map claims to citations.\n"
             f"Context: {abstract}\n"
             f"Related Work to Consider: {related_work}\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
@@ -269,7 +274,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"Goal: Execute simulations for '{title}'.\n"
             f"Hypothesis: {hypothesis}\n"
             f"Experimental Plan:\n{experiments_plan}\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
@@ -333,7 +338,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Read data from provided input paths. Do NOT list files to find them; assume the path is correct.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
@@ -396,7 +401,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Holistic Reviewer.\n"
             "Goal: Identify logical gaps and structural flaws.\n"
             f"Risk Factors & Limitations to Check:\n{risk_factors}\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
@@ -448,7 +453,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Mathematical-Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Call 'interpret_biology' only when biology.research_type == theoretical.\n"
             "2. Use experiment summaries and idea text; do NOT hallucinate unsupported claims.\n"
@@ -489,7 +494,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Utility Engineer.\n"
             "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
             "2. If you add tools/helpers, document them briefly and log via 'append_manifest' (name + kind + created_by + status).\n"
@@ -527,7 +532,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             "You are an expert Production Editor.\n"
             "Goal: Compile final PDF.\n"
-            f"{path_context}\n{path_guardrails}\n"
+            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n"
             "Directives:\n"
             "1. Target the 'blank_theoretical_biology_latex' template.\n"
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
@@ -564,6 +569,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         instructions=(
             f"You are an expert Principal Investigator for project: {title}.\n"
             f"Hypothesis: {hypothesis}\n"
+            f"{metadata_reminder}\n"
             "Responsibilities:\n"
             "0. Agents are stateless tools with a hard ~40-turn budget (including their tool calls). Do NOT send 'prepare' or 'wait until X' tasks. Delegate small, end-to-end units with concrete paths; if a job is large, split it into multiple invocations (e.g., one per batch of sims/plots) and ask the agent to persist outputs plus a brief status note to user_inbox.md/pi_notes.md before returning. You may spawn multiple parallel calls to the same role if that speeds work, as long as each request is end-to-end and self-contained. If you already know the relevant file paths or artifact names, include them in the prompt to save turn budget.\n"
             "1. STATE CHECK: First, use any injected context about 'pi_notes.md', 'user_inbox.md', or prior 'check_project_state' runs that appears in your system/user message. Only call 'read_note' or 'check_project_state' if you need a fresh snapshot beyond what is already provided.\n"

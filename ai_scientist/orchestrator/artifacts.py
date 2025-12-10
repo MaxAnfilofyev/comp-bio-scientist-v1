@@ -1,8 +1,10 @@
 import json
 import os
 import re
+from datetime import datetime
 from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.manifest import append_or_update, load_entries
@@ -225,6 +227,46 @@ def _artifact_kind_catalog() -> str:
     return "; ".join(parts)
 
 
+def _load_meta_dict(meta_json: Optional[str]) -> Tuple[Dict[str, Any], Optional[str]]:
+    if not meta_json:
+        return {}, None
+    try:
+        parsed = json.loads(meta_json)
+    except json.JSONDecodeError as exc:
+        return {}, f"Invalid meta_json: {exc}"
+    if not isinstance(parsed, dict):
+        return {}, "meta_json must decode to an object/dict."
+    return parsed, None
+
+
+def _prepare_artifact_metadata(meta: Dict[str, Any], kind: str) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = dict(meta)
+    now = datetime.utcnow().isoformat()
+    normalized.setdefault("id", f"{kind}_{now.replace(':', '').replace('-', '')}_{uuid4().hex[:6]}")
+    normalized.setdefault("type", kind)
+    normalized.setdefault("version", "v1")
+    normalized.setdefault("parent_version", None)
+    normalized.setdefault("status", "pending")
+    normalized.setdefault("module", normalized.get("module") or "general")
+    summary = normalized.get("summary")
+    if not summary or not str(summary).strip():
+        normalized["summary"] = f"Auto-generated {kind} artifact"
+    content = normalized.get("content")
+    if content is None:
+        normalized["content"] = {"description": f"Auto-generated placeholder for {kind}"}
+    metadata = normalized.get("metadata")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a dictionary")
+    metadata.setdefault("created_at", now)
+    metadata.setdefault("created_by", metadata.get("created_by") or os.environ.get("AISC_ACTIVE_ROLE") or "unknown")
+    metadata.setdefault("tags", [])
+    metadata.setdefault("tools_used", [])
+    normalized["metadata"] = metadata
+    return normalized
+
+
 def list_artifacts_by_kind(kind: str, limit: int = 100):
     exp_dir = BaseTool.resolve_output_dir(None)
     entries = load_entries(base_folder=exp_dir, limit=None)
@@ -232,16 +274,21 @@ def list_artifacts_by_kind(kind: str, limit: int = 100):
     return {"kind": kind, "paths": [e.get("path") for e in filtered[:limit]], "total": len(filtered)}
 
 
-def _reserve_typed_artifact_impl(kind: str, meta_json: Optional[str], unique: bool) -> Dict[str, Any]:
-    meta: Dict[str, Any] = {}
-    if meta_json:
-        try:
-            parsed = json.loads(meta_json)
-        except json.JSONDecodeError as exc:
-            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
-        if not isinstance(parsed, dict):
-            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
-        meta = parsed
+def _reserve_typed_artifact_impl(
+    kind: str,
+    meta_json: Optional[str],
+    unique: bool,
+    *,
+    meta_dict: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if meta_dict is not None:
+        normalized_meta = _prepare_artifact_metadata(meta_dict, kind)
+    else:
+        parsed, err = _load_meta_dict(meta_json)
+        if err:
+            return {"error": err, "kind": kind}
+        normalized_meta = _prepare_artifact_metadata(parsed, kind)
+    meta = normalized_meta
     try:
         rel_dir, name = _format_artifact_path(kind, meta)
     except Exception as exc:
@@ -259,6 +306,7 @@ def _reserve_typed_artifact_impl(kind: str, meta_json: Optional[str], unique: bo
         "rel_dir": rel_dir,
         "quarantined": quarantined,
     }
+    result["metadata"] = normalized_meta
     if note:
         result["note"] = note
     return result
@@ -271,17 +319,21 @@ def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: b
 def reserve_and_register_artifact(
     kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True
 ):
-    meta: Dict[str, Any] = {}
-    if meta_json:
-        try:
-            parsed = json.loads(meta_json)
-        except json.JSONDecodeError as exc:
-            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
-        if not isinstance(parsed, dict):
-            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
-        meta = parsed
+    parsed_meta, err = _load_meta_dict(meta_json)
+    if err:
+        return {"error": err, "kind": kind}
+    try:
+        normalized_meta = _prepare_artifact_metadata(parsed_meta, kind)
+    except ValueError as exc:
+        return {"error": str(exc), "kind": kind}
+    normalized_meta["status"] = status
 
-    reserve = _reserve_typed_artifact_impl(kind=kind, meta_json=meta_json, unique=unique)
+    reserve = _reserve_typed_artifact_impl(
+        kind=kind,
+        meta_json=None,
+        unique=unique,
+        meta_dict=normalized_meta,
+    )
     if reserve.get("error"):
         return reserve
     path = reserve.get("reserved_path")
@@ -291,8 +343,16 @@ def reserve_and_register_artifact(
         "path": path,
         "name": reserve.get("name") or os.path.basename(path),
         "kind": kind,
-        "created_by": meta.get("created_by") or meta.get("actor") or os.environ.get("AISC_ACTIVE_ROLE") or "unknown",
-        "status": status,
+        "created_by": normalized_meta.get("metadata", {}).get("created_by")
+        or os.environ.get("AISC_ACTIVE_ROLE")
+        or "unknown",
+        "status": normalized_meta.get("status") or status,
+        "version": normalized_meta.get("version"),
+        "parent_version": normalized_meta.get("parent_version"),
+        "module": normalized_meta.get("module"),
+        "summary": normalized_meta.get("summary"),
+        "content": normalized_meta.get("content"),
+        "metadata": normalized_meta,
     }
     manifest_res = append_or_update(entry, base_folder=BaseTool.resolve_output_dir(None))
     if manifest_res.get("error"):
