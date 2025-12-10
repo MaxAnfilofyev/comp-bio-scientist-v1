@@ -55,7 +55,8 @@ from ai_scientist.utils.transport_index import resolve_transport_sim
 from ai_scientist.utils import manifest as manifest_utils
 
 from ai_scientist.orchestrator.artifacts import (
-    _format_artifact_path,
+    reserve_typed_artifact as _reserve_typed_artifact_impl,
+    reserve_and_register_artifact as _reserve_and_register_impl,
 )
 
 from ai_scientist.orchestrator.context import (
@@ -2103,38 +2104,6 @@ def summarize_artifact(path: str, max_lines: int = 5):
 
 
 
-def _reserve_typed_artifact_impl(kind: str, meta_json: Optional[str], unique: bool) -> Dict[str, Any]:
-    meta: Dict[str, Any] = {}
-    if meta_json:
-        try:
-            parsed = json.loads(meta_json)
-        except json.JSONDecodeError as exc:
-            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
-        if not isinstance(parsed, dict):
-            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
-        meta = parsed
-    try:
-        rel_dir, name = _format_artifact_path(kind, meta)
-    except Exception as exc:
-        return {"error": str(exc), "kind": kind}
-    try:
-        target, quarantined, note = resolve_output_path(
-            subdir=rel_dir, name=name, allow_quarantine=True, unique=unique
-        )
-    except Exception as exc:
-        return {"error": f"Failed to reserve path: {exc}", "kind": kind}
-    result: Dict[str, Any] = {
-        "reserved_path": str(target),
-        "kind": kind,
-        "name": name,
-        "rel_dir": rel_dir,
-        "quarantined": quarantined,
-    }
-    if note:
-        result["note"] = note
-    return result
-
-
 @function_tool
 def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: bool = True):
     """
@@ -2145,41 +2114,23 @@ def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: b
 
 
 @function_tool
-def reserve_and_register_artifact(kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True):
+def reserve_and_register_artifact(
+    kind: str,
+    meta_json: Optional[str] = None,
+    status: str = "pending",
+    unique: bool = True,
+    skip_summary: bool = False,
+):
     """
     Reserve a canonical artifact path using the registry and immediately register it in manifest v2 with provided status.
     """
-    meta: Dict[str, Any] = {}
-    if meta_json:
-        try:
-            parsed = json.loads(meta_json)
-        except json.JSONDecodeError as exc:
-            return {"error": f"Invalid meta_json: {exc}", "kind": kind}
-        if not isinstance(parsed, dict):
-            return {"error": "meta_json must decode to an object/dict.", "kind": kind}
-        meta = parsed
-
-    reserve = _reserve_typed_artifact_impl(kind=kind, meta_json=meta_json, unique=unique)
-    if reserve.get("error"):
-        return reserve
-    path = reserve.get("reserved_path")
-    if not path:
-        return {"error": "failed_to_reserve", "kind": kind}
-    entry = {
-        "path": path,
-        "name": reserve.get("name") or os.path.basename(path),
-        "kind": kind,
-        "created_by": meta.get("created_by") or meta.get("actor") or os.environ.get("AISC_ACTIVE_ROLE") or "unknown",
-        "status": status,
-    }
-    manifest_res = manifest_utils.append_or_update(entry, base_folder=BaseTool.resolve_output_dir(None))
-    if manifest_res.get("error"):
-        reserve["manifest_error"] = manifest_res["error"]
-    else:
-        manifest_idx = manifest_res.get("manifest_index")
-        if manifest_idx:
-            reserve["manifest_index"] = manifest_idx
-    return reserve
+    return _reserve_and_register_impl(
+        kind=kind,
+        meta_json=meta_json,
+        status=status,
+        unique=unique,
+        skip_summary=skip_summary,
+    )
 
 
 @function_tool

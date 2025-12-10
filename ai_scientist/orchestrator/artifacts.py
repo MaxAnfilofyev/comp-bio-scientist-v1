@@ -10,6 +10,8 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.manifest import append_or_update, load_entries
 from ai_scientist.utils.pathing import resolve_output_path
 
+from ai_scientist.orchestrator.summarization import maybe_generate_module_summary
+
 from ai_scientist.orchestrator.context_specs import (
     active_role,
     ensure_write_permission,
@@ -152,6 +154,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "rel_dir": "experiment_results",
         "pattern": "hypothesis_trace.json",
         "description": "Hypothesis trace JSON for run.",
+    },
+    "integration_memo_md": {
+        "rel_dir": "experiment_results/summaries",
+        "pattern": "integrated_memo_{module}.md",
+        "description": "Module-level integrated memo summarizing artifacts.",
     },
     "release_manifest": {
         "rel_dir": "experiment_results/releases/{tag}",
@@ -328,7 +335,11 @@ def reserve_typed_artifact(kind: str, meta_json: Optional[str] = None, unique: b
 
 
 def reserve_and_register_artifact(
-    kind: str, meta_json: Optional[str] = None, status: str = "pending", unique: bool = True
+    kind: str,
+    meta_json: Optional[str] = None,
+    status: str = "pending",
+    unique: bool = True,
+    skip_summary: bool = False,
 ):
     role = active_role()
     allowed, reason = ensure_write_permission(kind, role)
@@ -376,6 +387,14 @@ def reserve_and_register_artifact(
         manifest_idx = manifest_res.get("manifest_index")
         if manifest_idx:
             reserve["manifest_index"] = manifest_idx
+    if not skip_summary:
+        module_name = normalized_meta.get("module")
+        if module_name:
+            base_dir = str(BaseTool.resolve_output_dir(None))
+            threshold_value = max(
+                1, int(os.environ.get("AISC_SUMMARY_THRESHOLD") or "5")
+            )
+            _maybe_trigger_module_summary(module_name, base_dir, threshold_value)
     return reserve
 
 
@@ -385,3 +404,81 @@ def reserve_output(name: str, subdir: Optional[str] = None):
     if note:
         result["note"] = note
     return result
+
+
+def _next_summary_version(parent_version: Optional[str]) -> str:
+    if parent_version and isinstance(parent_version, str) and parent_version.startswith("v"):
+        digits = parent_version[1:]
+        if digits.isdigit():
+            return f"v{int(digits) + 1}"
+    return f"v{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+
+
+def _maybe_trigger_module_summary(module_name: str, base_folder: str, threshold: int) -> None:
+    try:
+        summary_payload = maybe_generate_module_summary(
+            module_name, base_folder=base_folder, threshold=threshold
+        )
+    except Exception:
+        record_context_access(active_role(), "integration_memo_md", None, "summary_generation_failed")
+        return
+    if not summary_payload:
+        return
+    _register_module_summary(summary_payload, base_folder)
+
+
+def _register_module_summary(summary_payload: Dict[str, Any], base_folder: str) -> None:
+    module_name = summary_payload["module"]
+    summary_text = summary_payload["summary_text"]
+    summary_meta = {
+        "module": module_name,
+        "summary": summary_text.splitlines()[0] if summary_text else f"Integrated memo for {module_name}",
+        "content": {
+            "text": summary_text,
+            "entries": summary_payload["entries"],
+        },
+        "metadata": {
+            "summarized_up_to": summary_payload["summarized_up_to"],
+            "summarized_count": summary_payload["summary_count"],
+            "entries": [entry["name"] for entry in summary_payload["entries"]],
+        },
+        "version": _next_summary_version(summary_payload.get("parent_version")),
+        "parent_version": summary_payload.get("parent_version"),
+        "status": "canonical",
+    }
+    summary_meta["id"] = f"integration_memo_{module_name}_{summary_payload['summary_count']}_{summary_meta['version']}"
+    reserve = _reserve_typed_artifact_impl(
+        kind="integration_memo_md",
+        meta_json=None,
+        unique=False,
+        meta_dict=summary_meta,
+    )
+    if reserve.get("error"):
+        record_context_access(active_role(), "integration_memo_md", None, "summary_reserve_failed")
+        return
+    path = reserve.get("reserved_path")
+    if not path:
+        record_context_access(active_role(), "integration_memo_md", None, "summary_notify_nopath")
+        return
+    dir_name = os.path.dirname(path)
+    try:
+        os.makedirs(dir_name, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(summary_text)
+    except Exception:
+        record_context_access(active_role(), "integration_memo_md", path, "summary_write_failed")
+    reserve_metadata = reserve.get("metadata") or {}
+    entry = {
+        "path": path,
+        "name": reserve.get("name") or os.path.basename(path),
+        "kind": "integration_memo_md",
+        "created_by": reserve_metadata.get("created_by") or os.environ.get("AISC_ACTIVE_ROLE") or "automated_summarizer",
+        "status": summary_meta["status"],
+        "version": summary_meta["version"],
+        "parent_version": summary_meta.get("parent_version"),
+        "module": module_name,
+        "summary": summary_meta["summary"],
+        "content": summary_meta["content"],
+        "metadata": reserve_metadata,
+    }
+    append_or_update(entry, base_folder=base_folder)
