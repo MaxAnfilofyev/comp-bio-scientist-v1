@@ -181,13 +181,13 @@ def run_biological_model(...):
 Move agent creation and team assembly:
 
 #### Functions to move:
-- [_] `_make_agent` (generic agent factory)
-- [_] `extract_run_output` (custom output extractor)
-- [_] `build_team` (full team assembly with all role prompts)
+- [x] `_make_agent` (generic agent factory)
+- [x] `extract_run_output` (custom output extractor)
+- [x] `build_team` (full team assembly with all role prompts)
 
 #### Expected imports:
-- [_] Tools from `tool_wrappers` (via `@function_tool` wrappers)
-- [_] Keep tool choice and model settings
+- [x] Tools from `tool_wrappers` (via `@function_tool` wrappers)
+- [x] Keep tool choice and model settings
 
 ---
 
@@ -261,7 +261,7 @@ Update this section as work progresses:
 - Phase 4: ✅ DONE
 - Phase 5: ✅ DONE
 - Phase 6: ✅ DONE
-- Phase 7: ⏳ PENDING
+- Phase 7: ✅ DONE
 - Phase 8: ⏳ PENDING
 
 ## Recommended Implementation Order

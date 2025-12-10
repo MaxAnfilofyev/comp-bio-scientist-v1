@@ -20,10 +20,16 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - Agent tool highlights:
      - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`.
      - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`.
-  - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
-  - Interpreter: `interpret_biological_results` wrapper for theoretical runs (`interpretation.json/md`).
-  - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`.
-  - Repair: `repair_sim_outputs` to bulk run `sim_postprocess` on sim.json entries lacking exported arrays, validate per-compartment artifacts, and update manifest/tool_summary (lock-aware, idempotent). CLI: `python ai_scientist/perform_repair_sim_outputs.py --manifest <path>`.
+   - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
+   - Interpreter: `interpret_biological_results` wrapper for theoretical runs (`interpretation.json/md`).
+   - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`.
+   - Repair: `repair_sim_outputs` to bulk run `sim_postprocess` on sim.json entries lacking exported arrays, validate per-compartment artifacts, and update manifest/tool_summary (lock-aware, idempotent). CLI: `python ai_scientist/perform_repair_sim_outputs.py --manifest <path>`.
+
+  ## Modular Orchestrator Support Modules
+
+  - `ai_scientist/orchestrator/tool_wrappers.py` now centralizes every `@function_tool` surface that role agents call. Each wrapper resolves canonical paths, gates operations via the dependence chain (lit/model/transport), pushes manifest entries, and exposes convenience helpers such as `inspect_manifest`, `reserve_typed_artifact`, `write_text_artifact`, and `append_run_note_tool`.
+  - `ai_scientist/orchestrator/agents.py` builds the curated agent team used by `agents_orchestrator.py`. It pulls the wrapper tools, stitches the per-role instructions/prompts, and provides the PI agent with the same tooling surface plus `build_team()` and `extract_run_output()` helper methods so the orchestrator only manages flow and deployment.
+  - Keep running `ruff check agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py` and `pyright agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py` after edits to keep the modularization healthy.
 
 3. **Plot aggregation (`perform_plotting.py`)**
    - Aggregates plots from experiment results (LLM-assisted).

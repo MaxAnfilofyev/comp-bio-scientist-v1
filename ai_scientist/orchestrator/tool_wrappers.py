@@ -24,8 +24,6 @@ except ImportError:
 
 from agents import Agent, function_tool as _function_tool, ModelSettings
 
-function_tool: Callable[..., Any] = cast(Callable[..., Any], _function_tool)
-
 # --- Underlying Tool Imports ---
 from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
 from ai_scientist.tools.lit_validator import LitSummaryValidatorTool
@@ -113,6 +111,8 @@ from ai_scientist.orchestrator.transport import (
 )
 
 _CHECKPOINTS_SEEN: set[str] = set()
+
+function_tool: Callable[..., Any] = cast(Callable[..., Any], _function_tool)
 
 
 @function_tool  # type: ignore[reportCallIssue]
