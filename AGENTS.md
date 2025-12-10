@@ -131,7 +131,15 @@ python agents_orchestrator.py \
   --model gpt-5o-mini \
   --max_cycles 25 \
   --base_folder experiments/20251121_1801_axonal_arbor_percolation  # optional: restart from existing folder
+
+# Manuscript-first orchestrator (derives idea from a draft)
+python agents_orchestrator.py \
+  --load_manuscript ai_scientist/ideas/manuscript_v3.md \
+  --manuscript_title "A Topological Tipping Point Explains the Selective Vulnerability of Substantia Nigra Neurons" \
+  --model gpt-5o-mini \
+  --max_cycles 25
 ```
+- Manuscript-first runs cache the ingested text to `experiment_results/manuscript_input.txt` and the derived seed idea to `experiment_results/seed_idea_from_manuscript.json` for provenance/resume.
 
 ### Sub-agent output visibility
 - If a role agent hits `max_turns` or returns sparse text, the orchestrator now echoes the last message plus a brief summary of tool calls (`tools_called: ... (n_new_items=...)`) so the PI can see what actually ran.
