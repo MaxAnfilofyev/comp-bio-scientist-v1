@@ -1,19 +1,3 @@
-<div align="center">
-  <a href="https://github.com/SakanaAI/AI-Scientist_v2/blob/main/docs/logo_v1.jpg">
-    <img src="docs/logo_v1.png" width="215" alt="AI Scientist v2 Logo" />
-  </a>
-  <h1>
-    <b>The AI Scientist-v2: Workshop-Level Automated</b><br>
-    <b>Scientific Discovery via Agentic Tree Search</b>
-  </h1>
-</div>
-
-<p align="center">
-  📚 <a href="https://pub.sakana.ai/ai-scientist-v2/paper">[Paper]</a> |
-  📝 <a href="https://sakana.ai/ai-scientist-first-publication/"> [Blog Post]</a> |
-  📂 <a href="https://github.com/SakanaAI/AI-Scientist-ICLR2025-Workshop-Experiment"> [ICLR2025 Workshop Experiment]</a>
-</p>
-
 Fully autonomous scientific research systems are becoming increasingly capable, with AI playing a pivotal role in transforming how scientific discoveries are made.
 We are excited to introduce The AI Scientist-v2, a generalized end-to-end agentic system that has generated the first workshop paper written entirely by AI and accepted through peer review.
 
@@ -80,13 +64,6 @@ By default, the system uses the `OPENAI_API_KEY` environment variable for OpenAI
 
 By default, the system uses the `GEMINI_API_KEY` environment variable for Gemini models through OpenAI API.
 
-#### Claude Models via AWS Bedrock
-
-To use Claude models provided by Amazon Bedrock, install the necessary additional packages:
-```bash
-pip install anthropic[bedrock]
-```
-Next, configure valid [AWS Credentials](https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-envvars.html) and the target [AWS Region](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html) by setting the following environment variables: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION_NAME`.
 
 #### Semantic Scholar API (Literature Search)
 

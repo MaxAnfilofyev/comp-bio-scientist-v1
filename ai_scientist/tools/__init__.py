@@ -16,6 +16,7 @@ from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.claim_graph import ClaimGraphTool
 from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
 from ai_scientist.tools.reference_verification import ReferenceVerificationTool
+from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
 __all__ = [
     "SemanticScholarSearchTool",
@@ -37,4 +38,5 @@ __all__ = [
     "ClaimGraphTool",
     "ClaimGraphCheckTool",
     "ReferenceVerificationTool",
+    "ComputeModelMetricsTool",
 ]

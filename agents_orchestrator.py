@@ -57,6 +57,7 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs as validate_per_compartment_outputs_internal
 from ai_scientist.tools.reference_verification import ReferenceVerificationTool
+from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
 # Cached idea for hypothesis trace bootstrapping
 _ACTIVE_IDEA: Optional[Dict[str, Any]] = None
@@ -246,6 +247,16 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "rel_dir": "experiment_results",
         "pattern": "hypothesis_trace.json",
         "description": "Traceability map: hypothesis -> experiments -> sim runs/figures.",
+    },
+    "model_metrics_json": {
+        "rel_dir": "experiment_results/models",
+        "pattern": "{model_key}_metrics.json",
+        "description": "Model-level metrics and bifurcation proxies.",
+    },
+    "sweep_metrics_csv": {
+        "rel_dir": "experiment_results/simulations",
+        "pattern": "{label}_metrics.csv",
+        "description": "Aggregated metrics for parameter sweeps or batches.",
     },
 }
 
@@ -2166,6 +2177,38 @@ def run_biological_plotting(
         pass
     return res
 
+
+@function_tool
+def compute_model_metrics(
+    input_path: str,
+    label: Optional[str] = None,
+    model_key: Optional[str] = None,
+    output_dir: Optional[str] = None,
+):
+    """
+    Compute domain-specific metrics from a sweep CSV/JSON or model output; writes *_metrics.csv and optional {model_key}_metrics.json.
+    """
+    res = ComputeModelMetricsTool().use_tool(
+        input_path=input_path,
+        label=label,
+        model_key=model_key,
+        output_dir=output_dir,
+    )
+    if isinstance(res, dict):
+        if res.get("output_csv"):
+            _append_manifest_entry(
+                name=res["output_csv"],
+                metadata_json=json.dumps({"kind": "sweep_metrics_csv", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "modeler"), "status": "ok"}),
+                allow_missing=False,
+            )
+        if res.get("model_metrics_json"):
+            _append_manifest_entry(
+                name=res["model_metrics_json"],
+                metadata_json=json.dumps({"kind": "model_metrics_json", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "modeler"), "status": "ok"}),
+                allow_missing=False,
+            )
+    return res
+
 @function_tool
 def sim_postprocess(
     sim_json_path: str,
@@ -2278,6 +2321,7 @@ def run_biological_model(
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
     metrics: Optional[List[str]] = None,
+    compute_metrics: bool = False,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
     ledger = _ensure_model_spec_and_params(model_key)
@@ -2309,6 +2353,15 @@ def run_biological_model(
                 sim_entry={"baseline": model_key, "transport": None, "seed": None},
                 metrics=metrics or [],
             )
+        if compute_metrics and isinstance(res, dict) and res.get("output_json"):
+            try:
+                compute_model_metrics(
+                    input_path=res["output_json"],
+                    model_key=model_key,
+                    label=model_key,
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     return res
@@ -2324,6 +2377,7 @@ def run_sensitivity_sweep(
     metadata_json: Optional[str] = None,
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
+    compute_metrics: bool = True,
 ):
     """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
     res = RunSensitivitySweepTool().use_tool(
@@ -2347,6 +2401,14 @@ def run_sensitivity_sweep(
                 },
                 metrics=["sensitivity_sweep"],
             )
+        if compute_metrics and isinstance(res, dict) and res.get("output_csv"):
+            try:
+                compute_model_metrics(
+                    input_path=res["output_csv"],
+                    label=Path(res["output_csv"]).stem.replace(".csv", ""),
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     return res
@@ -2362,6 +2424,7 @@ def run_intervention_tests(
     metadata_json: Optional[str] = None,
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
+    compute_metrics: bool = True,
 ):
     """Test parameter interventions vs a baseline and report delta frac_failed."""
     res = RunInterventionTesterTool().use_tool(
@@ -2385,6 +2448,14 @@ def run_intervention_tests(
                 },
                 metrics=["intervention_tester"],
             )
+        if compute_metrics and isinstance(res, dict) and res.get("output_csv"):
+            try:
+                compute_model_metrics(
+                    input_path=res["output_csv"],
+                    label=Path(res["output_csv"]).stem.replace(".csv", ""),
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     return res
@@ -3535,6 +3606,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "3b. Before first sim of a given model_key, generate model_spec_yaml and parameter_source_table (one row per parameter with source_type and lit/claim links). Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
             "3c. Update hypothesis_trace.json after each sim/ensemble: record hypothesis_id/experiment_id, sim run identifiers, and metrics produced.\n"
+            "3d. After sweeps or transport batches, call 'compute_model_metrics' to emit *_metrics.csv and/or {model_key}_metrics.json; rerun if metrics are missing when figures/text depend on them.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
             "5b. Reserve every persistent artifact via 'reserve_typed_artifact' (transport_* kinds for sims, sensitivity_sweep_table/intervention_table for sweeps, verification_note for proof-of-work); do NOT invent filenames or call reserve_output for data assets.\n"
@@ -3576,6 +3648,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_sim_path,
             update_transport_manifest,
             update_hypothesis_trace,
+            compute_model_metrics,
             mirror_artifacts,
             read_npy_artifact,
             validate_per_compartment_outputs,
@@ -3601,7 +3674,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
             "3e. Update hypothesis_trace.json with figure filenames under the correct hypothesis/experiment after plotting.\n"
-            "3f. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
+            "3f. Prefer metrics artifacts (sweep_metrics_csv/model_metrics_json) over raw CSVs when plotting; if missing, ask Modeler to run compute_model_metrics.\n"
+            "3g. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
@@ -3634,6 +3708,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_transport_batch,
             resolve_sim_path,
             update_transport_manifest,
+            compute_model_metrics,
             update_hypothesis_trace,
             write_figures_readme,
             write_text_artifact,
@@ -3661,6 +3736,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2b. Read lit_reference_verification.csv/json; if any reference has found==False or match_score below the reported threshold, mark the draft as unsupported until fixed.\n"
             "2c. Verify that every simulation/model parameter appearing in figures/tables has a row in parameter_source_table with a declared source_type and (when lit_value) lit_claim_id/reference_id.\n"
             "2d. Check hypothesis_trace.json: any hypothesis marked 'supported' must list sim_runs and figures that exist on disk; flag gaps.\n"
+            "2e. Ensure metrics artifacts exist for referenced sweeps/models (sweep_metrics_csv or model_metrics_json). If missing, flag and request compute_model_metrics.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
@@ -3689,6 +3765,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_claim_graph,
             run_biological_stats,
             verify_references,
+            compute_model_metrics,
             update_hypothesis_trace,
             write_text_artifact,
             manage_project_knowledge,
