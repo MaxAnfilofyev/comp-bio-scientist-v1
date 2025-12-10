@@ -131,7 +131,7 @@ def _normalize_v2_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             size_bytes = Path(path).stat().st_size
         except Exception:
             size_bytes = None
-    return {
+    norm: Dict[str, Any] = {
         "path": path,
         "name": name,
         "kind": kind,
@@ -141,6 +141,14 @@ def _normalize_v2_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "size_bytes": size_bytes,
         "schema_version": SCHEMA_VERSION,
     }
+    metadata = entry.get("metadata")
+    if isinstance(metadata, dict):
+        norm["metadata"] = metadata
+    else:
+        extras = {k: v for k, v in entry.items() if k not in {"path", "name", "kind", "created_by", "status", "created_at", "size_bytes", "schema_version"}}
+        if extras:
+            norm["metadata"] = extras
+    return norm
 
 
 def unique_path_check(*, base_folder: Optional[str | Path] = None) -> Dict[str, Any]:

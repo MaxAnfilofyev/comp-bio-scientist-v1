@@ -3786,7 +3786,8 @@ def read_manuscript(path: str, return_size_threshold_chars: int = 2000):
 @function_tool
 def run_writeup_task(
     base_folder: Optional[str] = None,
-    page_limit: int = 8
+    page_limit: int = 8,
+    release_tag: Optional[str] = None,
 ):
     """Compiles the manuscript using the theoretical biology template."""
     human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
@@ -3801,6 +3802,29 @@ def run_writeup_task(
         pass
 
     base_folder = base_folder or os.environ.get("AISC_BASE_FOLDER", "")
+    release_meta: Dict[str, Any] = {}
+    if release_tag:
+        exp_dir = BaseTool.resolve_output_dir(None)
+        release_root = exp_dir / "releases" / release_tag
+        manifest = _load_release_manifest(release_root, release_tag)
+        if not manifest.get("error"):
+            release_meta = {
+                "release_tag": release_tag,
+                "release_commit": manifest.get("git", {}).get("commit"),
+                "release_doi": manifest.get("doi") or manifest.get("zenodo_doi"),
+            }
+            env_rel = manifest.get("env_manifest_path") or "env_manifest.json"
+            env_path = release_root / env_rel if not Path(env_rel).is_absolute() else Path(env_rel)
+            if env_path.exists():
+                release_meta["release_env_checksum"] = _safe_sha256(env_path)
+            code_checksum = None
+            for entry in manifest.get("files", []) or []:
+                p = entry.get("path", "")
+                if "code_release" in p:
+                    code_checksum = entry.get("checksum")
+                    break
+            release_meta["release_code_checksum"] = code_checksum
+
     ok = perform_writeup(
         base_folder=base_folder,
         no_writing=False,
@@ -3809,6 +3833,11 @@ def run_writeup_task(
         big_model="gpt-4o",
         n_writeup_reflections=2,
         page_limit=page_limit,
+        release_tag=release_meta.get("release_tag"),
+        release_commit=release_meta.get("release_commit"),
+        release_doi=release_meta.get("release_doi"),
+        release_env_checksum=release_meta.get("release_env_checksum"),
+        release_code_checksum=release_meta.get("release_code_checksum"),
     )
     # Post-write consistency gate
     enforce_claims = os.environ.get("AISC_ENFORCE_CLAIM_CONSISTENCY", "true").strip().lower() not in {"0", "false", "no"}
@@ -3828,7 +3857,26 @@ def run_writeup_task(
                 )
         except Exception:
             pass
-    return {"success": ok}
+    pdf_candidates = sorted(
+        Path(base_folder or BaseTool.resolve_output_dir(None)).glob(f"{Path(base_folder or BaseTool.resolve_output_dir(None)).name}_*.pdf"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+    )
+    pdf_path = pdf_candidates[-1] if pdf_candidates else Path(base_folder or BaseTool.resolve_output_dir(None)) / "manuscript.pdf"
+    meta_entry: Dict[str, Any] = {
+        "path": str(pdf_path),
+        "name": pdf_path.name,
+        "kind": "manuscript_pdf",
+        "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"),
+        "status": "ok",
+    }
+    if release_tag:
+        meta_entry["metadata"] = {
+            "release_tag": release_tag,
+            "code_release_checksum": release_meta.get("release_code_checksum"),
+            "release_commit": release_meta.get("release_commit"),
+        }
+    manifest_utils.append_or_update(meta_entry, base_folder=BaseTool.resolve_output_dir(None))
+    return {"success": ok, "pdf_path": str(pdf_path)}
 
 @function_tool
 def search_semantic_scholar(query: str):

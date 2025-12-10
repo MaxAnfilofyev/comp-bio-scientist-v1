@@ -460,6 +460,11 @@ def perform_writeup(
     big_model="gpt-5.1-2025-11-13",
     n_writeup_reflections=3,
     page_limit=8,
+    release_tag=None,
+    release_commit=None,
+    release_doi=None,
+    release_env_checksum=None,
+    release_code_checksum=None,
 ):
     compile_attempt = 0
     base_pdf_file = osp.join(base_folder, f"{osp.basename(base_folder)}")
@@ -752,7 +757,63 @@ If you believe you are done, simply say: "I am done".
                 print(f"No valid LaTeX code block found in reflection step {i+1}.")
                 break
 
-        return osp.exists(base_pdf_file + f"_{compile_attempt-1}.pdf")
+        # Inject release banner into LaTeX for front-matter visibility
+        banner_parts = []
+        if release_tag:
+            banner_parts.append(f"Release tag: {release_tag}")
+        if release_commit:
+            banner_parts.append(f"Commit: {release_commit}")
+        if release_doi:
+            banner_parts.append(f"DOI: {release_doi}")
+        if release_env_checksum:
+            banner_parts.append(f"Env checksum: {release_env_checksum}")
+        if release_code_checksum:
+            banner_parts.append(f"Code archive checksum: {release_code_checksum}")
+        if banner_parts:
+            with open(writeup_file, "r") as f:
+                final_latex = f.read()
+            banner_text = "\\\\ ".join(banner_parts)
+            if "\\maketitle" in final_latex and banner_parts[0] not in final_latex:
+                final_latex = final_latex.replace(
+                    "\\maketitle",
+                    f"\\maketitle\n\\begin{{center}}\\textbf{{Release metadata}}\\\\ {banner_text}\\end{{center}}\n",
+                    1,
+                )
+                with open(writeup_file, "w") as f:
+                    f.write(final_latex)
+                compile_latex(latex_folder, base_pdf_file + f"_{compile_attempt}.pdf")
+                compile_attempt += 1
+
+        pdf_path = base_pdf_file + f"_{compile_attempt-1}.pdf"
+
+        # Add PDF metadata with release info (best-effort)
+        if banner_parts:
+            try:
+                from PyPDF2 import PdfReader, PdfWriter  # type: ignore
+
+                reader = PdfReader(pdf_path)
+                writer = PdfWriter()
+                for page in reader.pages:
+                    writer.add_page(page)
+                meta = reader.metadata or {}
+                meta.update(
+                    {
+                        "/ReleaseTag": release_tag or "",
+                        "/ReleaseCommit": release_commit or "",
+                        "/ReleaseDOI": release_doi or "",
+                        "/ReleaseEnvChecksum": release_env_checksum or "",
+                        "/ReleaseCodeChecksum": release_code_checksum or "",
+                    }
+                )
+                writer.add_metadata(meta)
+                tmp_pdf = pdf_path + ".tmp"
+                with open(tmp_pdf, "wb") as out:
+                    writer.write(out)
+                shutil.move(tmp_pdf, pdf_path)
+            except Exception:
+                print("Warning: failed to embed PDF metadata for release tag.")
+
+        return osp.exists(pdf_path)
 
     except Exception:
         print("EXCEPTION in perform_writeup:")

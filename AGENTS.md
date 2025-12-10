@@ -90,6 +90,9 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `tag` (str), `style` (str, default `"methods_and_supp"`).
   - Reads the release manifest + env manifest to emit manuscript-ready text: a ≤400-word Methods subsection on code/env availability and rerun instructions, plus a Supplementary protocol with concrete commands and a figure/tool mapping table grounded in the release files.
   - Writes `releases/{tag}/reproduction_methods.md` and `reproduction_protocol.md` via `write_text_artifact`, registering them under kinds `repro_methods_md` and `repro_protocol_md`.
+- **run_writeup_task** (`agents_orchestrator.py`)
+  - Params: `base_folder`, `page_limit`, optional `release_tag`.
+  - Compiles the manuscript PDF, and when `release_tag` is provided, injects release metadata (tag/commit/DOI/env+code checksums) into the LaTeX front matter and PDF metadata, then registers the PDF manifest entry with release metadata attached.
 - **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 
 ## Environment and API Keys
