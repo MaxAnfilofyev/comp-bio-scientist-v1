@@ -294,6 +294,16 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "repro_status.md",
         "description": "Reproducibility check summary for a release tag.",
     },
+    "repro_methods_md": {
+        "rel_dir": "experiment_results/releases/{tag}",
+        "pattern": "reproduction_methods.md",
+        "description": "Methods-level reproduction instructions for a release.",
+    },
+    "repro_protocol_md": {
+        "rel_dir": "experiment_results/releases/{tag}",
+        "pattern": "reproduction_protocol.md",
+        "description": "Supplementary reproduction protocol for a release.",
+    },
 }
 
 def _pattern_to_regex(pattern: str) -> re.Pattern[str]:
@@ -3295,6 +3305,15 @@ def _verify_release_files(manifest: Dict[str, Any], release_root: Path) -> Tuple
     return missing, mismatched
 
 
+def _read_env_manifest(env_path: Path) -> Dict[str, Any]:
+    if not env_path.exists():
+        return {}
+    try:
+        return json.loads(env_path.read_text())
+    except Exception:
+        return {}
+
+
 @function_tool
 def freeze_release(tag: str, description: str = "", include_large_artifacts: bool = False):
     """
@@ -3573,6 +3592,129 @@ def check_release_reproducibility(tag: str, quick: bool = True):
         "env_checksum": env_hash,
         "release_manifest": manifest.get("__path"),
         "reasons": reasons,
+    }
+
+
+def _build_figure_mapping_table(files: List[Dict[str, Any]], release_root: Path) -> str:
+    rows = ["| Figure artifact | Tool/command | Source path |", "| --- | --- | --- |"]
+    for entry in files:
+        rel = entry.get("path")
+        if not rel:
+            continue
+        p = Path(rel)
+        if p.suffix.lower() not in {".png", ".pdf", ".svg"}:
+            continue
+        tool = "run_biological_plotting"
+        name = p.name
+        if "sweep" in name or "intervention" in name:
+            tool = "run_sensitivity_sweep"
+        if "transport" in name:
+            tool = "run_compartmental_sim"
+        rows.append(f"| {name} | {tool} | {rel} |")
+    if len(rows) == 2:
+        rows.append("| (no figures found in release manifest) | - | - |")
+    return "\n".join(rows)
+
+
+def _word_limit(text: str, max_words: int = 400) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words])
+
+
+@function_tool
+def generate_reproduction_section(tag: str, style: str = "methods_and_supp"):
+    """
+    Generate manuscript-ready reproduction instructions (methods paragraph + supplementary protocol) for a release tag.
+    """
+    if not tag or not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
+        return {"error": "invalid_tag", "tag": tag}
+
+    exp_dir = BaseTool.resolve_output_dir(None)
+    release_root = exp_dir / "releases" / tag
+    if not release_root.exists():
+        return {"error": "release_not_found", "path": str(release_root)}
+
+    manifest = _load_release_manifest(release_root, tag)
+    if manifest.get("error"):
+        return manifest
+
+    env_rel = manifest.get("env_manifest_path") or "env_manifest.json"
+    env_path = release_root / env_rel if not Path(env_rel).is_absolute() else Path(env_rel)
+    env_data = _read_env_manifest(env_path)
+    env_hash = _safe_sha256(env_path) if env_path.exists() else None
+    python_version = str(env_data.get("python_version") or "").split()[0] or "3.10"
+    git_commit = manifest.get("git", {}).get("commit", "unknown")
+    doi = manifest.get("doi") or manifest.get("zenodo_doi")
+
+    files = manifest.get("files", []) or []
+    figure_table = _build_figure_mapping_table(files, release_root)
+
+    methods_lines = [
+        f"Code and data for this study are bundled as release `{tag}` (git commit `{git_commit}`) under `experiment_results/releases/{tag}`.",
+        f"Environment details (Python {python_version}) are captured in `env_manifest.json` (checksum {env_hash or 'n/a'}), and the full code snapshot is in `code_release.zip`.",
+    ]
+    if doi:
+        methods_lines.append(f"The archived bundle is available at {doi}.")
+    methods_lines.append(
+        "To reproduce results, install the recorded environment, unpack the code archive, and run the provided tooling for simulations (e.g., `run_compartmental_sim`, `run_sensitivity_sweep`) and analysis (`compute_model_metrics`, `run_biological_plotting`) against the artifacts listed in `release_manifest.json`."
+    )
+    methods_text = _word_limit("\n\n".join(methods_lines), 400)
+
+    env_major_minor = ".".join(python_version.split(".")[:2]) if python_version else "3.10"
+    commands = [
+        f"conda create -n {tag} python={env_major_minor}",
+        f"conda activate {tag}",
+        "unzip code_release.zip -d code_release",
+        "cd code_release",
+        "pip install -r requirements.txt",
+        'export AISC_BASE_FOLDER="$(pwd)/.."',
+        'export AISC_EXP_RESULTS="$AISC_BASE_FOLDER/experiment_results"',
+        '# re-run plotting/statistics against release artifacts',
+        f'python ai_scientist/tools/biological_stats.py --task adjust_pvalues --input "$AISC_EXP_RESULTS/releases/{tag}/artifacts/<stats_table>.csv"',
+        'python perform_plotting.py --base_folder "$AISC_BASE_FOLDER"',
+        '# regenerate manuscript (optional)',
+        'python agents_orchestrator.py --load_idea ai_scientist/ideas/<idea>.json --resume --base_folder "$AISC_BASE_FOLDER" --model gpt-5o-mini --max_cycles 5 --skip_lit_gate',
+    ]
+    commands_block = "\n".join(commands)
+
+    supp_parts = [
+        f"# Reproduction Protocol for {tag}",
+        "## Setup",
+        "```bash",
+        commands_block,
+        "```",
+        "## Figure/tool mapping",
+        figure_table,
+        "## Notes",
+        "- Use only artifacts present in `release_manifest.json`; avoid referencing external paths.",
+        "- Swap `<idea>.json`/`<stats_table>.csv` for the files provided in the release bundle.",
+    ]
+    supp_text = "\n\n".join(supp_parts)
+
+    subdir = str(Path("releases") / tag)
+    methods_res = cast(Any, write_text_artifact)(
+        name="reproduction_methods.md",
+        content=methods_text,
+        subdir=subdir,
+        metadata_json=json.dumps({"kind": "repro_methods_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
+    )
+    protocol_res = cast(Any, write_text_artifact)(
+        name="reproduction_protocol.md",
+        content=supp_text,
+        subdir=subdir,
+        metadata_json=json.dumps({"kind": "repro_protocol_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": "ok"}),
+    )
+
+    return {
+        "methods_section_md": methods_text,
+        "supplementary_protocol_md": supp_text,
+        "methods_path": methods_res.get("path"),
+        "protocol_path": protocol_res.get("path"),
+        "env_checksum": env_hash,
+        "git_commit": git_commit,
+        "doi": doi,
     }
 
 @function_tool

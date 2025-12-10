@@ -86,6 +86,10 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Params: `tag` (str), `quick` (bool, default True).
   - Verifies a release bundle by checksum-ing everything in `release_manifest.json`, then (optionally) runs a smoke test using available artifacts: calls `compute_model_metrics` on a sweep CSV and `run_biological_plotting` on a solution JSON if present.
   - Writes `releases/{tag}/repro_status.md` (kind `release_repro_status_md`) with status, git commit, env checksum, missing/mismatched files, and quick-test outcomes; logs a project knowledge entry if failures/partials are found.
+- **GenerateReproductionSection** (`agents_orchestrator.py`)
+  - Params: `tag` (str), `style` (str, default `"methods_and_supp"`).
+  - Reads the release manifest + env manifest to emit manuscript-ready text: a ≤400-word Methods subsection on code/env availability and rerun instructions, plus a Supplementary protocol with concrete commands and a figure/tool mapping table grounded in the release files.
+  - Writes `releases/{tag}/reproduction_methods.md` and `reproduction_protocol.md` via `write_text_artifact`, registering them under kinds `repro_methods_md` and `repro_protocol_md`.
 - **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 
 ## Environment and API Keys
