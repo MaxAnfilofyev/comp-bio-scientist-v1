@@ -45,6 +45,10 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
     "verification_note": {"rel_dir": "experiment_results", "pattern": "{artifact_id}_verification.md"},
     "writeup_pdf": {"rel_dir": "experiment_results", "pattern": "manuscript.pdf"},
     "manuscript_pdf": {"rel_dir": "experiment_results", "pattern": "manuscript.pdf"},
+    "code_release_archive": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "code_release.zip"},
+    "env_manifest": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "env_manifest.json"},
+    "release_manifest": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "release_manifest.json"},
+    "release_diff_patch": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "diff.patch"},
 }
 
 

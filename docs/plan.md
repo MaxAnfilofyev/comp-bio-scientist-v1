@@ -1,356 +1,184 @@
-## VI-02 – Research Policy & Mode Config (Comp-Bio Only)
+## VI-CF1 — Reproducible “release snapshot” for manuscripts
 
-**Goal**
-Make the “only published works + Semantic Scholar + our own math” constraint *enforceable*, not just a story in our heads.
+**Goal:** One command/tool that freezes *exactly* what was run (code, config, environment, manifest) into a versioned bundle suitable for Zenodo/OSF + manuscript supplementary materials.
 
-**Rationale**
-Right now, nothing in this runner prevents a future tool or agent from pulling in arbitrary datasets, web APIs, or simulating “wet-lab” data. That’s a governance hole relative to the spec we agreed on.
+### What it should do
 
-**Scope / Changes**
+* Create a **read-only snapshot** of:
 
-* Introduce a `research_policy.yaml` (or `bfts_config.yaml` extension) that defines:
+  * The repo state (commit hash, dirty/uncommitted diff).
+  * `project_knowledge.md`, `hypothesis_trace.json`, `claim_graph.json`, `provenance_summary.md`.
+  * All simulation/figure/model artifacts referenced in the manifest and/or `hypothesis_trace.json`.
+  * Environment description (`requirements.txt` or `environment.yml`, `python --version`, OS info).
 
-  * Allowed data sources (Semantic Scholar, local PDFs, our sim outputs).
-  * Disallowed sources (clinical EHR, proprietary datasets, arbitrary web scrapes).
-  * Allowed tool classes (lit tools, modeling, sim, stats, writeup).
-* Implement a **policy checker** that:
+* Write everything under a canonical location, e.g.
+  `experiment_results/releases/<release_tag>/…`
 
-  * Wraps tool invocation (inside `Runner` or a thin wrapper here).
-  * Rejects any tool marked with `requires_external_data=True` that is not whitelisted in the current policy.
-* Add a `--research_mode` CLI flag:
+* Register the release bundle and its key components in the manifest via `ARTIFACT_TYPE_REGISTRY`, e.g.:
 
-  * `comp_bio_pubs_only` (default).
-  * `unrestricted` (only for local debugging, explicitly logged).
+  * `code_release_archive` → `experiment_results/releases/{tag}/code_release.zip`
+  * `env_manifest` → `experiment_results/releases/{tag}/env_manifest.json`
+  * `release_manifest` → `experiment_results/releases/{tag}/release_manifest.json`
 
-**Acceptance Criteria**
+### User-facing trigger
 
-1. New file `research_policy.yaml` is loaded at startup; if missing, run fails with a clear error.
-2. Attempting to invoke a tool flagged as “external_data” in `comp_bio_pubs_only` mode:
+A single tool, e.g.:
 
-   * Results in a hard error logged to `project_knowledge.md` as a `[CONSTRAINT]` entry.
-   * The run terminates before the tool executes.
-3. A small test harness (or unit test) demonstrates:
+```python
+@function_tool
+def freeze_release(tag: str, description: str = "", include_large_artifacts: bool = False):
+    ...
+```
 
-   * Same run passes in `unrestricted` mode and fails in `comp_bio_pubs_only` with identical idea JSON.
-4. The active mode (`comp_bio_pubs_only` vs `unrestricted`) is recorded in:
+(May internally refuse `include_large_artifacts=True` if over a size threshold and instead emit a “too big” summary.)
 
-   * `provenance_summary.md` and `hypothesis_trace.json` top-level metadata.
+### Acceptance criteria
 
----
+You can call `freeze_release(tag="snc_energy_tipping_v1")` and then:
 
-## VI-03 – Idea / Hypothesis Registry & Multi-Idea Discipline
+1. A directory `experiment_results/releases/snc_energy_tipping_v1/` exists and contains at minimum:
 
-**Goal**
-Make hypotheses first-class and reproducible: every run must declare *which* idea and *which* hypothesis/experiment set it is executing.
+   * `code_release.zip` (or `.tar.gz`) with the repo tree (minus huge junk/venv).
+   * `env_manifest.json` (Python version, OS, dependency list).
+   * `release_manifest.json` listing:
 
-**Rationale**
-You already have `_ACTIVE_IDEA`, `_bootstrap_hypothesis_trace`, `update_hypothesis_trace`, and `--idea_idx`, but it’s still loose. There’s no canonical registry of ideas or strict linking between an idea file and the run.
+     * checksums + sizes for all included files
+     * git commit hash and dirty flag
+     * timestamp, tag, and description.
+2. `reserve_typed_artifact` + `append_manifest` are used so that:
 
-**Scope / Changes**
-
-* Introduce an `ideas/` directory under the project root with:
-
-  * `ideas/idea_<id>.json` (canonical spec: Name, Short Hypothesis, Experiments, Tags, Status).
-* On `--load_idea`:
-
-  * Copy or symlink the idea file into `experiment_results/idea.json`.
-  * Record `idea_id` and `idea_path` in `hypothesis_trace.json` and `provenance_summary.md`.
-* Enforce that **every tool call that records sims/figures** must include:
-
-  * `hypothesis_id`, `experiment_id` (already optional in several tools) or be explicitly marked as `unlinked`.
-
-**Acceptance Criteria**
-
-1. Every successful run writes `experiment_results/idea.json` and `hypothesis_trace.json` that both contain a matching `idea_id`.
-2. A “health” check (new tool, e.g. `check_hypothesis_trace`) reports:
-
-   * Number of sim runs and figures with valid `(hypothesis_id, experiment_id)`.
-   * Number of “unlinked” artifacts (<= a configurable tolerance; default 0).
-3. Running without `--load_idea` or with a non-existent idea path:
-
-   * Fails fast before any expensive tools run.
+   * `list_artifacts_by_kind("code_release_archive")` returns the archive path.
+   * `list_artifacts_by_kind("env_manifest")` returns the env manifest path.
+3. `generate_provenance_summary()` has been run or is re-run as part of freezing, and its path is included in `release_manifest.json`.
+4. If the git working tree is dirty, `release_manifest.json` clearly indicates `dirty: true` and includes a short diff summary or a pointer to a `diff.patch` file inside the archive.
 
 ---
 
-## VI-04 – Literature Quality Gate Before Modeling/Sim
+## VI-CF2 — “Reproduce from release” dry-run check
 
-**Goal**
-Stop the system from simulating before the literature grounding is structurally sound and references are verified to a minimum standard.
+Freezing is half the job. You also want a **sanity check** that a fresh user could re-run the core pipeline from the release bundle.
 
-**Rationale**
-You already have:
+### What it should do
 
-* `assemble_lit_data`
-* `validate_lit_summary`
-* `verify_references`
-* Artifact types for lit summaries and verification tables.
+* Provide a tool that, given a release tag, performs a **non-destructive reproducibility check**:
 
-But there’s no *gate* that says: “Lit is good enough, you may proceed.”
+  * Verifies checksums of all files in the release.
+  * Optionally spins up a **minimal test run** using the environment manifest only (no interactive PI agent), e.g.:
 
-**Scope / Changes**
+    * load one sweep CSV
+    * re-run `compute_model_metrics`
+    * re-run `run_biological_plotting` on a small solution file
 
-* Add a `check_lit_ready` tool that:
+* Emit a structured “repro badge” summary:
 
-  * Reads `lit_summary.json` and the verification outputs.
-  * Enforces minimal thresholds:
+  * `status: ok/failed/partial`
+  * any missing files or mismatched checksums
+  * command line and steps used for the test
 
-    * No required fields missing in lit summary.
-    * At least X% of references have `status == "confirmed"` or similar.
-    * At most Y “not found / unclear” entries (configurable).
-* Modify any path that runs simulations/modeling from an idea to:
+### Example tool
 
-  * Require `check_lit_ready` to pass first (unless `--skip_lit_gate` is set).
+```python
+@function_tool
+def check_release_reproducibility(tag: str, quick: bool = True):
+    ...
+```
 
-**Acceptance Criteria**
+### Acceptance criteria
 
-1. `assemble_lit_data(..., run_verification=True)` followed by `check_lit_ready`:
+For any existing tag:
 
-   * Returns `status: "ready"` when:
+1. `check_release_reproducibility(tag="snc_energy_tipping_v1")` returns JSON with:
 
-     * Lit validator passes.
-     * > = configurable threshold for confirmed references (e.g. 70%).
-2. If `check_lit_ready` returns `status: "not_ready"`, any call to:
+   * `"status": "ok"` if:
 
-   * `run_biological_model`, `run_comp_sim`, `run_sensitivity_sweep`, `run_intervention_tests`
-   * Fails with a descriptive “literature gate not satisfied” error unless `--skip_lit_gate` is set.
-3. The outcome of `check_lit_ready` is logged in:
+     * All files listed in `release_manifest.json` exist and pass checksum verification.
+     * The quick reproduction steps (plots + metrics) complete without uncaught exceptions.
+   * `"status": "failed"` or `"partial"` plus explicit reasons if not.
+2. The check logs an entry to `project_knowledge.md` with:
 
-   * `project_knowledge.md` as `[DECISION]` with thresholds used.
-   * `provenance_summary.md` under the “Literature” section (“Lit gate: READY / NOT READY”).
+   * category `constraint` or `failure_pattern` when it fails
+   * a short suggestion (e.g. “missing morphology graph, add to artifact registry for future releases”).
+3. You can point a reviewer to a *single text artifact* (e.g. `experiment_results/releases/snc_energy_tipping_v1/repro_status.md`) summarizing:
 
----
-
-## VI-05 – Model Spec & Parameter Provenance Completeness Gate
-
-**Goal**
-Force every model used in sims to have a *complete, documented, and sourced* parameter ledger — no silent “free hyperparameter” usage.
-
-**Rationale**
-`_ensure_model_spec_and_params` already creates specs and param source CSVs, but default rows are labeled `free_hyperparameter`. That’s fine for bootstrapping but unacceptable for a “finished” run meant to be published.
-
-**Scope / Changes**
-
-* Add a `check_model_provenance(model_key)` tool that:
-
-  * Reads `{model_key}_spec.yaml` and `{model_key}_param_sources.csv`.
-  * Fails if any parameter referenced in the spec:
-
-    * Has no row in the CSV; or
-    * Has `source_type == "free_hyperparameter"` in final mode.
-* Introduce a `--enforce_param_provenance` CLI flag (default `True` for “publishable” mode).
-
-**Acceptance Criteria**
-
-1. Before any call to `run_biological_model(model_key=...)` with `--enforce_param_provenance`:
-
-   * `check_model_provenance(model_key)` is run automatically.
-   * If any parameter is still `free_hyperparameter`, call fails with a list of missing params.
-2. For models used in a “publishable” run:
-
-   * `check_model_provenance` passes and writes a short summary to `provenance_summary.md` (which parameters are lit-derived vs fit vs scaling).
-3. A unit test fixtures a dummy `model_key` with one missing/unsourced parameter and verifies:
-
-   * `run_biological_model(..., enforce=True)` fails.
-   * `run_biological_model(..., enforce=False)` passes but logs a `[FAILURE_PATTERN]` entry in `project_knowledge.md`.
+   * the tag
+   * git commit
+   * env hash
+   * repro status and date of last check.
 
 ---
 
-## VI-06 – Simulation Plan & Budgeting (Plan vs Execution)
+## VI-CF3 — Manuscript-ready “How to rerun this code” section generator
 
-**Goal**
-Move from “tools called ad hoc” to **explicit sim plans** with runtime budgets and coverage guarantees.
+You don’t just want a bundle; you want **ready-to-paste text** for the Methods / Supplementary.
 
-**Rationale**
-You already have:
+### What it should do
 
-* `run_transport_batch` with manifest integration.
-* `_generate_run_recipe` for transport runs.
-  But there is no single, top-level concept of a *simulation plan* tied to an idea/hypothesis, nor any resource budgeting (number of sims, time, token ceilings).
+* Read the release manifest, env manifest, provenance summary, and `hypothesis_trace.json`.
+* Emit a **short, standardized Methods subsection** plus a **longer Supplementary protocol**:
 
-**Scope / Changes**
+  * Methods-level (for main text):
 
-* Create `experiment_results/sim_plan.json` with schema like:
+    * One paragraph on environment and code availability.
+    * One paragraph on how to rerun key simulations and analysis.
 
-  * Which simulations: baseline, sweeps, interventions.
-  * Parameter ranges and seeds.
-  * Expected artifact types.
-  * Resource limits: max runs, max CPU time estimate, etc.
-* Add a `plan_vs_execution` checker that:
+  * Supplementary-level:
 
-  * Compares `sim_plan.json` vs `transport_runs/manifest.json` and sensitivity/intervention outputs.
-  * Marks each plan entry as `pending / running / complete / failed / skipped`.
+    * Stepwise commands:
 
-**Acceptance Criteria**
+      * `conda create -n snc_energy python=...`
+      * `pip install -r requirements.txt`
+      * `python run_experiment.py --load_idea ...`
+    * Table or bullets linking each **main figure** to:
 
-1. Running a “full” experiment from idea writes:
+      * the exact script/tool calls
+      * input artifact paths from the release.
 
-   * `sim_plan.json` *before* any heavy sim tools are called.
-2. After sim execution, calling `plan_vs_execution` returns:
+### Example tool
 
-   * A JSON report with counts of `complete`, `failed`, `skipped`.
-   * Coverage: at least 90% of planned combinations either `complete` or `failed` (no silent missing runs).
-3. If the number of simulations exceeds a configured budget (e.g. 10,000 runs or some CPU estimate):
+```python
+@function_tool
+def generate_reproduction_section(tag: str, style: str = "methods_and_supp"):
+    ...
+```
 
-   * Execution halts and logs a `[CONSTRAINT]` entry suggesting plan trimming.
+### Acceptance criteria
 
----
+For a given tag:
 
-## VI-07 – Agent Budget & Safety Guardrails (Time, Tokens, Calls)
+1. `generate_reproduction_section(tag="snc_energy_tipping_v1")` returns a dict with:
 
-**Goal**
-Prevent uncontrolled cost/time blowups when you let agents iterate (max cycles, runaway Semantic Scholar queries, massive sim sweeps).
+   * `methods_section_md`: ≤ 400 words, self-contained, references the DOI/Zenodo link field in `release_manifest.json` if present.
+   * `supplementary_protocol_md`: step-by-step instructions, explicit commands, and a **table mapping figures ↔ artifact paths ↔ tools**.
+2. The generated text:
 
-**Rationale**
-You already have:
+   * Does **not** reference internal paths that aren’t in the release archive.
+   * Uses only commands that actually exist (e.g., `run_comp_sim`, `run_sensitivity_sweep`, `run_writeup_task`, etc.).
+3. A call to `write_text_artifact` writes both sections into:
 
-* `--max_cycles`
-* `--timeout`
-  But there’s no per-tool/per-phase budget. A mis-prompted agent could still flood Semantic Scholar or spawn absurd numbers of sims.
-
-**Scope / Changes**
-
-* Add a `budgets` section either to `research_policy.yaml` or a separate `budgets.yaml`:
-
-  * E.g. `max_semantic_scholar_calls`, `max_sim_runs`, `max_lit_results`, `max_tokens_llm_small`, `max_tokens_llm_big`.
-* Wrap key tools (`SemanticScholarSearchTool`, `RunCompartmentalSimTool`, sweeps, interventions) with a small budget manager that:
-
-  * Decrements counters and fails when limits are hit.
-* Ensure every budget breach is recorded via `manage_project_knowledge(action="add", category="constraint", ...)`.
-
-**Acceptance Criteria**
-
-1. If a run tries to:
-
-   * Call Semantic Scholar > `max_semantic_scholar_calls`, or
-   * Launch > `max_sim_runs` individual sim runs,
-     the system:
-   * Aborts further calls to those tools with a clear error message.
-2. A `check_budgets` tool reports:
-
-   * Utilization of each budget for the current run (`used`, `remaining`, `limit`).
-3. At least one end-to-end test demonstrates:
-
-   * An intentionally over-ambitious sim plan getting cut off with budgets enforced and a clearly logged constraint.
+   * `experiment_results/releases/<tag>/reproduction_methods.md`
+   * `experiment_results/releases/<tag>/reproduction_protocol.md`
+     and registers them under a `kind` like `repro_methods_md` and `repro_protocol_md`.
 
 ---
 
-## VI-08 – Health Dashboard for Manifests & Artifacts
+## VI-CF4 — Release tagging + cross-link in manuscript PDF (optional but strong)
 
-**Goal**
-Give yourself a **one-shot health report** of the experiment folder: missing files, untyped artifacts, orphaned sims, etc.
+If you want to be fancy (and future-proof):
 
-**Rationale**
-You already have:
+### What it should do
 
-* `_scan_and_auto_update_manifest`
-* `check_manifest`
-* `repair_sim_outputs`
-* `validate_per_compartment_outputs`
-  But they’re separate knobs. You want a single “is this run clean enough to publish?” button.
+* Allow the writeup pipeline (`run_writeup_task`) to accept a `release_tag`, and:
 
-**Scope / Changes**
+  * Embed that tag + git hash + DOI (if known) into the PDF footer or first page.
+  * Optionally write a tiny JSON block inside the PDF metadata with:
 
-* Introduce `generate_health_report` that:
+    * tag
+    * commit
+    * env hash (e.g., SHA256 of `env_manifest.json`)
 
-  * Runs:
+### Acceptance criteria
 
-    * `check_project_state`
-    * `check_manifest`
-    * `read_transport_manifest`
-    * `repair_sim_outputs` (optional dry-run)
-    * `validate_per_compartment_outputs` on each sim dir
-  * Aggregates results into `experiment_results/health_report.json` + small markdown summary.
+1. Calling `run_writeup_task(base_folder=..., page_limit=...)` with a `release_tag`:
 
-**Acceptance Criteria**
-
-1. `generate_health_report()` produces:
-
-   * `health_report.json` with sections: `manifest`, `transport_runs`, `sims`, `lit`, `models`, `writeup`.
-   * `health_report.md` summarizing key issues.
-2. If critical issues exist (e.g. missing sim arrays, broken JSON, empty metrics):
-
-   * `health_report.json["status"]` is `"not_ok"` with a machine-readable list of problems.
-3. `run_writeup_task` in “publishable” mode must:
-
-   * Check `health_report.status == "ok"` or log a `[FAILURE_PATTERN]` explaining why it proceeded despite issues (e.g. `--ignore_health`).
-
----
-
-## VI-09 – Claim Graph, Hypothesis Trace, and Manuscript Consistency Check
-
-**Goal**
-Enforce that **every major claim in the manuscript** is:
-
-* Represented in `claim_graph.json`.
-* Backed by at least one experiment or metric in `hypothesis_trace.json`.
-
-**Rationale**
-You already have:
-
-* `update_claim_graph`, `check_claim_graph`
-* `update_hypothesis_trace`, `generate_provenance_summary`
-  But there’s no cross-check tying claims → hypotheses → experiments → figures.
-
-**Scope / Changes**
-
-* Add `check_claim_consistency` tool that:
-
-  * Reads `claim_graph.json`, `hypothesis_trace.json`, and `provenance_summary.md`.
-  * For each claim:
-
-    * Checks if it references at least one experiment/metric.
-    * Flags claims with `status == "unlinked"` or no supporting experiments.
-* Integrate this check before `run_writeup_task` completes:
-
-  * If serious inconsistencies exist, write a prominent warning into the manuscript or block the “publishable” mode.
-
-**Acceptance Criteria**
-
-1. `check_claim_consistency` outputs:
-
-   * A list of claims with `support_status: "ok" | "weak" | "missing"`.
-2. A run with missing support for any non-trivial claim:
-
-   * Sets overall status to `"not_ready_for_publication"`.
-3. In a clean run:
-
-   * All `claim_graph` entries used in the abstract/introduction have at least one `sim_run` or `metric` in `hypothesis_trace.json`.
-
----
-
-## VI-10 – Human-in-the-Loop Checkpoints (Where It Actually Matters)
-
-**Goal**
-Make `--human_in_the_loop` *real*, not just a flag — introduce **critical checkpoints** where you explicitly review and approve plans.
-
-**Rationale**
-The CLI exposes `--human_in_the_loop`, but this code doesn’t yet plug it into tooling. Right now, agents can decide to spend a lot of compute or adopt a sketchy hypothesis without you reviewing.
-
-**Scope / Changes**
-
-Define a small set of **blocking checkpoints** when `human_in_the_loop` is true:
-
-1. After literature assembly + verification:
-
-   * Present top-N key papers and parameter candidates (from `parameter_source_table`).
-2. Before first heavy sim sweep / batch:
-
-   * Show `sim_plan.json` summary and estimated budget usage.
-3. Before final writeup:
-
-   * Show `health_report.md` and `claim_consistency` summary.
-
-At each checkpoint, an interactive function (or simple `y/n` prompt in CLI mode) must be called; if you decline, the system logs a pivot via `log_strategic_pivot`.
-
-**Acceptance Criteria**
-
-1. With `--human_in_the_loop`:
-
-   * The system pauses at least at the three checkpoints above and requires explicit approval.
-2. Refusing at any checkpoint:
-
-   * Aborts downstream tasks.
-   * Logs a `[DECISION]` or `[STRATEGIC PIVOT]` entry in `project_knowledge.md`.
-3. With `--human_in_the_loop` **off**:
-
-   * The run bypasses checkpoints but still records their would-be decisions in a dry-run section of `health_report.json` for auditability.
+   * Produces `manuscript.pdf` that, when inspected, has the tag and commit hash in the front matter (visible) and in PDF metadata.
+2. `list_artifacts_by_kind("manuscript_pdf")` returns an entry with a `metadata` field that includes the `release_tag` and the hash of the associated `code_release_archive`.

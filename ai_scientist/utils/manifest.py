@@ -336,6 +336,28 @@ def bootstrap_manifest(base_folder: Optional[str | Path] = None, shard_size: int
         migrate_err = _migrate_legacy_manifest(legacy_path, manifest_dir, index)
         if migrate_err:
             log_missing_or_corrupt([{"error": migrate_err, "path": str(legacy_path)}])
+        # Fallback: hydrate shards from existing ndjson files if index is empty.
+        if not index.get("shards"):
+            shard_files = sorted(manifest_dir.glob("manifest_shard_*.ndjson"))
+            shards_meta: List[Dict[str, Any]] = []
+            for shard_path in shard_files:
+                entries, status, _ = _read_shard(shard_path)
+                shard_meta: Dict[str, Any] = {
+                    "path": str(shard_path),
+                    "count": len(entries),
+                    "status": status,
+                }
+                if entries:
+                    shard_meta["ts_min"] = min(e.get("created_at") or e.get("timestamp") or "" for e in entries)
+                    shard_meta["ts_max"] = max(e.get("created_at") or e.get("timestamp") or "" for e in entries)
+                else:
+                    shard_meta["ts_min"] = None
+                    shard_meta["ts_max"] = None
+                shards_meta.append(shard_meta)
+            if shards_meta:
+                index["shards"] = shards_meta
+                index["updated_at"] = _iso_now()
+                _atomic_write_json(index_path, index)
     return index
 
 
