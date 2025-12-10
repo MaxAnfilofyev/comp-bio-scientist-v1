@@ -612,7 +612,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "   - Validated & Ready -> Publisher\n"
             "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
             "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
-            "7. END OF RUN: Write a concise summary and next actions to 'pi_notes.md' using 'write_pi_notes' so it persists across resumes.\n"
+            "7. END OF RUN: Write a concise summary and next actions using 'write_pi_notes' so it persists across resumes.\n"
             "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated.\n"
             "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest."
         ),

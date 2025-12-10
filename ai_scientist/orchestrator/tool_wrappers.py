@@ -241,10 +241,6 @@ def append_run_note_tool(message: str, actor: str = "") -> str:
     append_run_note(message, actor or "tool")
     return "Note appended"
 
-
-# _bootstrap_note_links is imported from context
-
-
 def format_list_field(data: Any) -> str:
     if isinstance(data, list):
         return "\n".join([f"- {item}" for item in data])
