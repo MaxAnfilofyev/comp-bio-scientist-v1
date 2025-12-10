@@ -57,6 +57,9 @@ from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
 from ai_scientist.tools.per_compartment_validator import validate_per_compartment_outputs as validate_per_compartment_outputs_internal
 from ai_scientist.tools.reference_verification import ReferenceVerificationTool
+
+# Cached idea for hypothesis trace bootstrapping
+_ACTIVE_IDEA: Optional[Dict[str, Any]] = None
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
 from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file, append_run_note
@@ -239,6 +242,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "manuscript.pdf",
         "description": "Final manuscript PDF.",
     },
+    "hypothesis_trace_json": {
+        "rel_dir": "experiment_results",
+        "pattern": "hypothesis_trace.json",
+        "description": "Traceability map: hypothesis -> experiments -> sim runs/figures.",
+    },
 }
 
 def _pattern_to_regex(pattern: str) -> re.Pattern[str]:
@@ -324,6 +332,134 @@ def _fill_figure_dir(output_dir: Optional[str]) -> str:
     name = output_dir or "figures"
     path, _, _ = resolve_output_path(subdir=None, name=name, allow_quarantine=False, unique=False)
     return str(path)
+
+
+def _bootstrap_hypothesis_trace(idea: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Initialize a hypothesis_trace.json skeleton from the idea JSON.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    trace_path = exp_dir / "hypothesis_trace.json"
+    if trace_path.exists():
+        try:
+            return json.loads(trace_path.read_text())
+        except Exception:
+            pass
+
+    hypotheses = []
+    idea_name = idea.get("Name") or idea.get("Title") or "HYP"
+    hyp_id = "H1"
+    hyp_text = idea.get("Short Hypothesis") or idea.get("Abstract") or ""
+
+    experiments = []
+    for idx, exp in enumerate(idea.get("Experiments", []) or []):
+        exp_id = f"E{idx+1}"
+        experiments.append(
+            {
+                "id": exp_id,
+                "description": exp if isinstance(exp, str) else exp.get("description", str(exp)),
+                "sim_runs": [],
+                "figures": [],
+                "metrics": [],
+            }
+        )
+
+    hypotheses.append(
+        {
+            "id": hyp_id,
+            "name": idea_name,
+            "text": hyp_text,
+            "experiments": experiments,
+            "status": "inconclusive",
+        }
+    )
+
+    skeleton = {"hypotheses": hypotheses}
+    trace_path.write_text(json.dumps(skeleton, indent=2))
+    return skeleton
+
+
+def _load_hypothesis_trace() -> Dict[str, Any]:
+    """
+    Load hypothesis_trace.json, bootstrapping from the active idea when missing.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    trace_path = exp_dir / "hypothesis_trace.json"
+    if trace_path.exists():
+        try:
+            return json.loads(trace_path.read_text())
+        except Exception:
+            pass
+    return _bootstrap_hypothesis_trace(_ACTIVE_IDEA or {})
+
+
+def _write_hypothesis_trace(trace: Dict[str, Any]) -> str:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    trace_path = exp_dir / "hypothesis_trace.json"
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(json.dumps(trace, indent=2))
+    return str(trace_path)
+
+
+def _ensure_hypothesis_entry(trace: Dict[str, Any], hypothesis_id: str) -> Dict[str, Any]:
+    hypotheses = trace.setdefault("hypotheses", [])
+    for hyp in hypotheses:
+        if hyp.get("id") == hypothesis_id:
+            return hyp
+    hyp = {"id": hypothesis_id, "text": "", "experiments": [], "status": "inconclusive"}
+    hypotheses.append(hyp)
+    return hyp
+
+
+def _ensure_experiment_entry(hypothesis: Dict[str, Any], experiment_id: str) -> Dict[str, Any]:
+    exps = hypothesis.setdefault("experiments", [])
+    for exp in exps:
+        if exp.get("id") == experiment_id:
+            return exp
+    exp = {"id": experiment_id, "description": "", "sim_runs": [], "figures": [], "metrics": []}
+    exps.append(exp)
+    return exp
+
+
+def _update_hypothesis_trace_with_sim(
+    hypothesis_id: str,
+    experiment_id: str,
+    sim_entry: Dict[str, Any],
+    metrics: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    trace = _load_hypothesis_trace()
+    hyp = _ensure_hypothesis_entry(trace, hypothesis_id)
+    exp = _ensure_experiment_entry(hyp, experiment_id)
+    sim_runs = exp.setdefault("sim_runs", [])
+    if sim_entry and sim_entry not in sim_runs:
+        sim_runs.append(sim_entry)
+    if metrics:
+        metric_set = set(exp.get("metrics", []))
+        metric_set.update(metrics)
+        exp["metrics"] = sorted(metric_set)
+    _write_hypothesis_trace(trace)
+    return trace
+
+
+def _update_hypothesis_trace_with_figures(
+    hypothesis_id: str,
+    experiment_id: str,
+    figures: List[str],
+    metrics: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    trace = _load_hypothesis_trace()
+    hyp = _ensure_hypothesis_entry(trace, hypothesis_id)
+    exp = _ensure_experiment_entry(hyp, experiment_id)
+    fig_list = exp.setdefault("figures", [])
+    for fig in figures:
+        if fig and fig not in fig_list:
+            fig_list.append(fig)
+    if metrics:
+        metric_set = set(exp.get("metrics", []))
+        metric_set.update(metrics)
+        exp["metrics"] = sorted(metric_set)
+    _write_hypothesis_trace(trace)
+    return trace
 
 
 def _model_metadata_from_key(model_key: str) -> Dict[str, Any]:
@@ -1844,6 +1980,49 @@ def update_transport_manifest(
         notes=notes,
         actor=actor_name,
     )
+
+
+@function_tool(strict_mode=False)
+def update_hypothesis_trace(
+    hypothesis_id: str,
+    experiment_id: str,
+    sim_runs: Optional[List[Dict[str, Any]]] = None,
+    figures: Optional[List[str]] = None,
+    metrics: Optional[List[str]] = None,
+    status: Optional[str] = None,
+):
+    """
+    Update hypothesis_trace.json with sim runs, figures, metrics, or status for a hypothesis/experiment.
+    """
+    trace = _load_hypothesis_trace()
+    hyp = _ensure_hypothesis_entry(trace, hypothesis_id)
+    if status:
+        hyp["status"] = status
+    exp = _ensure_experiment_entry(hyp, experiment_id)
+    if sim_runs:
+        for sim in sim_runs:
+            try:
+                if sim and sim not in exp.setdefault("sim_runs", []):
+                    exp["sim_runs"].append(sim)
+            except Exception:
+                continue
+    if figures:
+        for fig in figures:
+            if fig and fig not in exp.setdefault("figures", []):
+                exp["figures"].append(fig)
+    if metrics:
+        metric_set = set(exp.get("metrics", []))
+        metric_set.update(metrics)
+        exp["metrics"] = sorted(metric_set)
+    path = _write_hypothesis_trace(trace)
+    _append_manifest_entry(
+        name=path,
+        metadata_json=json.dumps(
+            {"kind": "hypothesis_trace_json", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "pi"), "status": "ok"}
+        ),
+        allow_missing=False,
+    )
+    return {"path": path, "hypotheses": trace.get("hypotheses", [])}
 @function_tool
 def log_strategic_pivot(reason: str, new_plan: str):
     """Logs a major change in direction to the system logs."""
@@ -1923,6 +2102,9 @@ def run_comp_sim(
     downsample: int = 1,
     max_elements: int = 5_000_000,
     metadata_json: Optional[str] = None,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    metrics: Optional[List[str]] = None,
 ):
     """Runs a compartmental simulation and saves CSV data."""
     res = RunCompartmentalSimTool().use_tool(
@@ -1940,10 +2122,27 @@ def run_comp_sim(
         max_elements=max_elements,
     )
     _append_artifact_from_result(res, "output_json", metadata_json)
+    try:
+        if hypothesis_id and experiment_id:
+            _update_hypothesis_trace_with_sim(
+                hypothesis_id=hypothesis_id,
+                experiment_id=experiment_id,
+                sim_entry={"baseline": graph_path, "transport": transport_rate, "seed": seed},
+                metrics=metrics or [],
+            )
+    except Exception:
+        pass
     return res
 
 @function_tool
-def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None, make_phase_portrait: bool = True):
+def run_biological_plotting(
+    solution_path: str,
+    output_dir: Optional[str] = None,
+    make_phase_portrait: bool = True,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    metrics: Optional[List[str]] = None,
+):
     """Generates plots from simulation data."""
     out_dir = _fill_figure_dir(output_dir)
     res = RunBiologicalPlottingTool().use_tool(
@@ -1953,6 +2152,18 @@ def run_biological_plotting(solution_path: str, output_dir: Optional[str] = None
         make_combined_svg=True,
     )
     _append_figures_from_result(res, '{"type":"figure","source":"analyst"}')
+    try:
+        if hypothesis_id and experiment_id:
+            fig_paths = [v for v in res.values() if isinstance(v, str) and v.endswith((".png", ".svg"))]
+            if fig_paths:
+                _update_hypothesis_trace_with_figures(
+                    hypothesis_id=hypothesis_id,
+                    experiment_id=experiment_id,
+                    figures=fig_paths,
+                    metrics=metrics or [],
+                )
+    except Exception:
+        pass
     return res
 
 @function_tool
@@ -2064,6 +2275,9 @@ def run_biological_model(
     num_points: int = 200,
     output_dir: Optional[str] = None,
     metadata_json: Optional[str] = None,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    metrics: Optional[List[str]] = None,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
     ledger = _ensure_model_spec_and_params(model_key)
@@ -2087,6 +2301,16 @@ def run_biological_model(
         output_dir=_fill_output_dir(output_dir),
     )
     _append_artifact_from_result(res, "output_json", metadata_json)
+    try:
+        if hypothesis_id and experiment_id:
+            _update_hypothesis_trace_with_sim(
+                hypothesis_id=hypothesis_id,
+                experiment_id=experiment_id,
+                sim_entry={"baseline": model_key, "transport": None, "seed": None},
+                metrics=metrics or [],
+            )
+    except Exception:
+        pass
     return res
 
 @function_tool
@@ -2098,6 +2322,8 @@ def run_sensitivity_sweep(
     steps: int = 150,
     dt: float = 0.1,
     metadata_json: Optional[str] = None,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
 ):
     """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
     res = RunSensitivitySweepTool().use_tool(
@@ -2109,6 +2335,20 @@ def run_sensitivity_sweep(
         dt=dt,
     )
     _append_artifact_from_result(res, "output_csv", metadata_json)
+    try:
+        if hypothesis_id and experiment_id:
+            _update_hypothesis_trace_with_sim(
+                hypothesis_id=hypothesis_id,
+                experiment_id=experiment_id,
+                sim_entry={
+                    "baseline": graph_path,
+                    "transport": transport_vals,
+                    "seed": None,
+                },
+                metrics=["sensitivity_sweep"],
+            )
+    except Exception:
+        pass
     return res
 
 @function_tool
@@ -2120,6 +2360,8 @@ def run_intervention_tests(
     baseline_transport: float = 0.05,
     baseline_demand: float = 0.5,
     metadata_json: Optional[str] = None,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
 ):
     """Test parameter interventions vs a baseline and report delta frac_failed."""
     res = RunInterventionTesterTool().use_tool(
@@ -2131,6 +2373,20 @@ def run_intervention_tests(
         baseline_demand=baseline_demand,
     )
     _append_artifact_from_result(res, "output_json", metadata_json)
+    try:
+        if hypothesis_id and experiment_id:
+            _update_hypothesis_trace_with_sim(
+                hypothesis_id=hypothesis_id,
+                experiment_id=experiment_id,
+                sim_entry={
+                    "baseline": graph_path,
+                    "transport": transport_vals,
+                    "seed": None,
+                },
+                metrics=["intervention_tester"],
+            )
+    except Exception:
+        pass
     return res
 
 @function_tool
@@ -3278,6 +3534,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
             "3b. Before first sim of a given model_key, generate model_spec_yaml and parameter_source_table (one row per parameter with source_type and lit/claim links). Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
+            "3c. Update hypothesis_trace.json after each sim/ensemble: record hypothesis_id/experiment_id, sim run identifiers, and metrics produced.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
             "5b. Reserve every persistent artifact via 'reserve_typed_artifact' (transport_* kinds for sims, sensitivity_sweep_table/intervention_table for sweeps, verification_note for proof-of-work); do NOT invent filenames or call reserve_output for data assets.\n"
@@ -3318,6 +3575,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             resolve_baseline_path,
             resolve_sim_path,
             update_transport_manifest,
+            update_hypothesis_trace,
             mirror_artifacts,
             read_npy_artifact,
             validate_per_compartment_outputs,
@@ -3342,7 +3600,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3b. Use the transport run manifest (read_transport_manifest / resolve_sim_path / update_transport_manifest) to decide what to plot or skip; resolve sim.json via resolve_sim_path instead of guessing paths, and error if the requested transport/seed is missing.\n"
             "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
-            "3e. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
+            "3e. Update hypothesis_trace.json with figure filenames under the correct hypothesis/experiment after plotting.\n"
+            "3f. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
@@ -3375,6 +3634,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             run_transport_batch,
             resolve_sim_path,
             update_transport_manifest,
+            update_hypothesis_trace,
             write_figures_readme,
             write_text_artifact,
             graph_diagnostics,
@@ -3400,6 +3660,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
             "2b. Read lit_reference_verification.csv/json; if any reference has found==False or match_score below the reported threshold, mark the draft as unsupported until fixed.\n"
             "2c. Verify that every simulation/model parameter appearing in figures/tables has a row in parameter_source_table with a declared source_type and (when lit_value) lit_claim_id/reference_id.\n"
+            "2d. Check hypothesis_trace.json: any hypothesis marked 'supported' must list sim_runs and figures that exist on disk; flag gaps.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
@@ -3428,6 +3689,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             check_claim_graph,
             run_biological_stats,
             verify_references,
+            update_hypothesis_trace,
             write_text_artifact,
             manage_project_knowledge,
         ],
@@ -3565,6 +3827,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "1. STATE CHECK: First, use any injected context about 'pi_notes.md', 'user_inbox.md', or prior 'check_project_state' runs that appears in your system/user message. Only call 'read_note' or 'check_project_state' if you need a fresh snapshot beyond what is already provided.\n"
             "2. REVIEW KNOWLEDGE: Check 'manage_project_knowledge' for constraints or decisions before delegating.\n"
             "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
+            "3b. Maintain hypothesis_trace.json: when drafting the plan, ensure every idea experiment is mapped to a hypothesis/experiment id (H*, E*) in hypothesis_trace.json (skeleton allowed). Update as new experiments/figures/sim runs become planned.\n"
             "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
@@ -3608,6 +3871,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             update_transport_manifest,
             mirror_artifacts,
             write_text_artifact,  # Added this tool to allow PI to write plans directly
+            update_hypothesis_trace,
             # New interactive tools
             wait_for_human_review,
             check_user_inbox,
@@ -3649,6 +3913,8 @@ def main():
         idea = idea_data
     else:
         raise ValueError("Idea file must contain a JSON object or a list of objects")
+    global _ACTIVE_IDEA
+    _ACTIVE_IDEA = idea
 
     # Setup Directories
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -3688,6 +3954,11 @@ def main():
     _generate_run_recipe(base_folder)
     # Ensure canonical PI/user inbox files live under experiment_results with root-level symlinks
     _bootstrap_note_links()
+    # Initialize hypothesis trace skeleton for this run
+    try:
+        _bootstrap_hypothesis_trace(idea)
+    except Exception as exc:
+        print(f"⚠️ Failed to bootstrap hypothesis_trace.json: {exc}")
 
     # Surface tool availability so PDF/analysis fallbacks are explicit
     caps = _report_capabilities()
