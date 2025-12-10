@@ -28,13 +28,13 @@ This document tracks the remaining work to fully modularize the orchestrator by 
 Move manifest-related utilities and project knowledge wrappers:
 
 #### Functions to move:
-- [_] `_scan_and_auto_update_manifest`
-- [_] `_normalize_manifest_entry`
-- [_] `_build_metadata_for_compat`
-- [_] `_load_manifest_map`
-- [_] `_append_manifest_entry`
-- [_] `_append_artifact_from_result`
-- [_] `_append_figures_from_result`
+- [x] `_scan_and_auto_update_manifest`
+- [x] `_normalize_manifest_entry`
+- [x] `_build_metadata_for_compat`
+- [x] `_load_manifest_map`
+- [x] `_append_manifest_entry`
+- [x] `_append_artifact_from_result`
+- [x] `_append_figures_from_result`
 
 #### `@function_tool` wrappers to delegate:
 - [_] `inspect_manifest`
@@ -257,10 +257,16 @@ Either:
 Update this section as work progresses:
 
 - Phase 1: ✅ DONE
-- Phase 2: 🔄 IN PROGRESS
+- Phase 2: ✅ DONE
 - Phase 3: ⏳ PENDING
 - Phase 4: ⏳ PENDING
 - Phase 5: ⏳ PENDING
 - Phase 6: ⏳ PENDING
 - Phase 7: ⏳ PENDING
 - Phase 8: ⏳ PENDING
+
+## Recommended Implementation Order
+
+Go with: **Phase 3 (Hypothesis/Pvenance) > Phase 4 (Transport)** - Both are self-contained domains with high utility. Hypothesis unlocks gating, Transport enables simulation scalability. After those, Phase 6 (Tool Wrappers) can consolidate all delegations, followed by Phase 7 (Agents) and Phase 8 (CLI).
+
+Skip Phase 5 (Release) until reproduction features are stabilized (has more external dependencies).

@@ -99,11 +99,37 @@ from ai_scientist.orchestrator.context import (
     _report_capabilities,
 )
 
+from ai_scientist.orchestrator.manifest_service import (
+    _scan_and_auto_update_manifest,
+    _normalize_manifest_entry,
+    _build_metadata_for_compat,
+    _load_manifest_map,
+    _append_manifest_entry,
+    _append_artifact_from_result,
+    _append_figures_from_result,
+    check_project_state,
+    manage_project_knowledge,
+)
+
 # Backward-compatible alias for internal reserve helper
 _reserve_typed_artifact_impl = _reserve_typed_artifact_impl_internal
 
+# Additional tool wrappers
+@function_tool
+def inspect_manifest(base_folder: str) -> str:
+    from .manifest_service import inspect_manifest
+    return inspect_manifest(base_folder)
 
+@function_tool
+def inspect_recent_manifest_entries(base_folder: str) -> str:
+    from .manifest_service import inspect_recent_manifest_entries
+    return inspect_recent_manifest_entries(base_folder)
 
+@function_tool
+def append_run_note_tool(message: str, actor: str = "") -> str:
+    from ai_scientist.utils.notes import append_run_note
+    append_run_note(message, actor or "tool")
+    return "Note appended"
 
 def _bootstrap_hypothesis_trace(idea: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -414,13 +440,6 @@ def _ensure_model_spec_and_params(model_key: str) -> Dict[str, Any]:
         "created_spec": created_spec,
         "created_params": created_params,
     }
-
-
-def _build_metadata_for_compat(entry_type: Optional[str], annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
-    meta: Dict[str, Any] = {}
-    if entry_type:
-        meta["type"] = entry_type
-    return meta
 
 
 def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1199,192 +1218,6 @@ async def extract_run_output(run_result: RunResult) -> str:
     return "\n".join(parts)
 
 # --- Tool Definitions (Wrappers for Agents SDK) ---
-
-@function_tool
-def inspect_manifest(
-    base_folder: Optional[str] = None,
-    role: Optional[str] = None,
-    path_glob: Optional[str] = None,
-    since: Optional[str] = None,
-    limit: int = 200,
-    summary_only: bool = True,
-    include_samples: int = 3,
-):
-    """
-    Sharded manifest reader (defaults to summary-only). Filters by optional role, glob, and ISO8601 since timestamp.
-    - limit: max entries returned when summary_only=False (capped at 2000).
-    - include_samples: how many sample entries to return in summary mode.
-    - base_folder: optional override run root; defaults to the active run.
-    """
-    exp_dir = Path(base_folder) if base_folder else BaseTool.resolve_output_dir(None)
-    return manifest_utils.inspect_manifest(
-        base_folder=exp_dir,
-        role=role,
-        path_glob=path_glob,
-        since=since,
-        limit=limit,
-        summary_only=summary_only,
-        include_samples=include_samples,
-    )
-
-
-@function_tool
-def inspect_recent_manifest_entries(limit: int = 20, since_minutes: int = 1440, role: Optional[str] = None):
-    """
-    Forensic Tool: Check the manifest for updated entries.
-    Crucial for recovering work after a sub-agent timeout or crash.
-    - limit: Max number of files to return (default 20, capped to 2000).
-    - since_minutes: Only return files updated in the last N minutes (default 1440 = 24 hours).
-    - role: Optional filter (e.g. 'Modeler', 'Analyst'); matches metadata.source/actor.
-    Returns the files in reverse chronological order (newest first), using the sharded manifest.
-    """
-    cutoff = datetime.now() - timedelta(minutes=since_minutes)
-    data = manifest_utils.inspect_manifest(
-        base_folder=BaseTool.resolve_output_dir(None),
-        role=role,
-        since=cutoff.isoformat(),
-        limit=limit,
-        summary_only=False,
-    )
-    entries = data.get("entries", [])
-    if not entries:
-        msg = f"No manifest updates found in the last {since_minutes} minutes"
-        if role:
-            msg += f" for role '{role}'"
-        return msg + "."
-    output = [f"Last {len(entries)} manifest updates (since {since_minutes} min ago):"]
-    for entry in entries:
-        ts = entry.get("timestamp", "N/A")
-        name = entry.get("name", "Unknown")
-        etype = entry.get("type", "Unknown")
-        output.append(f"- [{ts}] {name} (Type: {etype})")
-    return "\n".join(output)
-
-@function_tool
-def manage_project_knowledge(
-    action: str,
-    category: str = "general",
-    observation: str = "",
-    solution: str = "",
-    actor: str = "",
-):
-    """
-    Manage the persistent Project Knowledge Base (project_knowledge.md).
-    Use this to store constraints, decisions, failure patterns, and REFLECTIONS that persist across sessions.
-     
-    Args:
-        action: 'add' to log new info, 'read' to retrieve all knowledge.
-        category: 'constraint', 'decision', 'failure_pattern', or 'reflection'.
-        observation: Context of the problem, inefficiency, or constraint (Required for 'add').
-        solution: The fix, decision, or proposed improvement (Required for 'add').
-        actor: Optional role/agent name to auto-log who created the record. If omitted, falls back to env AISC_ACTIVE_ROLE or 'unknown'.
-    """
-    base = os.environ.get("AISC_BASE_FOLDER", "")
-    kb_path = os.path.join(base, "project_knowledge.md")
-    actor_name = (
-        actor.strip()
-        or os.environ.get("AISC_ACTIVE_ROLE", "").strip()
-        or "unknown"
-    )
-     
-    if action == "read":
-        if os.path.exists(kb_path):
-            try:
-                with open(kb_path, 'r') as f:
-                    return f.read()
-            except Exception as e:
-                return f"Error reading knowledge base: {str(e)}"
-        return "Project Knowledge Base is empty."
-        
-    if action == "add":
-        if not observation or not solution:
-            return "Error: Both 'observation' and 'solution' are required for 'add' action."
-        
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = (
-            f"\n## [{category.upper()}] {timestamp}\n"
-            f"**Actor:** {actor_name}\n"
-            f"**Observation/Problem:** {observation}\n"
-            f"**Solution/Insight:** {solution}\n"
-            f"{'-'*40}\n"
-        )
-        
-        try:
-            with open(kb_path, 'a') as f:
-                f.write(entry)
-            return f"Added new {category} entry to project_knowledge.md"
-        except Exception as e:
-            return f"Error writing to knowledge base: {str(e)}"
-
-
-@function_tool
-def append_run_note_tool(category: str, text: str, actor: str = "system"):
-    """
-    Append a short run note/reflection to experiment_results/run_notes.md (keeps manifest lean).
-    """
-    return append_run_note(category=category, text=text, actor=actor)
-        
-    return "Invalid action. Use 'add' or 'read'."
-
-@function_tool
-def check_project_state(base_folder: str) -> str:
-    """
-    Reads the project state to see what artifacts exist.
-    UPDATED: Automatically scans for orphaned files and updates the manifest.
-    Set env AISC_SKIP_WATCHER=1 or pass skip_watcher=True to skip the manifest scan.
-    """
-    status_msg = "Folder existed"
-    
-    if not os.path.exists(base_folder):
-        try:
-            os.makedirs(base_folder, exist_ok=True)
-            exp_results = os.path.join(base_folder, "experiment_results")
-            os.makedirs(exp_results, exist_ok=True)
-            status_msg = f"Created new directory: {base_folder}"
-        except Exception as e:
-            return json.dumps({"error": f"Failed to create folder {base_folder}: {str(e)}"})
-        
-    exists = os.listdir(base_folder)
-    exp_results = os.path.join(base_folder, "experiment_results")
-    
-    # --- AUTO-WATCHER TRIGGER ---
-    orphans = []
-    if os.path.exists(exp_results):
-        # Default to skipping the watcher for speed; can be overridden via env or caller args.
-        orphans = _scan_and_auto_update_manifest(
-            Path(exp_results),
-            skip=os.environ.get("AISC_SKIP_WATCHER", "").strip().lower()
-            not in {"0", "false", "no"},
-        )
-    
-    artifacts = os.listdir(exp_results) if os.path.exists(exp_results) else []
-    has_plots = False
-    has_data = any(x.endswith('.csv') for x in artifacts)
-    has_lit_review = "lit_summary.json" in artifacts or "lit_summary.csv" in artifacts
-    if os.path.exists(exp_results):
-        for root, dirs, files in os.walk(exp_results):
-            for f in files:
-                lf = f.lower()
-                if lf.endswith((".png", ".svg", ".pdf")):
-                    has_plots = True
-                if lf.endswith(".csv"):
-                    has_data = True
-                if lf in {"lit_summary.json", "lit_summary.csv"}:
-                    has_lit_review = True
-            if has_plots and has_data and has_lit_review:
-                break
-
-    return json.dumps({
-        "status_message": status_msg,
-        "orphaned_files_recovered": len(orphans),
-        "root_files": exists,
-        "artifacts": artifacts,
-        "has_lit_review": has_lit_review,
-        "has_data": has_data,
-        "has_plots": has_plots,
-        "has_draft": "manuscript.pdf" in exists or "manuscript.tex" in exists
-    })
-
 
 @function_tool
 def scan_transport_manifest(write: bool = True):
