@@ -329,6 +329,12 @@ def parse_args():
         default=True,
         help="Require parameter provenance to be complete before running models (default: True).",
     )
+    p.add_argument(
+        "--enforce_claim_consistency",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require claim_graph/hypothesis_trace consistency before finishing writeup (default: True).",
+    )
     return p.parse_args()
 
 def _fill_output_dir(output_dir: Optional[str]) -> str:
@@ -2240,6 +2246,46 @@ def _record_model_provenance_in_provenance(model_key: str, status_line: str):
     return str(out_path)
 
 
+def _record_claim_consistency_in_provenance(status_line: str):
+    """
+    Write/update a Claim consistency line under the Literature or Model section of provenance_summary.md.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    out_path = exp_dir / "provenance_summary.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_line = f"- Claim consistency: {status_line}"
+
+    if not out_path.exists():
+        content = "# Provenance Summary\n\n## Literature Sources\n- Missing or not generated.\n\n## Model Definitions\n- Missing or not generated.\n\n## Simulation Protocols\n- Missing or not generated.\n\n## Statistical Analyses\n- Missing or not generated.\n"
+        out_path.write_text(content + "\n")
+
+    lines = out_path.read_text().splitlines()
+    insert_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower().startswith("## literature"):
+            # prefer placing under literature
+            insert_idx = idx + 1
+            while insert_idx < len(lines) and lines[insert_idx].strip() == "":
+                insert_idx += 1
+            break
+
+    if insert_idx is None:
+        lines.extend(["", "## Literature Sources", gate_line])
+    else:
+        replaced = False
+        for j in range(insert_idx, len(lines)):
+            if lines[j].startswith("## "):
+                break
+            if "Claim consistency:" in lines[j]:
+                lines[j] = gate_line
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(insert_idx, gate_line)
+    out_path.write_text("\n".join(lines) + "\n")
+    return str(out_path)
+
+
 def _log_lit_gate_decision(status: str, confirmed_pct: float, n_unverified: int, thresholds: Dict[str, Any], reasons: List[str]):
     """
     Persist the gate outcome to project_knowledge and provenance summary.
@@ -2381,6 +2427,124 @@ def check_model_provenance(model_key: str, allow_free_hyperparameters: bool = Fa
             action="add",
             category="decision",
             observation=f"Model provenance check for {model_key}",
+            solution=summary_line,
+        )
+    except Exception:
+        pass
+    return result
+
+
+def _load_claim_graph(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"claim_graph.json not found: {path}")
+    try:
+        return cast(List[Dict[str, Any]], json.loads(path.read_text()))
+    except Exception as exc:
+        raise ValueError(f"Failed to read claim graph: {exc}")
+
+
+def _load_hypothesis_trace_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"hypothesis_trace.json not found: {path}")
+    try:
+        return cast(Dict[str, Any], json.loads(path.read_text()))
+    except Exception as exc:
+        raise ValueError(f"Failed to read hypothesis trace: {exc}")
+
+
+def _gather_support_from_trace(trace: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    supports: Dict[str, Dict[str, Any]] = {}
+    for hyp in trace.get("hypotheses", []) or []:
+        hyp_id = hyp.get("id") or hyp.get("name") or ""
+        for exp in hyp.get("experiments", []) or []:
+            exp_id = exp.get("id") or ""
+            key = f"{hyp_id}:{exp_id}"
+            sim_runs = exp.get("sim_runs") or []
+            metrics = exp.get("metrics") or []
+            figures = exp.get("figures") or []
+            supports[key] = {
+                "sim_runs": sim_runs,
+                "metrics": metrics,
+                "figures": figures,
+            }
+    return supports
+
+
+def _evaluate_claim_consistency() -> Dict[str, Any]:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    claim_path = exp_dir / "claim_graph.json"
+    trace_path = exp_dir / "hypothesis_trace.json"
+    claims = _load_claim_graph(claim_path)
+    trace = _load_hypothesis_trace_file(trace_path)
+    support_map = _gather_support_from_trace(trace)
+
+    results: List[Dict[str, Any]] = []
+    missing_count = 0
+    weak_count = 0
+    for claim in claims:
+        cid = claim.get("claim_id") or "unknown"
+        status = (claim.get("status") or "").strip().lower()
+        support = claim.get("support") or []
+        # support is OK if claim has explicit support or any experiment has sims/metrics
+        has_trace_support = any(
+            (v.get("sim_runs") or v.get("metrics"))
+            for v in support_map.values()
+        )
+        if status == "unlinked" or (not support and not has_trace_support):
+            support_status = "missing"
+            missing_count += 1
+        elif support or has_trace_support:
+            support_status = "ok" if status not in {"partial", "weak"} else "weak"
+            if support_status == "weak":
+                weak_count += 1
+        else:
+            support_status = "weak"
+            weak_count += 1
+        results.append(
+            {
+                "claim_id": cid,
+                "claim_text": claim.get("claim_text", ""),
+                "status": status,
+                "support": support,
+                "support_status": support_status,
+            }
+        )
+
+    overall = "ready_for_publication"
+    if missing_count > 0:
+        overall = "not_ready_for_publication"
+    elif weak_count > 0:
+        overall = "review_needed"
+
+    return {
+        "claims": results,
+        "overall_status": overall,
+        "n_missing": missing_count,
+        "n_weak": weak_count,
+        "claim_graph_path": str(claim_path),
+        "hypothesis_trace_path": str(trace_path),
+    }
+
+
+@function_tool
+def check_claim_consistency():
+    """
+    Cross-check claim_graph.json and hypothesis_trace.json for supporting experiments/metrics.
+    """
+    result = _evaluate_claim_consistency()
+    summary_line = (
+        f"{result.get('overall_status')} "
+        f"(missing={result.get('n_missing')}, weak={result.get('n_weak')})"
+    )
+    try:
+        _record_claim_consistency_in_provenance(summary_line)
+    except Exception:
+        pass
+    try:
+        cast(Any, manage_project_knowledge)(
+            action="add",
+            category="decision",
+            observation="Claim consistency check.",
             solution=summary_line,
         )
     except Exception:
@@ -2789,6 +2953,24 @@ def run_writeup_task(
         n_writeup_reflections=2,
         page_limit=page_limit,
     )
+    # Post-write consistency gate
+    enforce_claims = os.environ.get("AISC_ENFORCE_CLAIM_CONSISTENCY", "true").strip().lower() not in {"0", "false", "no"}
+    if enforce_claims:
+        consistency = _evaluate_claim_consistency()
+        if consistency.get("overall_status") == "not_ready_for_publication":
+            raise RuntimeError("Claim consistency check failed: missing support for one or more claims.")
+    else:
+        try:
+            consistency = _evaluate_claim_consistency()
+            if consistency.get("overall_status") == "not_ready_for_publication":
+                cast(Any, manage_project_knowledge)(
+                    action="add",
+                    category="failure_pattern",
+                    observation="Claim consistency not enforced for writeup.",
+                    solution="Proceeding despite missing claim support.",
+                )
+        except Exception:
+            pass
     return {"success": ok}
 
 @function_tool
@@ -4520,6 +4702,7 @@ def main():
     os.environ["AISC_INTERACTIVE"] = str(args.human_in_the_loop).lower()
     os.environ["AISC_SKIP_LIT_GATE"] = str(args.skip_lit_gate).lower()
     os.environ["AISC_ENFORCE_PARAM_PROVENANCE"] = str(args.enforce_param_provenance).lower()
+    os.environ["AISC_ENFORCE_CLAIM_CONSISTENCY"] = str(args.enforce_claim_consistency).lower()
     
     # Load Idea
     with open(args.load_idea) as f:
