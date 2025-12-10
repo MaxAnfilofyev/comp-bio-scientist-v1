@@ -77,27 +77,27 @@ def inspect_manifest(base_folder=None, ...):  # Keep original signature
 Move hypothesis trace, manuscript seed, gates, and provenance logic:
 
 #### Functions to move:
-- [_] Hypothesis trace: `_bootstrap_hypothesis_trace`, `_load_hypothesis_trace`, `_write_hypothesis_trace`, `_ensure_hypothesis_entry`, `_ensure_experiment_entry`, `_update_hypothesis_trace_with_sim`, `_update_hypothesis_trace_with_figures`
-- [_] Manuscript processing: `_extract_markdown_section`, `_extract_markdown_title`, `_extract_subheadings`, `_extract_bullets_or_paragraph`, `_first_sentence`, `_derive_experiments_from_text`, `_derive_idea_from_manuscript`, `_persist_manuscript_seed`
-- [_] Lit verification/gates: `_resolve_lit_summary_path`, `_resolve_verification_path`, `_load_verification_rows`, `_verification_row_confirmed`, `_evaluate_lit_ready`, `_log_lit_gate_decision`, `_record_lit_gate_in_provenance`, `_should_skip_lit_gate`, `_ensure_lit_gate_ready`
-- [_] Model provenance: `_model_metadata_from_key`, `_ensure_model_spec_and_params`, `_load_spec_content`, `_evaluate_model_provenance`, `_record_model_provenance_in_provenance`
-- [_] Claim consistency: `_resolve_claim_graph_path`, `_load_claim_graph`, `_load_hypothesis_trace_file`, `_gather_support_from_trace`, `_evaluate_claim_consistency`, `_record_claim_consistency_in_provenance`
-- [_] Provenance summary: `_collect_provenance_sections`, `_render_provenance_markdown`
-- [_] General: `_coerce_float`, `_coerce_int` (utility for type conversions)
+- [x] Hypothesis trace: `_bootstrap_hypothesis_trace`, `_load_hypothesis_trace`, `_write_hypothesis_trace`, `_ensure_hypothesis_entry`, `_ensure_experiment_entry`, `_update_hypothesis_trace_with_sim`, `_update_hypothesis_trace_with_figures`
+- [x] Manuscript processing: `_extract_markdown_section`, `_extract_markdown_title`, `_extract_subheadings`, `_extract_bullets_or_paragraph`, `_first_sentence`, `_derive_experiments_from_text`, `_derive_idea_from_manuscript`, `_persist_manuscript_seed`
+- [x] Lit verification/gates: `_resolve_lit_summary_path`, `_resolve_verification_path`, `_load_verification_rows`, `_verification_row_confirmed`, `_evaluate_lit_ready`, `_log_lit_gate_decision`, `_record_lit_gate_in_provenance`, `_should_skip_lit_gate`, `_ensure_lit_gate_ready`
+- [x] Model provenance: `_model_metadata_from_key`, `_ensure_model_spec_and_params`, `_load_spec_content`, `_evaluate_model_provenance`, `_record_model_provenance_in_provenance`
+- [x] Claim consistency: `_resolve_claim_graph_path`, `_load_claim_graph`, `_load_hypothesis_trace_file`, `_gather_support_from_trace`, `_evaluate_claim_consistency`, `_record_claim_consistency_in_provenance`
+- [x] Provenance summary: `_collect_provenance_sections`, `_render_provenance_markdown`
+- [x] General: `_coerce_float`, `_coerce_int` (utility for type conversions)
 
 #### `@function_tool` wrappers to delegate:
-- [_] `update_hypothesis_trace`
-- [_] `validate_lit_summary`
-- [_] `verify_references`
-- [_] `check_lit_ready`
-- [_] `check_model_provenance`
-- [_] `update_claim_graph`
-- [_] `check_claim_graph`
-- [_] `check_claim_consistency`
-- [_] `generate_provenance_summary`
+- [x] `update_hypothesis_trace`
+- [x] `validate_lit_summary`
+- [x] `verify_references`
+- [x] `check_lit_ready`
+- [x] `check_model_provenance`
+- [x] `update_claim_graph`
+- [x] `check_claim_graph`
+- [x] `check_claim_consistency`
+- [x] `generate_provenance_summary`
 
 #### Dependencies & interactions:
-- [_] Update sim/model wrappers (`run_comp_sim`, `run_biological_model`, `run_sensitivity_sweep`, `run_intervention_tests`) to call `hypothesis` for gates and trace updates
+- [x] Update sim/model wrappers (`run_comp_sim`, `run_biological_model`, `run_sensitivity_sweep`, `run_intervention_tests`) to call `hypothesis` for gates and trace updates
 
 ---
 
