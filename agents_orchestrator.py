@@ -323,6 +323,12 @@ def parse_args():
     p.add_argument("--input", default=None, help="Initial input message to the PI agent.")
     p.add_argument("--human_in_the_loop", action="store_true", help="Enable interactive mode where agents ask for confirmation before expensive tasks.")
     p.add_argument("--skip_lit_gate", action="store_true", help="Allow modeling/sim tools to bypass literature readiness gate.")
+    p.add_argument(
+        "--enforce_param_provenance",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require parameter provenance to be complete before running models (default: True).",
+    )
     return p.parse_args()
 
 def _fill_output_dir(output_dir: Optional[str]) -> str:
@@ -2192,6 +2198,48 @@ def _record_lit_gate_in_provenance(status_line: str):
     return str(out_path)
 
 
+def _record_model_provenance_in_provenance(model_key: str, status_line: str):
+    """
+    Write/update a Model provenance line under the Model Definitions section of provenance_summary.md.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    out_path = exp_dir / "provenance_summary.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_line = f"- {model_key}: {status_line}"
+
+    if not out_path.exists():
+        content = "# Provenance Summary\n\n## Literature Sources\n- Missing or not generated.\n\n## Model Definitions\n"
+        content += f"{gate_line}\n"
+        content += "\n## Simulation Protocols\n- Missing or not generated.\n\n## Statistical Analyses\n- Missing or not generated.\n"
+        out_path.write_text(content)
+        return str(out_path)
+
+    lines = out_path.read_text().splitlines()
+    insert_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower().startswith("## model definitions"):
+            insert_idx = idx + 1
+            while insert_idx < len(lines) and lines[insert_idx].strip() == "":
+                insert_idx += 1
+            break
+
+    if insert_idx is None:
+        lines.extend(["", "## Model Definitions", gate_line])
+    else:
+        replaced = False
+        for j in range(insert_idx, len(lines)):
+            if lines[j].startswith("## "):
+                break
+            if f"{model_key}:" in lines[j]:
+                lines[j] = gate_line
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(insert_idx, gate_line)
+    out_path.write_text("\n".join(lines) + "\n")
+    return str(out_path)
+
+
 def _log_lit_gate_decision(status: str, confirmed_pct: float, n_unverified: int, thresholds: Dict[str, Any], reasons: List[str]):
     """
     Persist the gate outcome to project_knowledge and provenance summary.
@@ -2234,6 +2282,110 @@ def _coerce_int(value: Optional[int | str], default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _load_spec_content(spec_path: Path) -> Dict[str, Any]:
+    try:
+        with spec_path.open() as f:
+            return json.load(f)
+    except Exception:
+        text = spec_path.read_text()
+        try:
+            import yaml  # type: ignore
+
+            return yaml.safe_load(text)
+        except Exception:
+            raise ValueError(f"Failed to parse spec file: {spec_path}")
+
+
+def _evaluate_model_provenance(model_key: str, allow_free: bool = False) -> Dict[str, Any]:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    spec_path, _, _ = resolve_output_path(
+        subdir="models",
+        name=f"{model_key}_spec.yaml",
+        run_root=exp_dir,
+        allow_quarantine=False,
+        unique=False,
+    )
+    param_path, _, _ = resolve_output_path(
+        subdir="parameters",
+        name=f"{model_key}_param_sources.csv",
+        run_root=exp_dir,
+        allow_quarantine=False,
+        unique=False,
+    )
+    if not spec_path.exists() or not param_path.exists():
+        raise FileNotFoundError(f"Model spec/params missing for {model_key}; expected {spec_path} and {param_path}")
+
+    spec = _load_spec_content(spec_path)
+    params_declared = set((spec.get("parameters") or {}).keys())
+
+    rows: Dict[str, Dict[str, Any]] = {}
+    with param_path.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = (row.get("param_name") or "").strip()
+            if name:
+                rows[name] = row
+
+    missing = sorted(list(params_declared - set(rows.keys())))
+    unsourced = sorted(
+        [
+            name
+            for name, row in rows.items()
+            if (row.get("source_type") or "").strip().lower() == "free_hyperparameter"
+        ]
+    )
+
+    counts: Dict[str, int] = {}
+    for row in rows.values():
+        stype = (row.get("source_type") or "unknown").strip().lower() or "unknown"
+        counts[stype] = counts.get(stype, 0) + 1
+
+    status = "ready"
+    if missing or (unsourced and not allow_free):
+        status = "not_ready"
+
+    summary = {
+        "status": status,
+        "missing_params": missing,
+        "unsourced_params": unsourced,
+        "counts_by_source_type": counts,
+        "spec_path": str(spec_path),
+        "param_path": str(param_path),
+    }
+    return summary
+
+
+@function_tool
+def check_model_provenance(model_key: str, allow_free_hyperparameters: bool = False):
+    """
+    Validate that a model's spec and parameter ledger are complete and sourced.
+    """
+    result = _evaluate_model_provenance(model_key=model_key, allow_free=allow_free_hyperparameters)
+    status = result.get("status", "not_ready")
+    counts = result.get("counts_by_source_type", {})
+    lit_count = counts.get("lit_value", 0)
+    fit_count = counts.get("fit_to_data", 0)
+    scale_count = counts.get("dimensionless_scaling", 0)
+    summary_line = (
+        f"{status.upper()} (lit={lit_count}, fit={fit_count}, scaling={scale_count}, "
+        f"missing={len(result.get('missing_params', []))}, free={len(result.get('unsourced_params', []))})"
+    )
+    try:
+        _record_model_provenance_in_provenance(model_key, summary_line)
+    except Exception:
+        pass
+    try:
+        cast(Any, manage_project_knowledge)(
+            action="add",
+            category="decision",
+            observation=f"Model provenance check for {model_key}",
+            solution=summary_line,
+        )
+    except Exception:
+        pass
+    return result
 
 
 def _evaluate_lit_ready(
@@ -2668,6 +2820,7 @@ def run_biological_model(
     experiment_id: Optional[str] = None,
     metrics: Optional[List[str]] = None,
     compute_metrics: bool = False,
+    enforce_param_provenance: Optional[bool] = None,
     skip_lit_gate: bool = False,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
@@ -2685,6 +2838,32 @@ def run_biological_model(
             metadata_json=json.dumps({"kind": "parameter_source_table", "created_by": "modeler", "status": "ok"}),
             allow_missing=False,
         )
+
+    enforce = enforce_param_provenance
+    if enforce is None:
+        enforce = os.environ.get("AISC_ENFORCE_PARAM_PROVENANCE", "true").strip().lower() not in {"0", "false", "no"}
+    provenance_result = cast(Any, check_model_provenance)(model_key=model_key, allow_free_hyperparameters=not enforce)
+    if enforce and provenance_result.get("status") != "ready":
+        reasons = []
+        if provenance_result.get("missing_params"):
+            reasons.append(f"missing params: {', '.join(provenance_result['missing_params'])}")
+        if provenance_result.get("unsourced_params"):
+            reasons.append(f"unsourced params: {', '.join(provenance_result['unsourced_params'])}")
+        raise RuntimeError(f"Model provenance gate not satisfied for {model_key}: {', '.join(reasons)}")
+    if not enforce and provenance_result.get("status") != "ready":
+        try:
+            cast(Any, manage_project_knowledge)(
+                action="add",
+                category="failure_pattern",
+                observation=f"Model provenance incomplete for {model_key}",
+                solution=(
+                    f"Missing: {provenance_result.get('missing_params', [])}; "
+                    f"Unsourced: {provenance_result.get('unsourced_params', [])}. "
+                    "Allowing execution because enforce_param_provenance=False."
+                ),
+            )
+        except Exception:
+            pass
 
     res = RunBiologicalModelTool().use_tool(
         model_key=model_key,
@@ -4266,6 +4445,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]):
             "3b. Maintain hypothesis_trace.json: when drafting the plan, ensure every idea experiment is mapped to a hypothesis/experiment id (H*, E*) in hypothesis_trace.json (skeleton allowed). Update as new experiments/figures/sim runs become planned.\n"
             "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
             "   - Before any modeling/simulation, run 'check_lit_ready' (defaults: confirmed refs >=70%, <=3 unverified). If it returns not_ready, stop and fix lit/references or pass --skip_lit_gate explicitly.\n"
+            "   - Before running built-in models, ensure 'check_model_provenance' passes (no missing params or free_hyperparameter rows). If enforcement is intentionally disabled, log the failure pattern first.\n"
             "   - Missing Lit Review -> Archivist\n"
             "   - Missing Data -> Modeler\n"
             "   - Missing Plots -> Analyst\n"
@@ -4339,6 +4519,7 @@ def main():
     # Set Interactive Flag for Tools
     os.environ["AISC_INTERACTIVE"] = str(args.human_in_the_loop).lower()
     os.environ["AISC_SKIP_LIT_GATE"] = str(args.skip_lit_gate).lower()
+    os.environ["AISC_ENFORCE_PARAM_PROVENANCE"] = str(args.enforce_param_provenance).lower()
     
     # Load Idea
     with open(args.load_idea) as f:
