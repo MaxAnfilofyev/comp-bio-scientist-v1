@@ -49,6 +49,7 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
     "env_manifest": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "env_manifest.json"},
     "release_manifest": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "release_manifest.json"},
     "release_diff_patch": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "diff.patch"},
+    "release_repro_status_md": {"rel_dir": "experiment_results/releases/{tag}", "pattern": "repro_status.md"},
 }
 
 

@@ -76,6 +76,16 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - `read_npy_artifact` (safely load small .npy arrays to JSON-friendly data; returns shape/dtype or full data if under size limits; errors for large or pickled arrays).
   - `validate_per_compartment_outputs` checks for required per-compartment artifacts (npz + map + topology summary), enforces schema version, shape/time alignment, and ordering checksum agreement; surfaces shapes/status/warnings/errors to gate completion.
   - Graph loaders accept `.gpickle` even on NetworkX>=3.5 via a pickle fallback (upstream removed `read_gpickle`).
+- **FreezeRelease** (`agents_orchestrator.py`)
+  - Params: `tag` (str), `description` (str, optional), `include_large_artifacts` (bool, default False).
+  - Creates a release bundle under `experiment_results/releases/{tag}/`:
+    - Regenerates `provenance_summary.md`, captures repo git hash + dirty diff (writes `diff.patch` when dirty), builds `env_manifest.json` (python/OS + requirements/env.yml + pip freeze), zips code into `code_release.zip` (skips heavy dirs: experiments, experiment_results, figures, venv/ caches).
+    - Copies manifest/hypothesis_trace-referenced artifacts into `artifacts/` with checksums and a `release_manifest.json` (checksums, sizes, git state, skipped/missing lists).
+  - Registers typed artifacts via manifest kinds: `code_release_archive`, `env_manifest`, `release_manifest`, `release_diff_patch`.
+- **CheckReleaseReproducibility** (`agents_orchestrator.py`)
+  - Params: `tag` (str), `quick` (bool, default True).
+  - Verifies a release bundle by checksum-ing everything in `release_manifest.json`, then (optionally) runs a smoke test using available artifacts: calls `compute_model_metrics` on a sweep CSV and `run_biological_plotting` on a solution JSON if present.
+  - Writes `releases/{tag}/repro_status.md` (kind `release_repro_status_md`) with status, git commit, env checksum, missing/mismatched files, and quick-test outcomes; logs a project knowledge entry if failures/partials are found.
 - **Checks**: After code changes, run `ruff check agents_orchestrator.py` and `pyright agents_orchestrator.py` (ensure pyright cache is writable) to catch lint/type issues.
 
 ## Environment and API Keys

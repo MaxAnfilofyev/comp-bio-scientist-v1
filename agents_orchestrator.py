@@ -289,6 +289,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "diff.patch",
         "description": "Git diff patch captured for a dirty working tree at release time.",
     },
+    "release_repro_status_md": {
+        "rel_dir": "experiment_results/releases/{tag}",
+        "pattern": "repro_status.md",
+        "description": "Reproducibility check summary for a release tag.",
+    },
 }
 
 def _pattern_to_regex(pattern: str) -> re.Pattern[str]:
@@ -3248,6 +3253,48 @@ def _relative_to_release(path: Path, release_root: Path) -> str:
         return path.name
 
 
+def _load_release_manifest(release_root: Path, tag: str) -> Dict[str, Any]:
+    manifest_path = release_root / "release_manifest.json"
+    if not manifest_path.exists():
+        # Try a reserved path in case the registry placed it elsewhere.
+        reserve = _reserve_typed_artifact_impl("release_manifest", json.dumps({"tag": tag}), unique=False)
+        alt_path = reserve.get("reserved_path")
+        if alt_path:
+            manifest_path = Path(alt_path)
+    if not manifest_path.exists():
+        return {"error": "missing_release_manifest", "path": str(manifest_path)}
+    try:
+        data = json.loads(manifest_path.read_text())
+    except Exception as exc:
+        return {"error": f"invalid_release_manifest: {exc}", "path": str(manifest_path)}
+    data["__path"] = str(manifest_path)
+    return data
+
+
+def _verify_release_files(manifest: Dict[str, Any], release_root: Path) -> Tuple[List[str], List[Dict[str, Any]]]:
+    missing: List[str] = []
+    mismatched: List[Dict[str, Any]] = []
+    files = manifest.get("files", []) or []
+    for entry in files:
+        rel = entry.get("path") or entry.get("source")
+        if not rel:
+            continue
+        p = Path(rel)
+        target = p if p.is_absolute() else release_root / p
+        if not target.exists():
+            missing.append(str(target))
+            continue
+        expected = entry.get("checksum")
+        try:
+            actual = _safe_sha256(target)
+        except Exception as exc:
+            mismatched.append({"path": str(target), "expected": expected, "error": str(exc)})
+            continue
+        if expected and actual != expected:
+            mismatched.append({"path": str(target), "expected": expected, "actual": actual})
+    return missing, mismatched
+
+
 @function_tool
 def freeze_release(tag: str, description: str = "", include_large_artifacts: bool = False):
     """
@@ -3405,6 +3452,127 @@ def freeze_release(tag: str, description: str = "", include_large_artifacts: boo
         "missing": missing,
         "skipped": skipped,
         "git": git_state,
+    }
+
+
+def _select_first(paths: List[Path], suffix: str) -> Optional[Path]:
+    for p in paths:
+        if p.suffix.lower() == suffix.lower():
+            return p
+    return None
+
+
+@function_tool
+def check_release_reproducibility(tag: str, quick: bool = True):
+    """
+    Verify a frozen release bundle: checksum all files listed in release_manifest.json and optionally run a quick repro smoke test.
+    """
+    if not tag or not re.fullmatch(r"[A-Za-z0-9._-]+", tag):
+        return {"error": "invalid_tag", "tag": tag}
+
+    exp_dir = BaseTool.resolve_output_dir(None)
+    release_root = exp_dir / "releases" / tag
+    if not release_root.exists():
+        return {"error": "release_not_found", "path": str(release_root)}
+
+    manifest = _load_release_manifest(release_root, tag)
+    if manifest.get("error"):
+        return manifest
+
+    missing, mismatched = _verify_release_files(manifest, release_root)
+
+    quick_steps: List[Dict[str, Any]] = []
+    quick_errors: List[str] = []
+    env_path = release_root / manifest.get("env_manifest_path", "env_manifest.json")
+    env_hash = _safe_sha256(env_path) if env_path.exists() else None
+
+    files = manifest.get("files", []) or []
+    resolved_files: List[Path] = []
+    for entry in files:
+        rel = entry.get("path")
+        if not rel:
+            continue
+        p = Path(rel)
+        resolved_files.append(p if p.is_absolute() else release_root / p)
+
+    if quick:
+        csv_candidate = _select_first(resolved_files, ".csv")
+        if csv_candidate and csv_candidate.exists():
+            try:
+                res = cast(Any, compute_model_metrics)(input_path=str(csv_candidate))
+                quick_steps.append({"step": "compute_model_metrics", "path": str(csv_candidate), "result": res})
+            except Exception as exc:
+                quick_errors.append(f"compute_model_metrics:{exc}")
+        solution_candidate = None
+        for p in resolved_files:
+            if p.name.endswith("_solution.json") and p.exists():
+                solution_candidate = p
+                break
+        if solution_candidate:
+            try:
+                res = cast(Any, run_biological_plotting)(
+                    solution_path=str(solution_candidate),
+                    output_dir=str(release_root / "repro_figures"),
+                    make_phase_portrait=False,
+                )
+                quick_steps.append({"step": "run_biological_plotting", "path": str(solution_candidate), "result": res})
+            except Exception as exc:
+                quick_errors.append(f"run_biological_plotting:{exc}")
+
+    status = "ok"
+    reasons: List[str] = []
+    if missing or mismatched:
+        status = "partial"
+        if mismatched:
+            reasons.append("checksum_mismatch")
+        if missing:
+            reasons.append("missing_files")
+    if quick_errors:
+        status = "partial" if status == "ok" else status
+        reasons.extend(quick_errors)
+
+    summary_lines = [
+        f"# Release Repro Status: {tag}",
+        f"- status: {status}",
+        f"- tag: {tag}",
+        f"- git_commit: {manifest.get('git', {}).get('commit')}",
+        f"- env_checksum: {env_hash}",
+        f"- checked_at: {datetime.now().isoformat()}",
+        f"- missing_files: {len(missing)}",
+        f"- checksum_mismatches: {len(mismatched)}",
+        f"- quick_errors: {quick_errors}",
+    ]
+    report_content = "\n".join(summary_lines)
+    report_reserve = _reserve_typed_artifact_impl("release_repro_status_md", json.dumps({"tag": tag}), unique=False)
+    report_path = Path(report_reserve.get("reserved_path") or (release_root / "repro_status.md"))
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(report_content)
+    _append_manifest_entry(
+        name=str(report_path),
+        metadata_json=json.dumps({"kind": "release_repro_status_md", "created_by": os.environ.get("AISC_ACTIVE_ROLE", "publisher"), "status": status}),
+        allow_missing=False,
+    )
+
+    if status != "ok":
+        suggestion = "Missing or corrupted release files; consider re-running freeze_release or adding the absent artifacts to the release registry."
+        cast(Any, manage_project_knowledge)(
+            action="add",
+            category="constraint",
+            observation=f"Release {tag} repro check failed: {reasons or (missing or mismatched)}",
+            solution=suggestion,
+            actor=os.environ.get("AISC_ACTIVE_ROLE", "publisher"),
+        )
+
+    return {
+        "status": status,
+        "missing": missing,
+        "mismatched": mismatched,
+        "quick_steps": quick_steps,
+        "quick_errors": quick_errors,
+        "repro_report": str(report_path),
+        "env_checksum": env_hash,
+        "release_manifest": manifest.get("__path"),
+        "reasons": reasons,
     }
 
 @function_tool
