@@ -37,19 +37,19 @@ Move manifest-related utilities and project knowledge wrappers:
 - [x] `_append_figures_from_result`
 
 #### `@function_tool` wrappers to delegate:
-- [_] `inspect_manifest`
-- [_] `inspect_recent_manifest_entries`
-- [_] `append_manifest`
-- [_] `read_manifest_entry`
-- [_] `check_manifest`
-- [_] `read_manifest`
-- [_] `check_manifest_unique_paths`
-- [_] `list_artifacts`
-- [_] `list_artifacts_by_kind`
-- [_] `get_artifact_index`
-- [_] `check_project_state` (manifest-focused health check)
-- [_] `manage_project_knowledge`
-- [_] `append_run_note_tool`
+- [x] `inspect_manifest`
+- [x] `inspect_recent_manifest_entries`
+- [x] `append_manifest`
+- [x] `read_manifest_entry`
+- [x] `check_manifest`
+- [x] `read_manifest`
+- [x] `check_manifest_unique_paths`
+- [x] `list_artifacts`
+- [x] `list_artifacts_by_kind`
+- [x] `get_artifact_index`
+- [x] `check_project_state` (manifest-focused health check)
+- [x] `manage_project_knowledge`
+- [x] `append_run_note_tool`
 
 #### Expected signature:
 ```python

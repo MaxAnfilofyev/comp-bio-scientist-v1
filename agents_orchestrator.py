@@ -1,5 +1,4 @@
 # pyright: reportMissingImports=false
-import argparse
 import csv
 import json
 import os
@@ -7,7 +6,7 @@ import os.path as osp
 import re
 import subprocess
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +17,6 @@ import hashlib
 import platform
 import sys
 import zipfile
-from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
@@ -66,28 +64,16 @@ from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
 from ai_scientist.perform_writeup import perform_writeup
 from ai_scientist.perform_biological_interpretation import interpret_biological_results
-from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files, read_note_file, write_note_file, append_run_note
+from ai_scientist.utils.notes import NOTE_NAMES, read_note_file, write_note_file, append_run_note
 from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.utils.transport_index import index_transport_runs, resolve_transport_sim
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
 
-# Cached idea for hypothesis trace bootstrapping
-_ACTIVE_IDEA: Optional[Dict[str, Any]] = None
-_CHECKPOINTS_SEEN: set[str] = set()
-# --- Canonical Artifact Types (VI-01) ---
-# Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
-# Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
 from ai_scientist.orchestrator.artifacts import (
-    ARTIFACT_TYPE_REGISTRY,
     _artifact_kind_catalog,
     _format_artifact_path,
-    _pattern_to_regex,
     _reserve_typed_artifact_impl as _reserve_typed_artifact_impl_internal,
-    list_artifacts_by_kind as _list_artifacts_by_kind_internal,
-    reserve_and_register_artifact as _reserve_and_register_artifact_internal,
-    reserve_output as _reserve_output_internal,
-    reserve_typed_artifact as _reserve_typed_artifact_internal,
 )
 
 from ai_scientist.orchestrator.context import (
@@ -100,16 +86,17 @@ from ai_scientist.orchestrator.context import (
 )
 
 from ai_scientist.orchestrator.manifest_service import (
-    _scan_and_auto_update_manifest,
-    _normalize_manifest_entry,
-    _build_metadata_for_compat,
-    _load_manifest_map,
-    _append_manifest_entry,
-    _append_artifact_from_result,
-    _append_figures_from_result,
-    check_project_state,
-    manage_project_knowledge,
+    _normalize_manifest_entry as _normalize_manifest_entry_impl,
 )
+
+# Cached idea for hypothesis trace bootstrapping
+_ACTIVE_IDEA: Optional[Dict[str, Any]] = None
+_CHECKPOINTS_SEEN: set[str] = set()
+# --- Canonical Artifact Types (VI-01)
+# Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
+# Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
+
+# Manifest service utilities are available but should be called from manifest_service functions
 
 # Backward-compatible alias for internal reserve helper
 _reserve_typed_artifact_impl = _reserve_typed_artifact_impl_internal
@@ -126,8 +113,63 @@ def inspect_recent_manifest_entries(base_folder: str) -> str:
     return inspect_recent_manifest_entries(base_folder)
 
 @function_tool
+def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
+    from .manifest_service import append_manifest
+    return append_manifest(name, metadata_json, allow_missing)
+
+@function_tool
+def read_manifest_entry(path_or_name: str):
+    from .manifest_service import read_manifest_entry
+    return read_manifest_entry(path_or_name)
+
+@function_tool
+def check_manifest():
+    from .manifest_service import check_manifest
+    return check_manifest()
+
+@function_tool
+def read_manifest():
+    from .manifest_service import read_manifest
+    return read_manifest()
+
+@function_tool
+def check_manifest_unique_paths():
+    from .manifest_service import check_manifest_unique_paths
+    return check_manifest_unique_paths()
+
+@function_tool
+def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
+    from .manifest_service import list_artifacts
+    return list_artifacts(suffix, subdir)
+
+@function_tool
+def list_artifacts_by_kind(kind: str, limit: int = 100):
+    from .manifest_service import list_artifacts_by_kind
+    return list_artifacts_by_kind(kind, limit)
+
+@function_tool
+def get_artifact_index(max_entries: int = 2000):
+    from .manifest_service import get_artifact_index
+    return get_artifact_index(max_entries)
+
+@function_tool
+def check_project_state(base_folder: str) -> str:
+    from .manifest_service import check_project_state
+    return check_project_state(base_folder)
+
+@function_tool
+def manage_project_knowledge(
+    action: str,
+    category: str = "general",
+    observation: str = "",
+    solution: str = "",
+    actor: str = "",
+) -> str:
+    from .manifest_service import manage_project_knowledge
+    return manage_project_knowledge(action, category, observation, solution, actor)
+
+@function_tool
 def append_run_note_tool(message: str, actor: str = "") -> str:
-    from ai_scientist.utils.notes import append_run_note
     append_run_note(message, actor or "tool")
     return "Note appended"
 
@@ -442,58 +484,7 @@ def _ensure_model_spec_and_params(model_key: str) -> Dict[str, Any]:
     }
 
 
-def _normalize_manifest_entry(entry: Dict[str, Any], fallback_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    def _add_annotation(raw: Any, annotations_list: List[Dict[str, Any]]):
-        if not isinstance(raw, dict):
-            return
-        cleaned = {k: v for k, v in raw.items() if k not in {"type", "annotations"}}
-        if cleaned and cleaned not in annotations_list:
-            annotations_list.append(cleaned)
 
-    path = entry.get("path") or fallback_path or entry.get("name")
-    if not path:
-        return None
-    name = os.path.basename(entry.get("name") or path)
-    base_type = entry.get("type")
-    annotations: List[Dict[str, Any]] = []
-
-    meta = entry.get("metadata")
-    if isinstance(meta, dict):
-        base_type = meta.get("type", base_type)
-        if not annotations:
-            _add_annotation(meta, annotations)
-        nested = meta.get("annotations")
-        if isinstance(nested, list):
-            for ann in nested:
-                _add_annotation(ann, annotations)
-    elif isinstance(meta, list):
-        for m in meta:
-            if isinstance(m, dict):
-                if m.get("type") and not base_type:
-                    base_type = m.get("type")
-                if not annotations:
-                    _add_annotation(m, annotations)
-                nested = m.get("annotations")
-                if isinstance(nested, list):
-                    for ann in nested:
-                        _add_annotation(ann, annotations)
-
-    existing_annotations = entry.get("annotations")
-    if isinstance(existing_annotations, list):
-        for ann in existing_annotations:
-            _add_annotation(ann, annotations)
-
-    normalized = {
-        "name": name,
-        "path": path,
-        "type": base_type,
-        "annotations": annotations,
-        "timestamp": entry.get("timestamp")
-    }
-    compat_meta = _build_metadata_for_compat(base_type, annotations)
-    if compat_meta:
-        normalized["metadata"] = compat_meta
-    return normalized
 
 
 def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
@@ -521,7 +512,7 @@ def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
     if isinstance(data, dict):
         for key, val in data.items():
             if isinstance(val, dict):
-                norm = _normalize_manifest_entry(val, fallback_path=key)
+                norm = _normalize_manifest_entry_impl(val, fallback_path=key)
                 if norm:
                     manifest_map[norm["path"]] = norm
         return manifest_map
@@ -529,7 +520,7 @@ def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
     if isinstance(data, list):
         for item in data:
             if isinstance(item, dict):
-                norm = _normalize_manifest_entry(item)
+                norm = _normalize_manifest_entry_impl(item)
                 if norm:
                     manifest_map[norm["path"]] = norm
     return manifest_map
@@ -843,12 +834,7 @@ def _run_root() -> Path:
     return Path(base) if base else Path(".")
 
 
-def _bootstrap_note_links() -> None:
-    for name in ("pi_notes.md", "user_inbox.md"):
-        try:
-            ensure_note_files(name)
-        except Exception as exc:
-            print(f"⚠️ Failed to ensure {name}: {exc}")
+# _bootstrap_note_links is imported from context
 
 
 def format_list_field(data: Any) -> str:
@@ -1073,56 +1059,7 @@ def _run_cli_tool(tool_name: str, args: str = "") -> Any:
         return {"error": str(exc)}
 
 
-def _report_capabilities() -> Dict[str, Any]:
-    tools = {name: bool(shutil.which(name)) for name in ("pandoc", "pdflatex", "ruff", "pyright")}
-    return {"tools": tools, "pdf_engine_ready": tools.get("pandoc") and tools.get("pdflatex")}
-
-
-def _ensure_transport_readme(base_folder: str):
-    """
-    Write a standard transport_runs/README.md describing layout and manifest usage for this run.
-    Safe to call multiple times; overwrites with the canonical content.
-    """
-    transport_dir, _, _ = resolve_output_path(
-        subdir="simulations/transport_runs",
-        name="",
-        run_root=Path(base_folder) / "experiment_results",
-        allow_quarantine=False,
-        unique=False,
-    )
-    transport_dir.mkdir(parents=True, exist_ok=True)
-    readme_path = transport_dir / "README.md"
-    template_path = Path(__file__).parent / "docs" / "transport_runs_README.md"
-    if template_path.exists():
-        try:
-            content = template_path.read_text()
-        except Exception:
-            content = ""
-    else:
-        content = (
-            "Transport run layout and naming\n\n"
-            "- Root: experiment_results/simulations/transport_runs\n"
-            "- Baseline folders: transport_runs/<baseline>/\n"
-            "- Transport folders: transport_runs/<baseline>/transport_<transport>/\n"
-            "- Seed folders: transport_runs/<baseline>/transport_<transport>/seed_<seed>/\n"
-            "- Files in each seed folder:\n"
-            "  - <baseline>_sim_failure_matrix.npy\n"
-            "  - <baseline>_sim_time_vector.npy\n"
-            "  - nodes_order_<baseline>_sim.txt\n"
-            "  - <baseline>_sim.json\n"
-            "  - <baseline>_sim.status.json\n\n"
-            "Completion rule\n"
-            "- A run is considered complete only when the arrays (failure_matrix, time_vector, nodes_order) and sim.json + sim.status.json exist.\n"
-            "- Prefer exporting arrays during the sim run; otherwise run sim_postprocess immediately on the sim.json so arrays are present before marking complete.\n\n"
-            "Canonical manifest\n"
-            "- Manifest path: experiment_results/simulations/transport_runs/manifest.json\n"
-            "- Each entry keyed by (baseline, transport, seed) with fields: status (complete|partial|error), paths, updated_at, notes, actor.\n"
-            "- Use the manifest as the source of truth for skip/verify; if missing or stale, run scan_transport_manifest to rebuild from disk.\n"
-        )
-    try:
-        readme_path.write_text(content)
-    except Exception:
-        pass
+# _report_capabilities and _ensure_transport_readme are imported from context
 
 def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
     return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
@@ -3941,44 +3878,7 @@ def resolve_path(path: str, must_exist: bool = True, allow_dir: bool = False):
         raise e
 
 
-@function_tool
-def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
-    """
-    List artifacts under experiment_results (optionally a subdir) with optional suffix filter.
-    Agents should use this before selecting files.
-    """
-    # Default root is the run's experiment_results
-    exp_root = BaseTool.resolve_output_dir(None)
-    roots: List[Path] = []
-    if subdir:
-        sub_path = Path(subdir)
-        roots.append(sub_path if sub_path.is_absolute() else exp_root / sub_path)
-        # Also try under base folder if provided
-        base = os.environ.get("AISC_BASE_FOLDER", "")
-        if base:
-            roots.append(Path(base) / sub_path)
-            roots.append(Path(base) / "experiment_results" / sub_path)
-    else:
-        roots.append(exp_root)
 
-    root = next((r for r in roots if r.exists()), roots[0])
-    files: List[str] = []
-    try:
-        if root.exists():
-            for p in root.rglob("*"):
-                if p.is_file():
-                    if suffix and not str(p).endswith(suffix):
-                        continue
-                    try:
-                        rel = p.relative_to(root)
-                        files.append(str(rel))
-                    except Exception:
-                        files.append(str(p))
-        else:
-            return {"root": str(root), "files": files, "warning": "root_missing"}
-        return {"root": str(root), "files": files}
-    except Exception as exc:
-        return {"root": str(root), "files": files, "error": f"list_artifacts failed: {exc}"}
 
 
 @function_tool
@@ -4407,15 +4307,7 @@ def summarize_artifact(path: str, max_lines: int = 5):
     return info
 
 
-@function_tool
-def list_artifacts_by_kind(kind: str, limit: int = 100):
-    """
-    List artifacts from manifest v2 filtered by kind.
-    """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    entries = manifest_utils.load_entries(base_folder=exp_dir, limit=None)
-    filtered = [e for e in entries if e.get("kind") == kind]
-    return {"kind": kind, "paths": [e.get("path") for e in filtered[:limit]], "total": len(filtered)}
+
 
 
 def _reserve_typed_artifact_impl(kind: str, meta_json: Optional[str], unique: bool) -> Dict[str, Any]:
@@ -4508,104 +4400,6 @@ def reserve_output(name: str, subdir: Optional[str] = None):
     result = {"reserved_path": str(target), "quarantined": quarantined}
     if note:
         result["note"] = note
-    return result
-
-
-@function_tool
-def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
-    """
-    Append an entry to the run's sharded manifest (experiment_results/manifest/...).
-    Pass metadata as a JSON string (e.g., '{"type":"figure","source":"analyst"}').
-    Creates the manifest file if missing.
-    """
-    return _append_manifest_entry(name=name, metadata_json=metadata_json, allow_missing=allow_missing)
-
-
-@function_tool
-def read_manifest_entry(path_or_name: str):
-    """
-    Read a single manifest entry by path key or filename (basename).
-    """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    entry = manifest_utils.find_manifest_entry(path_or_name, base_folder=exp_dir)
-    if entry:
-        return {"entry": entry}
-    return {"error": "Not found", "path_or_name": path_or_name}
-
-
-@function_tool
-def check_manifest():
-    """
-    Validate manifest entries: report missing files, entries lacking type, and duplicate basenames.
-    """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    entries = manifest_utils.load_entries(base_folder=exp_dir)
-    if not entries:
-        return {"error": "Manifest empty or missing", "path": str(exp_dir / 'manifest')}
-
-    missing = []
-    missing_type = []
-    by_name: Dict[str, list[str]] = {}
-    duplicates_by_path: Dict[str, int] = {}
-    for entry in entries:
-        path = entry.get("path", "")
-        try:
-            exists = Path(path).exists()
-        except Exception:
-            exists = False
-        if not exists:
-            missing.append(path)
-        if not entry.get("kind"):
-            missing_type.append(path)
-        name = entry.get("name") or os.path.basename(path or "")
-        by_name.setdefault(name, []).append(path)
-        duplicates_by_path[path] = duplicates_by_path.get(path, 0) + 1
-
-    duplicates = {name: paths for name, paths in by_name.items() if len(paths) > 1}
-    duplicate_paths = [p for p, count in duplicates_by_path.items() if count > 1]
-    health_entries: List[Dict[str, Any]] = []
-    if missing:
-        health_entries.append({"missing_files": missing})
-    if missing_type:
-        health_entries.append({"missing_type": missing_type})
-    if duplicates:
-        health_entries.append({"duplicate_names": duplicates})
-    if duplicate_paths:
-        health_entries.append({"duplicate_paths": duplicate_paths})
-    if health_entries:
-        log_missing_or_corrupt(health_entries)
-    return {
-        "manifest_index": str(BaseTool.resolve_output_dir(None) / "manifest" / "manifest_index.json"),
-        "n_entries": len(entries),
-        "missing_files": missing,
-        "missing_type": missing_type,
-        "duplicate_names": duplicates,
-        "duplicate_paths": duplicate_paths,
-    }
-
-
-@function_tool
-def read_manifest():
-    """Read the run's manifest with a capped entry list; use inspect_manifest for filtered views."""
-    exp_dir = BaseTool.resolve_output_dir(None)
-    data = manifest_utils.inspect_manifest(base_folder=exp_dir, summary_only=False, limit=500)
-    return {
-        "manifest_index": data.get("manifest_index"),
-        "entries": data.get("entries", []),
-        "summary": data.get("summary", {}),
-        "note": "Entries capped at 500; use inspect_manifest for filtered views.",
-    }
-
-
-@function_tool
-def check_manifest_unique_paths():
-    """
-    Validate that manifest paths are unique (COUNT(DISTINCT path) == COUNT(*)).
-    """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    result = manifest_utils.unique_path_check(base_folder=exp_dir)
-    ok = result["total"] == result["distinct_paths"]
-    result["ok"] = ok
     return result
 
 
@@ -4732,37 +4526,6 @@ def check_status(status_path: Optional[str] = None, glob_pattern: str = "*.statu
         except Exception as exc:
             statuses.append({"path": str(m), "error": str(exc)})
     return {"root": str(root), "matches": statuses}
-
-
-@function_tool
-def get_artifact_index(max_entries: int = 2000):
-    """
-    Build a lightweight index of artifacts under experiment_results and include manifest entries if present.
-    """
-    root = BaseTool.resolve_output_dir(None)
-    manifest = manifest_utils.inspect_manifest(
-        base_folder=root,
-        summary_only=False,
-        limit=min(500, max_entries),
-    )
-    files: List[Dict[str, Any]] = []
-    try:
-        count = 0
-        for p in root.rglob("*"):
-            if p.is_file():
-                rel = str(p.relative_to(root))
-                try:
-                    size = p.stat().st_size
-                except Exception:
-                    size = None
-                files.append({"path": rel, "suffix": p.suffix.lower(), "size": size})
-                count += 1
-                if count >= max_entries:
-                    break
-    except Exception as exc:
-        return {"root": str(root), "manifest": manifest, "error": f"index failed: {exc}"}
-    return {"root": str(root), "manifest": manifest, "files": files}
-
 
 @function_tool
 def run_ruff():
