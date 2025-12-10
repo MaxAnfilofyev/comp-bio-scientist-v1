@@ -69,6 +69,7 @@ from ai_scientist.utils import manifest as manifest_utils
 
 # Cached idea for hypothesis trace bootstrapping
 _ACTIVE_IDEA: Optional[Dict[str, Any]] = None
+_CHECKPOINTS_SEEN: set[str] = set()
 # --- Canonical Artifact Types (VI-01) ---
 # Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
 # Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
@@ -2088,6 +2089,24 @@ def assemble_lit_data(
         except Exception as exc:
             if isinstance(result, dict):
                 result["reference_verification_error"] = f"Verification failed: {exc}"
+    try:
+        human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
+        if human_in_loop:
+            top_refs = ""
+            if isinstance(result, dict):
+                json_path = result.get("json") or ""
+                top_refs = f"lit_summary: {json_path}, verification: {result.get('reference_verification', {}).get('json', '')}"
+            summary = f"Literature assembled. {top_refs}"
+            _checkpoint_required("literature_verification", summary, human_in_loop)
+        else:
+            _record_checkpoint_decision(
+                "literature_verification",
+                approved=True,
+                summary="Lit assembled (dry-run approval).",
+                dry_run=True,
+            )
+    except Exception:
+        pass
     return result
 
 @function_tool
@@ -2284,6 +2303,64 @@ def _record_claim_consistency_in_provenance(status_line: str):
             lines.insert(insert_idx, gate_line)
     out_path.write_text("\n".join(lines) + "\n")
     return str(out_path)
+
+
+def _record_checkpoint_decision(name: str, approved: bool, summary: str, dry_run: bool = False) -> None:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    health_dir = exp_dir / "_health"
+    health_dir.mkdir(parents=True, exist_ok=True)
+    report_path = health_dir / "health_report.json"
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text())
+        except Exception:
+            report = {}
+    else:
+        report = {}
+    key = "decisions_dry_run" if dry_run else "decisions"
+    entries = report.setdefault(key, [])
+    entries.append(
+        {
+            "name": name,
+            "approved": approved,
+            "summary": summary,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+    report_path.write_text(json.dumps(report, indent=2))
+
+
+def _checkpoint_required(name: str, summary: str, human_in_loop: bool) -> None:
+    """
+    If human_in_loop is True, prompt for approval once per checkpoint name.
+    Otherwise, record a dry-run decision.
+    """
+    if name in _CHECKPOINTS_SEEN:
+        return
+    _CHECKPOINTS_SEEN.add(name)
+
+    if not human_in_loop:
+        _record_checkpoint_decision(name, approved=True, summary=summary, dry_run=True)
+        return
+
+    print(f"\n=== HUMAN CHECKPOINT: {name} ===\n{summary}\nApprove to proceed? [y/N]: ", end="", flush=True)
+    try:
+        resp = input().strip().lower()
+    except Exception:
+        resp = ""
+    approved = resp in {"y", "yes"}
+    _record_checkpoint_decision(name, approved=approved, summary=summary, dry_run=False)
+    if not approved:
+        try:
+            cast(Any, manage_project_knowledge)(
+                action="add",
+                category="decision",
+                observation=f"Checkpoint '{name}' declined.",
+                solution=summary,
+            )
+        except Exception:
+            pass
+        raise RuntimeError(f"Checkpoint '{name}' declined by human.")
 
 
 def _log_lit_gate_decision(status: str, confirmed_pct: float, n_unverified: int, thresholds: Dict[str, Any], reasons: List[str]):
@@ -2710,6 +2787,15 @@ def run_comp_sim(
     skip_lit_gate: bool = False,
 ):
     """Runs a compartmental simulation and saves CSV data."""
+    try:
+        human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
+        _checkpoint_required(
+            "sim_plan",
+            "About to launch compartmental simulation (potentially heavy compute).",
+            human_in_loop,
+        )
+    except Exception:
+        pass
     _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunCompartmentalSimTool().use_tool(
         graph_path=graph_path,
@@ -2943,6 +3029,17 @@ def run_writeup_task(
     page_limit: int = 8
 ):
     """Compiles the manuscript using the theoretical biology template."""
+    human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
+    try:
+        consistency = _evaluate_claim_consistency()
+        summary_line = (
+            f"Claim consistency before writeup: {consistency.get('overall_status')} "
+            f"(missing={consistency.get('n_missing')}, weak={consistency.get('n_weak')})"
+        )
+        _checkpoint_required("pre_writeup", summary_line, human_in_loop)
+    except Exception:
+        pass
+
     base_folder = base_folder or os.environ.get("AISC_BASE_FOLDER", "")
     ok = perform_writeup(
         base_folder=base_folder,
@@ -3090,6 +3187,15 @@ def run_sensitivity_sweep(
     skip_lit_gate: bool = False,
 ):
     """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
+    try:
+        human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
+        _checkpoint_required(
+            "sim_plan",
+            "About to launch sensitivity sweep (potentially heavy compute).",
+            human_in_loop,
+        )
+    except Exception:
+        pass
     _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunSensitivitySweepTool().use_tool(
         graph_path=graph_path,
@@ -3139,6 +3245,15 @@ def run_intervention_tests(
     skip_lit_gate: bool = False,
 ):
     """Test parameter interventions vs a baseline and report delta frac_failed."""
+    try:
+        human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
+        _checkpoint_required(
+            "sim_plan",
+            "About to launch intervention tests (potentially heavy compute).",
+            human_in_loop,
+        )
+    except Exception:
+        pass
     _ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     res = RunInterventionTesterTool().use_tool(
         graph_path=graph_path,
