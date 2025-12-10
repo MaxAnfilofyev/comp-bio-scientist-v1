@@ -153,13 +153,12 @@ Move release bundling, reproducibility, and reproduction text:
 
 Consolidate all `@function_tool` decorators into focused groupings:
 
-#### Wrapper groups to create with delegation:
-- [_] **Literature tools:** `assemble_lit_data`, `validate_lit_summary`, `verify_references`, `search_semantic_scholar`
-- [_] **Model/Simulation tools:** `build_graphs`, `run_biological_model`, `run_comp_sim`, `run_sensitivity_sweep`, `run_intervention_tests`, `compute_model_metrics`, `sim_postprocess`, `repair_sim_outputs`
-- [_] **Analysis tools:** `run_biological_plotting`, `run_validation_compare`, `run_biological_stats`, `graph_diagnostics`, `read_npy_artifact`, `summarize_artifact`, `read_artifact`, `head_artifact`
-- [_] **Governance tools:** `check_lit_ready`, `check_model_provenance`, `check_claim_graph`, `check_claim_consistency`, `generate_provenance_summary`, `check_project_state`
-- [_] **Release tools:** `freeze_release`, `check_release_reproducibility`, `generate_reproduction_section`
-- [_] **Notes/Governance:** `read_note`, `write_pi_notes`, `wait_for_human_review`, `check_user_inbox`
+- [x] **Literature tools:** `assemble_lit_data`, `validate_lit_summary`, `verify_references`, `search_semantic_scholar`
+- [x] **Model/Simulation tools:** `build_graphs`, `run_biological_model`, `run_comp_sim`, `run_sensitivity_sweep`, `run_intervention_tests`, `compute_model_metrics`, `sim_postprocess`, `repair_sim_outputs`
+- [x] **Analysis tools:** `run_biological_plotting`, `run_validation_compare`, `run_biological_stats`, `graph_diagnostics`, `read_npy_artifact`, `summarize_artifact`, `read_artifact`, `head_artifact`
+- [x] **Governance tools:** `check_lit_ready`, `check_model_provenance`, `check_claim_graph`, `check_claim_consistency`, `generate_provenance_summary`, `check_project_state`
+- [x] **Release tools:** `freeze_release`, `check_release_reproducibility`, `generate_reproduction_section`
+- [x] **Notes/Governance:** `read_note`, `write_pi_notes`, `wait_for_human_review`, `check_user_inbox`
 
 #### Integration pattern:
 Each wrapper should call appropriate domain modules:
@@ -261,7 +260,7 @@ Update this section as work progresses:
 - Phase 3: ✅ DONE
 - Phase 4: ✅ DONE
 - Phase 5: ✅ DONE
-- Phase 6: ⏳ PENDING
+- Phase 6: ✅ DONE
 - Phase 7: ⏳ PENDING
 - Phase 8: ⏳ PENDING
 

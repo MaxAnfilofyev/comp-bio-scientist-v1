@@ -44,6 +44,7 @@ agents_stub.function_tool = _function_tool
 sys.modules["agents"] = agents_stub
 
 import agents_orchestrator as ao  # noqa: E402
+import ai_scientist.orchestrator.tool_wrappers as tw  # noqa: E402
 
 
 def _write_claim_graph(base: Path, missing_support: bool):
@@ -116,7 +117,7 @@ def test_run_writeup_blocks_on_missing_claim_support(tmp_path, monkeypatch):
 
     # Avoid calling heavy writeup; stub perform_writeup return True
     monkeypatch.setattr(ao, "perform_writeup", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tw, "perform_writeup", lambda *args, **kwargs: True)
 
     with pytest.raises(RuntimeError):
         ao.run_writeup_task()
-
