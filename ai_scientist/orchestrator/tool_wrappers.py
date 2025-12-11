@@ -2467,7 +2467,7 @@ def check_user_inbox():
 # --- ARCHIVIST SPECIALIZED TOOLS ---
 
 @function_tool
-def create_lit_summary_artifact(module: str = "lit"):
+def create_lit_summary_artifact(module: str = "lit", **kwargs: Any):
     """
     Create and register a new 'lit_summary_main' artifact.
     Use this when updating or creating the primary literature summary.
@@ -2481,7 +2481,7 @@ def create_lit_summary_artifact(module: str = "lit"):
 
 
 @function_tool
-def create_claim_graph_artifact(module: str = "lit"):
+def create_claim_graph_artifact(module: str = "lit", **kwargs: Any):
     """
     Create and register a new 'claim_graph_main' artifact.
     Use this when creating the claim graph.
@@ -2495,7 +2495,7 @@ def create_claim_graph_artifact(module: str = "lit"):
 
 
 @function_tool
-def list_lit_summaries(module: str = "lit"):
+def list_lit_summaries(module: str = "lit", **kwargs: Any):
     """
     List existing literature summary artifacts for the given module.
     """
@@ -2503,7 +2503,7 @@ def list_lit_summaries(module: str = "lit"):
 
 
 @function_tool
-def list_claim_graphs(module: str = "lit"):
+def list_claim_graphs(module: str = "lit", **kwargs: Any):
     """
     List existing claim graph artifacts for the given module.
     """
@@ -2511,7 +2511,7 @@ def list_claim_graphs(module: str = "lit"):
 
 
 @function_tool
-def read_archivist_artifact(name: str):
+def read_archivist_artifact(name: str, **kwargs: Any):
     """
     Read a literature-related artifact (lit_summary, claim_graph).
     Restricted to specific allowed kinds.
@@ -2554,7 +2554,7 @@ def read_archivist_artifact(name: str):
 # --- Specialized Modeler Wrappers ---
 
 @function_tool
-def create_transport_artifact(baseline: str, transport: float, seed: int, artifact_type: str = "sim_json"):
+def create_transport_artifact(baseline: str, transport: float, seed: int, artifact_type: str = "sim_json", **kwargs: Any):
     """
     Register a transport run artifact.
     artifact_type options: 'sim_json', 'status', 'failure_matrix', 'time_vector', 'nodes_order', 'per_compartment', 'node_index_map', 'topology_summary'.
@@ -2586,7 +2586,7 @@ def create_transport_artifact(baseline: str, transport: float, seed: int, artifa
 
 
 @function_tool
-def create_sensitivity_table_artifact(label: str):
+def create_sensitivity_table_artifact(label: str, **kwargs: Any):
     """
     Register a sensitivity sweep CSV table.
     """
@@ -2600,7 +2600,7 @@ def create_sensitivity_table_artifact(label: str):
 
 
 @function_tool
-def create_intervention_table_artifact(label: str):
+def create_intervention_table_artifact(label: str, **kwargs: Any):
     """
     Register an intervention test CSV table.
     """
@@ -2614,7 +2614,7 @@ def create_intervention_table_artifact(label: str):
 
 
 @function_tool
-def create_verification_note_artifact(experiment_id: str):
+def create_verification_note_artifact(experiment_id: str, **kwargs: Any):
     """
     Register a verification note (proof-of-work) for an experiment.
     """
@@ -2746,7 +2746,7 @@ def _safe_read_artifact(name_or_path: str, allowed_kinds: List[str]):
 
 
 @function_tool
-def create_model_spec_artifact(model_key: str, content_json: str):
+def create_model_spec_artifact(model_key: str, content_json: str, **kwargs: Any):
     """
     Register a model specification (parameter_set).
     content_json: JSON string of the model parameters.
