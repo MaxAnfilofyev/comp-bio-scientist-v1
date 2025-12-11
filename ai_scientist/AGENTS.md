@@ -5,14 +5,14 @@ The `ai_scientist` root directory contains the primary entry points and stage-sp
 ## Core Stages
 
 ### 1. Ideation
-- **`perform_ideation_temp_free.py`**: The initial creativity engine. It takes a workshop description and generates novel research ideas.
+- **`generate_ideas.py`** (was `perform_ideation_temp_free.py`): The initial creativity engine. It takes a workshop description and generates novel research ideas.
+  - **Location**: `ai_scientist/tools/generate_ideas.py`
   - **Inputs**: Text description of the research area.
   - **Outputs**: `ideas/<idea_name>.json`.
   - **Tools**: Accesses literature via `SearchSemanticScholar` and `AssembleLitData` to ground ideas in reality.
 
 ### 2. Literature Assembly
 - **Literature Search**: The `Archivist` agent uses `assemble_lit_data` (using `ai_scientist.tools.lit_data_assembly`) to search Semantic Scholar and aggregate results.
-se for a run.
   - **Key Features**:
     - **Semantic Scholar Integration**: Fetches paper metadata, abstracts, and citations.
     - **Deduplication**: Merges results from multiple queries and seeds.
@@ -27,14 +27,18 @@ se for a run.
 
 ### 4. Interpretation & Writeup
 - **Biological Interpretation**: The `Interpreter` agent uses `interpret_biology` (wrapping `ai_scientist.tools.biological_interpretation`) to synthesize findings into `interpretation.json` and `interpretation.md`.
-- **`perform_writeup.py`**: Compiles the final manuscript.
+- **`writeup.py`** (was `perform_writeup.py`): Compiles the final manuscript.
+  - **Location**: `ai_scientist/tools/writeup.py`
   - Generates LaTeX from templates (`blank_theoretical_biology_latex`, etc.).
   - Renders PDF using `pdflatex`.
   - Injects release metadata if a release tag is provided.
 
 ### 5. Review
-- **`perform_llm_review.py`**: Auto-reviewer using LLMs to critique the PDF/text.
-- **`perform_vlm_review.py`**: Vision-Language Model reviewer that can "see" figures in the PDF.
+- **`llm_review.py`** (was `perform_llm_review.py`): Auto-reviewer using LLMs to critique the PDF/text.
+  - **Location**: `ai_scientist/tools/llm_review.py`
+- **`vlm_review.py`** (was `perform_vlm_review.py`): Vision-Language Model reviewer that can "see" figures in the PDF.
+  - **Location**: `ai_scientist/tools/vlm_review.py`
 
 ## Maintenance Scripts
-- **`perform_repair_sim_outputs.py`**: A utility to fix/upgrade simulation artifacts in existing runs without re-running the expensive simulation.
+- **`repair_sim_outputs.py`** (was `perform_repair_sim_outputs.py`): A utility to fix/upgrade simulation artifacts in existing runs without re-running the expensive simulation.
+  - **Location**: `ai_scientist/tools/repair_sim_outputs.py`

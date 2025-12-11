@@ -26,7 +26,18 @@ This directory (`ai_scientist/tools`) contains the **Raw Capability Implementati
 - **`claim_graph.py`** & **`claim_graph_checker.py`**: Manages the "Claim Graph" - a structured representation of scientific arguments and their evidence status.
 
 ## Maintenance & Recovery
+## Maintenance & Recovery
 - **`repair_sim_outputs.py`**: Bulk repair utility for simulation outputs (`RepairSimOutputsTool`). Takes existing `sim.json` files and ensures all post-processed arrays and validation artifacts are present.
+- **`plot_aggregator.py`**: Aggregates plots from various experiments (`perform_plotting.py` replacement).
+
+## Ideation & Writing
+- **`generate_ideas.py`**: Implementation of the template-free ideation logic.
+- **`writeup.py`**: Compiles the final manuscript (standard templates). 
+- **`icbinb_writeup.py`**: Specialized writeup tool for the ICBINB workshop.
+
+## Review
+- **`llm_review.py`**: LLM-based paper reviewer.
+- **`vlm_review.py`**: VLM-based paper and figure reviewer.
 
 ## core Infrastructure
 - **`base_tool.py`**: The abstract base class (`BaseTool`) that all tools inherit from. Enforces standard behavior for parameter definition and execution.

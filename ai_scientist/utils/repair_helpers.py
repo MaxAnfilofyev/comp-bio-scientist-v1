@@ -1,12 +1,13 @@
 import os
 import shutil
 from pathlib import Path
+from typing import Union
 
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils.pathing import resolve_output_path
 
 
-def normalize_sim_dir(sim_dir: str | Path) -> Path:
+def normalize_sim_dir(sim_dir: Union[str, Path]) -> Path:
     """
     Normalize a sim directory to a canonical path anchored via resolve_output_path.
     If a duplicate run_root prefix is detected (e.g., experiment_results/.../experiment_results/...),

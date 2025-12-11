@@ -17,3 +17,4 @@ This directory (`ai_scientist/utils`) contains shared helper modules used across
 - **`per_compartment.py`**: Logic for analyzing compartmental simulation outputs (topology metrics, binary state classification).
 - **`transport_index.py`**: Helper calculations for transport phenomena.
 - **`repair_helpers.py`**: dedicated helpers for the `repair_sim_outputs` tool (e.g., safe file moving, directory normalization).
+- **`experiment_utils.py`**: Common utilities for loading idea text, experiment summaries, and filtering them for specific steps (writeup, review, etc.).

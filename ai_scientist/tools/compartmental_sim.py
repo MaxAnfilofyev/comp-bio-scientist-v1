@@ -3,7 +3,7 @@ import json
 import pickle
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union, Optional
+from typing import Any, Dict, Tuple, Union
 
 import networkx as nx
 import numpy as np
