@@ -802,7 +802,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
         instructions=(
             f"You are an expert Principal Investigator for project: {title}.\\n"
             f"Hypothesis: {hypothesis}\\n\\n"
-            f"TL;DR: Check state \u2192 Plan \u2192 Delegate to specialists \u2192 Monitor progress \u2192 Promote artifacts \u2192 Generate snapshot\\n\\n"
+            f"TL;DR: Check state \u2192 Plan \u2192 **EXECUTE by calling agent tools** \u2192 Monitor progress \u2192 Promote artifacts \u2192 Generate snapshot\\n"
+            f"**CRITICAL**: Your job is to EXECUTE the plan by calling agent tools (archivist, modeler, analyst, etc.), NOT to create meta-tasks or wait for abstract 'leads'.\\n\\n"
             f"{_get_path_context('Principal Investigator', dirs)}\\n"
             f"{_get_file_io_policy('Principal Investigator')}\\n"
             f"{_get_metadata_reminder('Principal Investigator')}\\n"
@@ -834,20 +835,56 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "- Do NOT omit experiments/tasks you still care about—they won't be deleted\\n"
             "- To explicitly drop an experiment/task, note it in the `decisions` list\\n"
             "  (e.g., '2025-12-11: Drop E4 due to irrelevance')\\n\\n"
-            "### 4. DELEGATE TO SPECIALISTS\\n"
-            "**MANDATORY**: Lookup exact file paths first (inspect_manifest/list_artifacts) and pass EXACT PATH.\\n"
+            "### 4. EXECUTE PLAN VIA AGENT TOOL CALLS\\n\\n"
+            "You have access to specialized agent tools. **Delegation means calling these tools directly.**\\n\\n"
+            "**Available Agent Tools**:\\n"
+            "- `archivist` - Literature search, reference verification, claim graphs, lit summaries\\n"
+            "- `modeler` - Simulations, parameter sweeps, metrics computation, hypothesis trace updates\\n"
+            "- `analyst` - Figure generation, plotting, statistical analysis, manuscript gallery publishing\\n"
+            "- `interpreter` - Theoretical biology interpretation (only for theoretical research)\\n"
+            "- `reviewer` - Manuscript review, gap detection, proof-of-work verification\\n"
+            "- `publisher` - LaTeX compilation, PDF generation, release artifacts\\n"
+            "- `coder` - Python helper scripts confined to run folder\\n\\n"
+            "**How to Delegate** (3-step pattern):\\n"
+            "1. **Identify the need**: 'Need literature review for hypothesis H1'\\n"
+            "2. **Prepare inputs**: Use `list_artifacts`/`inspect_manifest` to find exact paths\\n"
+            "3. **Call the tool**: `archivist(task='Create lit_summary for H1. Output to lit_summary.json')`\\n\\n"
+            "**Delegation Examples**:\\n\\n"
+            "✓ **GOOD - Direct execution**:\\n"
+            "```\\n"
+            "archivist(task='Search Semantic Scholar for substantia nigra vulnerability papers. "
+            "Create lit_summary.json with ≥10 refs. Run verify_references, ensure ≥80% found.')\\n"
+            "```\\n\\n"
+            "✗ **BAD - Meta-planning**:\\n"
+            "```\\n"
+            "'Assign literature_lead to create module memo at docs/module_summaries/literature.md'\\n"
+            "```\\n\\n"
+            "✓ **GOOD - Concrete paths**:\\n"
+            "```\\n"
+            "modeler(task='Run experiment E1 (bifurcation). Use model_spec at experiment_results/model_spec_v1.json. "
+            "Output to experiment_results/simulations/E1/. Compute metrics, update hypothesis_trace.')\\n"
+            "```\\n\\n"
+            "✗ **BAD - Vague delegation**:\\n"
+            "```\\n"
+            "'Ask modeler to prepare for simulations'\\n"
+            "```\\n\\n"
+            "**Pre-delegation Validation** (optional, NOT blocking):\\n"
+            "- `ensure_module_summary(module='lit')` - Check/create integration memo (auto-creates template if missing)\\n"
+            "- `check_lit_ready()` - Verify literature quality before modeling (advisory only)\\n"
+            "- `check_model_provenance()` - Validate built-in model sources (advisory only)\\n"
+            "**IMPORTANT**: These checks are **advisory**, not blockers. If a check fails, you can still delegate with a note about the gap.\\n\\n"
+            "**Routing Guide**:\\n"
+            "| Need | Call Tool | Expected Output |\\n"
+            "|------|-----------|-----------------|\\n"
+            "| Literature review | `archivist` | lit_summary.json, claim_graph.json |\\n"
+            "| Simulation data | `modeler` | sim.json, metrics.json, .npy arrays |\\n"
+            "| Figures/plots | `analyst` | .png/.svg in manuscript gallery |\\n"
+            "| Theoretical interpretation | `interpreter` | interpretation.json/md |\\n"
+            "| Manuscript review | `reviewer` | review_note, gap report |\\n"
+            "| PDF compilation | `publisher` | manuscript.pdf |\\n"
+            "| Helper scripts | `coder` | .py files in run folder |\\n\\n"
+            "**MANDATORY**: Lookup exact file paths first (inspect_manifest/list_artifacts) and pass EXACT PATH to agents.\\n"
             "Do NOT ask agents to 'find the file'.\\n\\n"
-            "**Pre-delegation checks**:\\n"
-            "- Call 'ensure_module_summary' before delegating to a module\\n"
-            "- Before modeling: run 'check_lit_ready' (≥70% confirmed refs, ≤3 unverified)\\n"
-            "- Before built-in models: ensure 'check_model_provenance' passes\\n\\n"
-            "**Delegation routing**:\\n"
-            "- Missing Lit Review \u2192 Archivist\\n"
-            "- Missing Data \u2192 Modeler\\n"
-            "- Missing Plots \u2192 Analyst\\n"
-            "- Theoretical Interpretation \u2192 Interpreter\\n"
-            "- Draft Exists \u2192 Reviewer\\n"
-            "- Validated & Ready \u2192 Publisher\\n\\n"
             "### 5. ASYNC FEEDBACK\\n"
             "Call 'check_user_inbox' frequently (between tasks) for user steering.\\n\\n"
             "### 6. HANDLE FAILURES\\n"
@@ -871,9 +908,21 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "1) Update plan via 'update_implementation_plan_from_state', AND\\n"
             "2) Call 'log_status_to_user_inbox' with status summary\\n\\n"
             "If you skip these, your work is LOST.\\n\\n"
+            "## ANTI-PATTERNS (AVOID THESE)\\n\\n"
+            "❌ **Creating meta-tasks**:\\n"
+            "- 'Assign modeling_lead to create a memo' → NO. There is no 'modeling_lead' role. Use `modeler` tool.\\n\\n"
+            "❌ **Waiting for preparation**:\\n"
+            "- 'After memos are created, I will delegate E1-E4' → NO. Delegate NOW. Memos auto-create if missing.\\n\\n"
+            "❌ **Abstract delegation**:\\n"
+            "- 'Tell the modeler to prepare' → NO. Call `modeler(task='specific concrete task')`.\\n\\n"
+            "❌ **Inventing roles**:\\n"
+            "- 'Assign literature_lead' → NO. The role is `archivist`. Call the tool.\\n\\n"
+            "✓ **Correct pattern**:\\n"
+            "- Identify task → Prepare inputs → Call agent tool → Monitor output → Update plan\\n\\n"
             "## SUCCESS CRITERIA\\n"
             "\u2713 Implementation plan maintained and up-to-date\\n"
             "\u2713 All delegations include exact file paths\\n"
+            "\u2713 Agent tools called directly (not meta-tasks)\\n"
             "\u2713 Status logged to user_inbox after each phase\\n"
             "\u2713 Artifacts promoted when final\\n"
             "\u2713 Project snapshot generated before termination\\n\\n"
@@ -924,13 +973,80 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             ensure_module_summary,
             check_lit_ready,
             check_model_provenance,
-            archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
-            modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            coder.as_tool(tool_name="coder", tool_description="Write/update helper code in run folder.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            interpreter.as_tool(tool_name="interpreter", tool_description="Generate theoretical interpretation.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            publisher.as_tool(tool_name="publisher", tool_description="Write and compile final publishable manuscript.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
-            reviewer.as_tool(tool_name="reviewer", tool_description="Critique the draft.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
+            archivist.as_tool(
+                tool_name="archivist",
+                tool_description=(
+                    "Execute literature curation workflow. This agent will: search Semantic Scholar, "
+                    "create lit_summary.json with verified references (≥80% found), build claim_graph.json "
+                    "mapping claims to citations, generate bibliographies. Use when you need literature review "
+                    "or reference verification. Specify search terms and expected output artifacts."
+                ),
+                max_turns=role_max_turns
+            ),
+            modeler.as_tool(
+                tool_name="modeler",
+                tool_description=(
+                    "Execute computational modeling workflow. This agent will: create model_spec artifacts, "
+                    "run simulations (bifurcation/stochastic/transport), execute parameter sweeps and intervention tests, "
+                    "compute metrics, update hypothesis_trace.json. Use when you need simulation data. "
+                    "Specify experiment ID (e.g., 'E1'), input paths (model_spec, baseline graphs), and output directory."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
+            analyst.as_tool(
+                tool_name="analyst",
+                tool_description=(
+                    "Execute figure generation workflow. This agent will: read simulation data, validate hypothesis support, "
+                    "generate publication-quality PNG/SVG figures, run statistical analysis, publish to manuscript gallery. "
+                    "Use when you need plots or statistical validation. Specify simulation paths (sim.json locations) "
+                    "and desired figure types."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
+            coder.as_tool(
+                tool_name="coder",
+                tool_description=(
+                    "Execute code generation workflow. This agent will: write/update Python helper scripts, "
+                    "run linting (ruff/pyright), document code, register artifacts in manifest. "
+                    "Use when you need custom analysis scripts or utilities. Specify requirements and file locations "
+                    "(confined to run folder only)."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
+            interpreter.as_tool(
+                tool_name="interpreter",
+                tool_description=(
+                    "Execute theoretical interpretation workflow. This agent will: generate interpretation.json/md "
+                    "with biological insights grounded in experiment data. ONLY use for theoretical biology research type. "
+                    "Specify experiment summaries and expected interpretation format."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
+            publisher.as_tool(
+                tool_name="publisher",
+                tool_description=(
+                    "Execute manuscript compilation workflow. This agent will: integrate lit_summary and figures into LaTeX, "
+                    "compile PDF, debug LaTeX errors autonomously, create release artifacts (code archive, env manifest, "
+                    "repro protocol). Use when you need final PDF. Specify template path and content locations."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
+            reviewer.as_tool(
+                tool_name="reviewer",
+                tool_description=(
+                    "Execute manuscript review workflow. This agent will: audit references (≥80% verified), "
+                    "check claim support via claim_graph, verify parameter sources, check hypothesis_trace consistency, "
+                    "validate proof-of-work coverage, generate provenance_summary.md. Reports 'NO GAPS' only if ALL checks pass. "
+                    "Use when draft exists and needs validation. Specify manuscript path."
+                ),
+                max_turns=role_max_turns,
+                custom_output_extractor=extract_run_output
+            ),
         ],
         model_settings=ModelSettings(tool_choice="required"),
     )
