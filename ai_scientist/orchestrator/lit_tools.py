@@ -16,7 +16,7 @@ class ArtifactHandle(TypedDict):
     note: Optional[str]
 
 @function_tool
-def create_lit_review_artifact(**kwargs: Any) -> Dict[str, Any]:
+def create_lit_review_artifact() -> Dict[str, Any]:
     """
     Create and register the lit_review_md artifact for the current run.
 
@@ -36,7 +36,7 @@ def create_lit_review_artifact(**kwargs: Any) -> Dict[str, Any]:
     return reserve_and_register_artifact(kind="lit_review_md", unique=False, meta_json='{"module": "lit"}')
 
 @function_tool
-def create_lit_bibliography_artifact(**kwargs: Any) -> Dict[str, Any]:
+def create_lit_bibliography_artifact() -> Dict[str, Any]:
     """
     Create and register the lit_bibliography_bib artifact for the current run.
 
@@ -55,7 +55,7 @@ def create_lit_bibliography_artifact(**kwargs: Any) -> Dict[str, Any]:
     return reserve_and_register_artifact(kind="lit_bibliography_bib", unique=False, meta_json='{"module": "lit"}')
 
 @function_tool
-def create_lit_coverage_artifact(**kwargs: Any) -> Dict[str, Any]:
+def create_lit_coverage_artifact() -> Dict[str, Any]:
     """
     Create and register the lit_coverage_json artifact for the current run.
 
@@ -74,7 +74,7 @@ def create_lit_coverage_artifact(**kwargs: Any) -> Dict[str, Any]:
     return reserve_and_register_artifact(kind="lit_coverage_json", unique=False, meta_json='{"module": "lit"}')
 
 @function_tool
-def create_lit_integration_memo_artifact(**kwargs: Any) -> Dict[str, Any]:
+def create_lit_integration_memo_artifact() -> Dict[str, Any]:
     """
     Create and register the integrated memo for the literature module.
 
