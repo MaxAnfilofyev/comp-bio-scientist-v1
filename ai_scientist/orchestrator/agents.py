@@ -124,6 +124,15 @@ from ai_scientist.orchestrator.lit_tools import (
     create_lit_coverage_artifact,
     create_lit_integration_memo_artifact,
 )
+from ai_scientist.orchestrator.tool_wrappers import (
+    check_lit_ready,
+    check_model_provenance,
+)
+
+# TOOL WRITER PERMISSIONS (to prevent cargo-culting instructions across agents):
+# - hypothesis_trace writers: {Modeler, PI} only
+# - run_notes writers (via append_run_note_tool): {Archivist, Modeler} only
+# - all other agents: manage_project_knowledge only for reflections
 
 
 
@@ -400,15 +409,14 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "3b. Use 'list_available_runs_for_plotting' to see what completed runs are available. Resolve sim.json via resolve_sim_path if needed.\n"
             "3c. When a figure is final, call 'publish_figure_to_manuscript_gallery(artifact_id=...)' to mirror it to the manuscript folder. Do NOT manually copy/move files.\n"
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
-            "3e. Update hypothesis_trace.json with figure filenames under the correct hypothesis/experiment after plotting.\n"
-            "3f. Use 'get_metrics_for_plotting' to find pre-computed metrics. Do NOT run compute_model_metrics yourself.\n"
-            "3g. Call 'create_plot_artifact' for any new figure (plot_intermediate/manuscript_figure_png/svg). Do not call reserve_typed_artifact directly for plots.\n"
+            "3e. Use 'get_metrics_for_plotting' to find pre-computed metrics. Do NOT run compute_model_metrics yourself.\n"
+            "3f. Call 'create_plot_artifact' for any new figure (plot_intermediate/manuscript_figure_png/svg). Do not call reserve_typed_artifact directly for plots.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
             "5. When calling 'create_plot_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
             "7. When plots are ready, confirm provenance_summary.md exists or ask Reviewer to generate it.\n"
             f"7. {proof_of_work_instruction}\n"
-            "8. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            "8. Log reflections via manage_project_knowledge; never to manifest.\n"
             f"9. {reflection_instruction}"
         ),
         tools=[
@@ -460,7 +468,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "6. If you create or materially analyze artifacts, log them via 'create_review_note_artifact' usage, not manifest lists.\n"
             "7. VERIFY PROOF OF WORK: Run 'check_proof_of_work_for_results' to audit verification note coverage. Reject results if coverage is poor.\n"
             "8. Use 'create_review_note_artifact' to create 'verification_note' or 'review_report'. Do NOT use 'reserve_typed_artifact' directly.\n"
-            "9. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            "9. Log reflections via manage_project_knowledge; never to manifest.\n"
             f"10. {reflection_instruction}"
         ),
         tools=[
@@ -497,7 +505,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "3. If interpretation fails, report the error clearly.\n"
             "4. Reserve interpretation outputs via 'reserve_typed_artifact' (interpretation_json or interpretation_md) and use the reserved path with 'write_text_artifact'.\n"
             "5. Before calling 'append_manifest', ask if the artifact adds new value (new interpretation or substantial edit). Log only when yes, with name + kind + created_by + status.\n"
-            "6. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            "6. Log reflections via manage_project_knowledge; never to manifest.\n"
             f"7. {reflection_instruction}"
         ),
         tools=[
@@ -539,7 +547,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
             "5. Log code patterns or library constraints to Project Knowledge.\n"
             "6. Reserve any persisted helper outputs via 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
-            "7. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            "7. Log reflections via manage_project_knowledge; never to manifest.\n"
             f"8. {reflection_instruction}"
         ),
         tools=[
@@ -575,7 +583,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "2. Integrate 'lit_summary.json' and figures into the text.\n"
             "3. Reserve outputs (figures README, manuscript PDF) via 'reserve_typed_artifact' before writing; do not invent filenames.\n"
             "4. Ensure compile success. Debug LaTeX errors autonomously.\n"
-            "5. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            "5. Log reflections via manage_project_knowledge; never to manifest.\n"
             f"6. {reflection_instruction}"
         ),
         tools=[
@@ -684,6 +692,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             check_user_inbox,
             append_run_note_tool,
             ensure_module_summary,
+            check_lit_ready,
+            check_model_provenance,
             archivist.as_tool(tool_name="archivist", tool_description="Search literature.", max_turns=role_max_turns),
             modeler.as_tool(tool_name="modeler", tool_description="Run simulations.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
             analyst.as_tool(tool_name="analyst", tool_description="Create figures.", max_turns=role_max_turns, custom_output_extractor=extract_run_output),
