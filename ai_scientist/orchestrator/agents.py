@@ -1,6 +1,9 @@
 # pyright: reportMissingImports=false
 import os
+from pathlib import Path
 from typing import Any, Dict, List
+
+from ai_scientist.orchestrator.pi_planning_helpers import load_implementation_plan_state
 
 try:
     from agents.types import RunResult
@@ -786,11 +789,32 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
         settings=common_settings,
     )
 
-    pi = Agent(  # type: ignore
+    # Load implementation plan state to provide context
+    try:
+        plan_state = load_implementation_plan_state(Path(dirs['base']))
+        if plan_state:
+            open_tasks = [t for t in plan_state.tasks if t.status not in ("completed", "abandoned")]
+            open_tasks_str = "\n".join([f"   - {t.task_id}: {t.description} (Assigned: {t.assigned_to})" for t in open_tasks])
+            if not open_tasks_str:
+                open_tasks_str = "   (No open tasks)"
+            
+            plan_context = (
+                f"CURRENT IMPLEMENTATION PLAN STATE (as of {plan_state.last_updated}):\n"
+                f"   Phase: {plan_state.current_phase}\n"
+                f"   Hypothesis: {plan_state.hypothesis}\n"
+                f"   Open Tasks:\n{open_tasks_str}\n"
+            )
+        else:
+            plan_context = "CURRENT IMPLEMENTATION PLAN STATE: No existing implementation plan found."
+    except Exception as e:
+        plan_context = f"CURRENT IMPLEMENTATION PLAN STATE: Could not load state ({str(e)})."
+    
+    pi = Agent(
         name="Principal Investigator",
         instructions=(
             f"You are an expert Principal Investigator for project: {title}.\\n"
-            f"Hypothesis: {hypothesis}\\n\\n"
+            f"Hypothesis: {hypothesis}\\n"
+            f"{plan_context}\\n"
             f"TL;DR: Check state \u2192 Plan \u2192 **EXECUTE by calling agent tools** \u2192 Monitor progress \u2192 Promote artifacts \u2192 Generate snapshot\\n"
             f"**CRITICAL**: Your job is to EXECUTE the plan by calling agent tools (archivist, modeler, analyst, etc.), NOT to create meta-tasks or wait for abstract 'leads'.\\n\\n"
             f"{_get_path_context('Principal Investigator', dirs)}\\n"
