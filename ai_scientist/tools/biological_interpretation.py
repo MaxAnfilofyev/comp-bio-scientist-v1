@@ -12,7 +12,7 @@ from ai_scientist.llm import (
     create_client,
 )
 from ai_scientist.treesearch.utils.config import load_cfg, Config
-from ai_scientist.perform_icbinb_writeup import (
+from ai_scientist.utils.experiment_utils import (
     load_idea_text,
     load_exp_summaries,
     filter_experiment_summaries,
