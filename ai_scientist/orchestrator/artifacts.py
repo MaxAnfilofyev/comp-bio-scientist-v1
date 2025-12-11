@@ -60,6 +60,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "lit_coverage.json",
         "description": "Coverage metrics and top candidates for the literature verification process.",
     },
+    "lit_recommendations": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_recommendations.json",
+        "description": "Recommended papers from Semantic Scholar.",
+    },
     "graph_pickle": {
         "rel_dir": "experiment_results/graphs",
         "pattern": "{graph_id}.gpickle",

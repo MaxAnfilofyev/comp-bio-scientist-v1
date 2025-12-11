@@ -41,6 +41,11 @@ class LitDataAssemblyTool(BaseTool):
                 "type": "bool",
                 "description": "Whether to hit Semantic Scholar (default True).",
             },
+            {
+                "name": "excluded_ids",
+                "type": "list[str]",
+                "description": "Optional list of paper IDs, DOIs, or titles to exclude from the results.",
+            },
         ]
         super().__init__(name, description, parameters)
 
@@ -54,16 +59,23 @@ class LitDataAssemblyTool(BaseTool):
         out_dir = self._resolve_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path, quarantined_csv, _ = resolve_output_path(
-            subdir=None, name="lit_summary.csv", run_root=out_dir, allow_quarantine=True, unique=True
+            subdir=None, name="lit_summary.csv", run_root=out_dir, allow_quarantine=True, unique=False
         )
         json_path, quarantined_json, _ = resolve_output_path(
-            subdir=None, name="lit_summary.json", run_root=out_dir, allow_quarantine=True, unique=True
+            subdir=None, name="lit_summary.json", run_root=out_dir, allow_quarantine=True, unique=False
         )
+        
+        # Sidecar history file (not an artifact per se, but internal state)
+        history_path = out_dir / "lit_search_history.json"
+        
+        # Persistent exclusion list
+        exclusion_file_path = out_dir / "lit_exclusions.json"
 
-        queries: List[str] | None = kwargs.get("queries")
-        seed_paths: List[str] | None = kwargs.get("seed_paths")
+        queries: Optional[List[str]] = kwargs.get("queries")
+        seed_paths: Optional[List[str]] = kwargs.get("seed_paths")
         max_results = int(kwargs.get("max_results", 25))
         use_semantic_scholar = bool(kwargs.get("use_semantic_scholar", False))
+        excluded_ids: Optional[List[str]] = kwargs.get("excluded_ids")
 
         result = assemble_lit_data(
             output_csv=str(csv_path),
@@ -72,6 +84,9 @@ class LitDataAssemblyTool(BaseTool):
             local_seed_paths=seed_paths,
             max_results=max_results,
             use_semantic_scholar=use_semantic_scholar,
+            search_history_path=str(history_path),
+            excluded_ids=excluded_ids,
+            exclusion_file_path=str(exclusion_file_path),
         )
         if quarantined_csv or quarantined_json:
             result["quarantined"] = True

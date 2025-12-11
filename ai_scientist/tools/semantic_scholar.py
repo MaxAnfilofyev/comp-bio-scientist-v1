@@ -2,7 +2,7 @@ import os
 import requests
 import time
 import warnings
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import backoff
 
@@ -42,7 +42,10 @@ class SemanticScholarSearchTool(BaseTool):
                 "Set the S2_API_KEY environment variable for higher limits."
             )
 
-    def use_tool(self, query: str) -> Optional[str]:
+    def use_tool(self, **kwargs: Any) -> Optional[str]:
+        query = kwargs.get("query")
+        if not query:
+            return "Error: Query not provided."
         papers = self.search_for_papers(query)
         if papers:
             return self.format_papers(papers)
@@ -138,3 +141,75 @@ def search_for_papers(query, result_limit=10) -> Union[None, List[Dict]]:
 
     papers = results["data"]
     return papers
+
+
+class SemanticScholarRecommendationsTool(BaseTool):
+    def __init__(
+        self,
+        name: str = "GetPaperRecommendations",
+        description: str = (
+            "Get recommended papers based on a list of positive paper IDs (S2 PaperIds). "
+            "Useful for discovering relevant literature similar to what you have found."
+        ),
+        max_results: int = 10,
+    ):
+        parameters = [
+            {
+                "name": "positive_paper_ids",
+                "type": "list[str]",
+                "description": "List of Semantic Scholar Paper IDs to use as positive examples.",
+            },
+            {
+                "name": "negative_paper_ids",
+                "type": "list[str]",
+                "description": "Optional list of Semantic Scholar Paper IDs to use as negative examples.",
+            },
+        ]
+        super().__init__(name, description, parameters)
+        self.max_results = max_results
+        self.S2_API_KEY = os.getenv("S2_API_KEY")
+
+    def use_tool(self, **kwargs: Any) -> List[Dict]:
+        positive_paper_ids = kwargs.get("positive_paper_ids", [])
+        negative_paper_ids = kwargs.get("negative_paper_ids")
+        return get_recommendations(positive_paper_ids, negative_paper_ids, limit=self.max_results, api_key=self.S2_API_KEY)
+
+
+@backoff.on_exception(
+    backoff.expo, requests.exceptions.HTTPError, on_backoff=on_backoff
+)
+def get_recommendations(
+    positive_paper_ids: List[str],
+    negative_paper_ids: Optional[List[str]] = None,
+    limit: int = 10,
+    api_key: Optional[str] = None,
+) -> List[Dict]:
+    if not positive_paper_ids:
+        return []
+
+    headers = {}
+    if api_key:
+        headers["X-API-KEY"] = api_key
+    
+    payload = {
+        "positivePaperIds": positive_paper_ids,
+        "negativePaperIds": negative_paper_ids or [],
+    }
+
+    url = "https://api.semanticscholar.org/recommendations/v1/papers/"
+    # For getting specific fields back (optional, but good for consistency)
+    params = {
+        "limit": limit,
+        "fields": "title,authors,venue,year,abstract,citationCount,externalIds"
+    }
+
+    rsp = requests.post(url, headers=headers, json=payload, params=params)
+    
+    if rsp.status_code == 404:
+        # One or more paper IDs not found
+        print("[warn] Recommendations 404: One or more input IDs not found in S2 graph.")
+        return []
+
+    rsp.raise_for_status()
+    results = rsp.json()
+    return results.get("recommendedPapers", [])

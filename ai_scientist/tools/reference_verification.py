@@ -262,8 +262,31 @@ class ReferenceVerificationTool(BaseTool):
         search_tool = SemanticScholarSearchTool(max_results=max_results)
 
         rows: List[Dict[str, Any]] = []
+        n_total_recs = len(records)
+        print(f"Verifying {n_total_recs} references...")
+        
         for idx, record in enumerate(records):
-            rows.append(self._verify_record(record, idx, search_tool, score_threshold))
+            # Optimization: If we just fetched it from S2, don't re-verify it against S2
+            if record.get("source") == "semantic_scholar":
+                ref_id, title, authors, year, doi = self._extract_fields(record, idx)
+                rows.append({
+                    "ref_id": ref_id,
+                    "title": title,
+                    "authors": record.get("authors"),
+                    "year": year,
+                    "doi": doi,
+                    "found": True,
+                    "match_score": 1.0,
+                    "notes": "Sourced directly from Semantic Scholar.",
+                })
+            else:
+                rows.append(self._verify_record(record, idx, search_tool, score_threshold))
+            
+            # Incremental save every 5 records
+            if (idx + 1) % 5 == 0:
+                with json_path.open("w") as f:
+                    json.dump(rows, f, indent=2)
+                print(f"Verified {idx + 1}/{n_total_recs}...")
 
         with json_path.open("w") as f:
             json.dump(rows, f, indent=2)

@@ -19,7 +19,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
   - Prompts now link to `docs/artifact_metadata_requirements.md` and every role/PI prompt embeds the per-role context spec plus a summary-first reminder (via `ensure_module_summary`/`summarize_artifact`) so work stays aligned with the new system design principles.
    - Agent tool highlights:
-     - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`, `create_lit_review_artifact`, `create_lit_bibliography_artifact`.
+     - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `get_lit_recommendations`, `UpdateClaimGraph`, `create_lit_review_artifact`, `create_lit_bibliography_artifact`.
      - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`, `create_verification_note_artifact`.
      - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
      - Interpreter: `interpret_biology` (theoretical runs), `create_interpretation_json_artifact`, `create_interpretation_md_artifact`.
@@ -66,8 +66,10 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 
 - **SearchSemanticScholar** (`ai_scientist/tools/semantic_scholar.py`)
   - Params: `query` (str), uses `S2_API_KEY` if set for higher limits.
+- **get_lit_recommendations** (`ai_scientist/tools/semantic_scholar.py`)
+  - Params: `positive_paper_ids` (list[str]), `negative_paper_ids` (optional list[str]). Returns recommended papers based on S2 citation graph. Access via Archivist.
 - **AssembleLitData** (`ai_scientist/tools/lit_data_assembly.py`)
-  - Params: `output_dir` (str, default `experiment_results`), `queries` (list[str]), `seed_paths` (list[str]), `max_results` (int), `use_semantic_scholar` (bool). Uses `perform_lit_data_assembly.py`.
+  - Params: `output_dir` (str, default `experiment_results`), `queries` (list[str]), `seed_paths` (list[str]), `max_results` (int), `use_semantic_scholar` (bool), `excluded_ids` (list[str]), `exclusion_file_path` (str, defaults to `lit_exclusions.json`). Uses `perform_lit_data_assembly.py`. Supports query caching (`lit_search_history.json`).
 - **ValidateLitSummary** (`ai_scientist/tools/lit_validator.py`)
   - Params: `path` to lit_summary CSV/JSON; reports coverage of required fields.
 - **BuildGraphs** (`ai_scientist/tools/graph_builder.py`)

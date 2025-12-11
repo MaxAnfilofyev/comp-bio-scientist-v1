@@ -135,36 +135,171 @@ def assemble_lit_data(
     local_seed_paths: Optional[Iterable[str]] = None,
     max_results: int = 25,
     use_semantic_scholar: bool = False,
+    search_history_path: Optional[str] = None,
+    excluded_ids: Optional[Iterable[str]] = None,
+    exclusion_file_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Assemble literature data into normalized CSV/JSON artifacts.
 
     Returns a dict with paths and record counts.
     """
+    output_csv_path = Path(output_csv)
+    output_json_path = Path(output_json)
     records: List[Dict[str, Any]] = []
+    
+    # Normalize exclude list
+    excluded_set = set()
+    if excluded_ids:
+        for ex in excluded_ids:
+            if ex:
+                excluded_set.add(ex.lower().strip())
+
+    # Load from exclusion file if provided
+    if exclusion_file_path:
+        ex_path = Path(exclusion_file_path)
+        if ex_path.exists():
+            try:
+                with ex_path.open() as f:
+                    file_excludes = json.load(f)
+                    if isinstance(file_excludes, list):
+                        for ex in file_excludes:
+                             if ex:
+                                excluded_set.add(str(ex).lower().strip())
+                    elif isinstance(file_excludes, dict) and "excluded_ids" in file_excludes:
+                         # Handle {"excluded_ids": [...]} format too
+                         for ex in file_excludes["excluded_ids"]:
+                             if ex:
+                                excluded_set.add(str(ex).lower().strip())
+            except Exception as e:
+                print(f"[warn] Failed to load exclusion file {ex_path}: {e}")
+    
+    def _is_excluded(r: Dict[str, Any]) -> bool:
+        if not excluded_set:
+            return False
+        # Check standard fields
+        identifiers = [
+            r.get("paperId"),
+            r.get("corpusId"),
+            r.get("doi"),
+            r.get("url"),
+            r.get("title")
+        ]
+        # Also check externalIds dict if present
+        ext = r.get("externalIds") or {}
+        if isinstance(ext, dict):
+             identifiers.extend(ext.values())
+
+        for ident in identifiers:
+            if ident and str(ident).lower().strip() in excluded_set:
+                return True
+        return False
+
+    # Load existing output if it exists (for incremental restart)
+    out_json_path = Path(output_json)
+
+    if out_json_path.exists():
+        try:
+            with out_json_path.open() as f:
+                existing = json.load(f)
+                if isinstance(existing, list):
+                    # Filter existing records against exclusion list
+                    filtered_existing = [r for r in existing if not _is_excluded(r)]
+                    records.extend(filtered_existing)
+        except Exception as e:
+            print(f"[warn] Could not load existing lit_summary: {e}")
 
     # Load local seeds
     for path_str in local_seed_paths or []:
-        records.extend(_load_seed_file(Path(path_str)))
+        seeds = _load_seed_file(Path(path_str))
+        filtered_seeds = [r for r in seeds if not _is_excluded(r)]
+        records.extend(filtered_seeds)
 
     # Fetch from Semantic Scholar
     if use_semantic_scholar and queries:
-        records.extend(_fetch_semantic_scholar(queries, max_results=max_results))
+        queries_list = list(queries)
+        
+        # Filter queries using history
+        completed_queries = set()
+        history_file = Path(search_history_path) if search_history_path else None
+        
+        if history_file and history_file.exists():
+            try:
+                with history_file.open() as f:
+                    hdata = json.load(f)
+                    completed_queries = set(hdata.get("completed_queries", []))
+            except Exception as e:
+                print(f"[warn] Failed to load search history: {e}")
 
-    # Deduplicate by (title, doi, url) tuple when available
-    deduped: Dict[tuple, Dict[str, Any]] = {}
-    for r in records:
-        key = (
-            r.get("title") or "",
-            r.get("doi") or "",
-            r.get("url") or "",
-        )
-        deduped[key] = r
+        queries_to_run = [q for q in queries_list if q not in completed_queries]
+        if len(queries_to_run) < len(queries_list):
+            print(f"Skipping {len(queries_list) - len(queries_to_run)} already completed queries.")
+            
+        # Save progress incrementally
+        total_queries = len(queries_to_run)
+        if total_queries > 0:
+            print(f"Starting S2 search for {total_queries} new queries...")
+            
+            # We need to maintain the deduped list as we go
+            # Deduplicate by (title, doi, url) tuple
+            deduped: Dict[tuple, Dict[str, Any]] = {}
+            
+            def _get_key(r):
+                return (
+                    r.get("title") or "",
+                    r.get("doi") or "",
+                    r.get("url") or "",
+                )
 
-    final_records = list(deduped.values())
-    output_csv_path = Path(output_csv)
-    output_json_path = Path(output_json)
-    _write_outputs(final_records, output_csv_path, output_json_path)
+            for r in records:
+                deduped[_get_key(r)] = r
+
+            for i, q in enumerate(queries_to_run):
+                new_records = _fetch_semantic_scholar([q], max_results=max_results)
+                
+                # Filter new records
+                filtered_new = []
+                for r in new_records:
+                    if not _is_excluded(r):
+                        filtered_new.append(r)
+                
+                for r in filtered_new:
+                    r["source"] = "semantic_scholar"
+                    deduped[_get_key(r)] = r
+                
+                # Update history
+                completed_queries.add(q)
+                if history_file:
+                    try:
+                        with history_file.open("w") as f:
+                            json.dump({"completed_queries": list(completed_queries)}, f, indent=2)
+                    except Exception as e:
+                        print(f"[warn] Failed to save search history: {e}")
+                
+                # Incremental save
+                current_records = list(deduped.values())
+                _write_outputs(current_records, output_csv_path, output_json_path)
+                print(f"Query {i+1}/{total_queries} processed. Saved {len(current_records)} records.")
+
+            records = list(deduped.values())
+        else:
+            print("All queries already completed.")
+
+    else:
+        # Just dedupe local records
+        deduped: Dict[tuple, Dict[str, Any]] = {}
+        for r in records:
+            key = (
+                r.get("title") or "",
+                r.get("doi") or "",
+                r.get("url") or "",
+            )
+            deduped[key] = r
+        records = list(deduped.values())
+        _write_outputs(records, output_csv_path, output_json_path)
+
+    final_records = records
+
 
     return {
         "n_records": len(final_records),

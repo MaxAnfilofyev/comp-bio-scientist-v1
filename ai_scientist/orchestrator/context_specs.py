@@ -68,6 +68,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "lit_reference_verification_json",
             "claim_graph_main",
             "manuscript_input_text",
+            "lit_recommendations",
         ],
         write_scope=[
             "lit_summary_main",
@@ -79,6 +80,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "lit_bibliography_bib",
             "lit_coverage_json",
             "integration_memo_md",
+            "lit_recommendations",
         ],
         max_artifacts=6,
         summary_preferred=True,

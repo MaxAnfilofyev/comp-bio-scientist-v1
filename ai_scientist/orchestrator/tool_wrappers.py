@@ -791,8 +791,12 @@ def assemble_lit_data(
     use_semantic_scholar: bool = True,
     run_verification: bool = True,
     verification_max_results: int = 5,
+    excluded_ids: Optional[List[str]] = None,
 ):
-    """Searches for literature and creates a lit_summary."""
+    """
+    Assemble lit data, deduplicate, and optionally verify with Semantic Scholar.
+    If 'excluded_ids' is provided, skips any papers matching those IDs/DOIs/titles (case-insensitive).
+    """
     if not queries and not seed_paths:
         return "Error: You provided no 'queries' or 'seed_paths'. Please provide specific keywords or paper IDs."
         
@@ -801,6 +805,7 @@ def assemble_lit_data(
         seed_paths=seed_paths,
         max_results=max_results,
         use_semantic_scholar=use_semantic_scholar,
+        excluded_ids=excluded_ids,
     )
     if run_verification:
         try:
@@ -1354,6 +1359,85 @@ def run_writeup_task(
 def search_semantic_scholar(query: str):
     """Directly search Semantic Scholar for papers."""
     return SemanticScholarSearchTool().use_tool(query=query)
+
+
+@function_tool
+def get_lit_recommendations(
+    positive_paper_ids: Optional[List[str]] = None,
+    limit: int = 20,
+):
+    """
+    Get recommended papers using the Semantic Scholar Recommendations API.
+    If positive_paper_ids is None, pulls up to 20 IDs from the current lit_summary.json.
+    """
+    from ai_scientist.tools.semantic_scholar import SemanticScholarRecommendationsTool
+    
+    if not positive_paper_ids:
+        # Auto-discover from lit_summary
+        try:
+            lit_path = resolve_lit_summary_path(None)
+            with lit_path.open() as f:
+                data = json.load(f)
+            
+            # Extract up to 20 valid paper IDs (corpusId or sha)
+            # Prefer 'paperId' (sha) or 'corpusId'
+            ids = []
+            for r in data:
+                # Need an S2 ID. S2AG API uses 'paperId' (sha) or 'CorpusId:<int>'
+                # lit_summary often normalizes fields. 'paperId' is standard.
+                pid = r.get("paperId")
+                if pid:
+                    ids.append(pid)
+                else:
+                    # Fallback if we have corpusId
+                    cid = r.get("corpusId")
+                    if cid:
+                        ids.append(f"CorpusId:{cid}")
+            
+            # Filter duplicates and limit
+            positive_paper_ids = list(set(ids))[:20]
+        except Exception as e:
+            return f"Error reading lit_summary for seed IDs: {e}"
+
+    if not positive_paper_ids:
+        return "No positive paper IDs found (provided or in lit_summary) to generate recommendations."
+
+    res = SemanticScholarRecommendationsTool(max_results=limit).use_tool(positive_paper_ids=positive_paper_ids)
+    
+    # Use proper artifact registration
+    from ai_scientist.orchestrator.artifacts import reserve_and_register_artifact
+    
+    meta = {
+        "module": "literature",
+        "summary": f"S2 recommendations based on {len(positive_paper_ids)} seed papers.",
+        "content": {"count": len(res), "seeds": positive_paper_ids},
+        "metadata": {
+            "created_by": "archivist",
+            "source_tool": "get_lit_recommendations"
+        }
+    }
+    
+    reg = reserve_and_register_artifact(
+        kind="lit_recommendations",
+        meta_json=json.dumps(meta),
+        status="done",
+        unique=False # Reuse the same file if possible, or version it? "unique=False" means overwrite if name matches pattern without unique placeholders?
+        # Actually pattern is "lit_recommendations.json" which is static. unique=True would fail or force quarantine.
+        # But reserve_and_register_artifact handles versioning if unique=True is not helping?
+        # artifacts.py: _reserve_typed_artifact_impl calls resolve_output_path(unique=unique).
+        # Since pattern is static "lit_recommendations.json", we probably want to overwrite it (unique=False) or it will conflict.
+        # Ideally we want a single recommendations list we update. Let's stick to unique=False (overwrite).
+    )
+    
+    if reg.get("error"):
+         return f"Failed to register artifact: {reg['error']}"
+
+    out_path = Path(reg["reserved_path"])
+    with out_path.open("w") as f:
+        json.dump(res, f, indent=2)
+
+    return f"Found {len(res)} recommendations. Saved to {out_path.name}. Top 3: {[r.get('title') for r in res[:3]]}"
+
 
 @function_tool
 def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):

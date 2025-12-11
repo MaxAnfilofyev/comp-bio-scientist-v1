@@ -91,6 +91,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     list_lit_summaries,
     list_claim_graphs,
     read_archivist_artifact,
+    get_lit_recommendations,
     create_transport_artifact,
     create_sensitivity_table_artifact,
     create_intervention_table_artifact,
@@ -365,7 +366,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"{_get_path_context('Archivist', dirs)}\n{_get_file_io_policy('Archivist')}\n{_get_metadata_reminder('Archivist')}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n\n"
             "## CORE WORKFLOW\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers\n"
-            "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence\n"
+            "2. Use 'get_lit_recommendations' to discover highly relevant papers based on findings\n"
+            "3. Maintain a claim graph via 'update_claim_graph' when mapping evidence\n"
             "3. Use specialized artifact creators (do NOT use generic reserve calls):\n"
             "   - 'create_lit_summary_artifact(module=\"lit\")'\n"
             "   - 'create_claim_graph_artifact(module=\"lit\")'\n"
@@ -406,6 +408,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             list_lit_summaries,
             list_claim_graphs,
             read_archivist_artifact,
+            get_lit_recommendations,
         ],
         model=model,
         settings=common_settings,
