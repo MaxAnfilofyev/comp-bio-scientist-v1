@@ -97,8 +97,8 @@ class TestPIPlanningHelpers(unittest.TestCase):
                     description="First experiment",
                     owner_role="Modeler",
                     status="planned",
-                    inputs="None",
-                    outputs="sim_results.json",
+                    inputs=[],  # type: ignore
+                    outputs=["sim_results.json"],
                     notes="Initial test"
                 )
             ],
@@ -109,7 +109,7 @@ class TestPIPlanningHelpers(unittest.TestCase):
                     description="Run baseline simulation",
                     assigned_to="Modeler",
                     status="pending",
-                    linked_artifacts="",
+                    linked_artifacts=[],
                     last_updated="2025-12-10"
                 )
             ],
@@ -252,7 +252,7 @@ class TestPIPlanningHelpers(unittest.TestCase):
             current_phase="planning",
             last_updated="2025-12-10T10:00:00Z",
             experiments=[
-                ExperimentPlan("E1", "Exp 1", "Archivist", "planned", "", "", "")
+                ExperimentPlan("E1", "Exp 1", "Archivist", "planned", [], [], "")
             ],
             tasks=[],
             decisions=["2025-12-10: Plan created"]
@@ -270,11 +270,11 @@ class TestPIPlanningHelpers(unittest.TestCase):
             current_phase="modeling",
             last_updated="2025-12-10T14:00:00Z",
             experiments=[
-                ExperimentPlan("E1", "Exp 1", "Archivist", "complete", "", "", ""),
-                ExperimentPlan("E2", "Exp 2", "Modeler", "in_progress", "", "", "")
+                ExperimentPlan("E1", "Exp 1", "Archivist", "complete", [], [], ""),
+                ExperimentPlan("E2", "Exp 2", "Modeler", "in_progress", [], [], "")
             ],
             tasks=[
-                TaskPlan("T1", "E2", "Run sims", "Modeler", "in_progress", "", "2025-12-10")
+                TaskPlan("T1", "E2", "Run sims", "Modeler", "in_progress", [], "2025-12-10")
             ],
             decisions=[
                 "2025-12-10: Plan created",

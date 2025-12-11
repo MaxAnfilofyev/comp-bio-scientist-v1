@@ -38,9 +38,9 @@ def test_versioning_flow(temp_workspace):
         change_summary="Initial draft"
     )
     assert not res1.get("error"), f"Res1 error: {res1.get('error')}"
-    assert res1["metadata"]["version"] == "v1"
+    assert res1["metadata"]["version"] == "v1"  # type: ignore[index]
     # Ensure nested metadata contains change_summary
-    assert res1["metadata"]["metadata"]["change_summary"] == "Initial draft"
+    assert res1["metadata"]["metadata"]["change_summary"] == "Initial draft"  # type: ignore[index]
     
     # Simulate file creation so unique=True works for next call
     try:
@@ -63,9 +63,9 @@ def test_versioning_flow(temp_workspace):
         change_summary="Updated content"
     )
     assert not res2.get("error")
-    assert res2["metadata"]["version"] == "v2"
-    assert res2["metadata"]["parent_version"] == "v1"
-    assert res2["metadata"]["metadata"]["change_summary"] == "Updated content"
+    assert res2["metadata"]["version"] == "v2"  # type: ignore[index]
+    assert res2["metadata"]["parent_version"] == "v1"  # type: ignore[index]
+    assert res2["metadata"]["metadata"]["change_summary"] == "Updated content"  # type: ignore[index]
     
     # Verify manifest entry 2
     entries = load_entries(base_folder=exp_dir)
@@ -110,4 +110,4 @@ def test_manual_version_override(temp_workspace):
         kind="lit_summary_main",
         meta_json=json.dumps({"version": "v10", "content": {}, "module": "lit"}),
     )
-    assert res["metadata"]["version"] == "v10"
+    assert res["metadata"]["version"] == "v10"  # type: ignore[index]
