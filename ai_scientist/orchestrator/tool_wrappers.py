@@ -23,6 +23,7 @@ except ImportError:
                 self.status = status
 
 import asyncio
+import threading
 
 from agents import Agent, function_tool as _function_tool, FunctionTool
 
@@ -128,11 +129,27 @@ def _function_tool_sync_call(self, *args: Any, **kwargs: Any) -> Any:
             "FunctionTool __call__ only supports keyword arguments when invoked directly."
         )
     payload = json.dumps(kwargs or {})
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(self.on_invoke_tool(None, payload))
-    finally:
-        loop.close()
+    result: dict[str, Any] = {}
+
+    def _thread_target():
+        worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(worker_loop)
+        try:
+            coro = self.on_invoke_tool(None, payload)
+            result["value"] = worker_loop.run_until_complete(coro)
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            worker_loop.close()
+
+    thread = threading.Thread(target=_thread_target)
+    thread.start()
+    thread.join()
+
+    if "error" in result:
+        raise result["error"]
+
+    return result.get("value")
 
 
 FunctionTool.__call__ = _function_tool_sync_call
