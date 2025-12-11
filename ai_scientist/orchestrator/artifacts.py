@@ -200,6 +200,21 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "reproduction_protocol.md",
         "description": "Supplementary reproduction protocol for a release.",
     },
+    "verification_note": {
+        "rel_dir": "experiment_results/verification",
+        "pattern": "{experiment_id}_verification.md",
+        "description": "Verification note or proof-of-work for an experiment.",
+    },
+    "model_metrics_json": {
+        "rel_dir": "experiment_results/metrics",
+        "pattern": "{model_key}_metrics.json",
+        "description": "Computed metrics for a model (JSON).",
+    },
+    "model_metrics_csv": {
+        "rel_dir": "experiment_results/metrics",
+        "pattern": "{model_key}_metrics.csv",
+        "description": "Computed metrics for a model (CSV).",
+    },
 }
 
 

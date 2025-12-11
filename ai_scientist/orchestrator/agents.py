@@ -94,6 +94,18 @@ from ai_scientist.orchestrator.tool_wrappers import (
     list_lit_summaries,
     list_claim_graphs,
     read_archivist_artifact,
+    create_transport_artifact,
+    create_sensitivity_table_artifact,
+    create_intervention_table_artifact,
+    create_verification_note_artifact,
+    list_model_specs,
+    get_latest_model_spec,
+    list_experiment_results,
+    get_latest_metrics,
+    read_model_spec,
+    create_model_spec_artifact,
+    read_experiment_config,
+    read_metrics,
 )
 
 
@@ -302,37 +314,35 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
             "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
             "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
-            "3b. Before first sim of a given model_key, generate model_spec_yaml and parameter_source_table (one row per parameter with source_type and lit/claim links). Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
+            "3b. Before first sim of a given model_key, call 'create_model_spec_artifact' to register the model specification. Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
             "3c. Update hypothesis_trace.json after each sim/ensemble: record hypothesis_id/experiment_id, sim run identifiers, and metrics produced.\n"
-            "3d. After sweeps or transport batches, call 'compute_model_metrics' to emit *_metrics.csv and/or {model_key}_metrics.json; rerun if metrics are missing when figures/text depend on them.\n"
+            "3d. After sweeps or transport batches, call 'compute_model_metrics' to emit metrics. You can use 'get_latest_metrics' to verify they exist; rerun if metrics are missing when figures/text depend on them.\n"
             "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
             "5. Save raw outputs to experiment_results/.\n"
-            "5b. Reserve every persistent artifact via 'reserve_typed_artifact' (transport_* kinds for sims, sensitivity_sweep_table/intervention_table for sweeps, verification_note for proof-of-work); do NOT invent filenames or call reserve_output for data assets.\n"
+            "5b. Use specialized helpers ('create_transport_artifact', 'create_sensitivity_table_artifact', 'create_intervention_table_artifact', 'create_verification_note_artifact') to reserve artifacts. Do NOT use generic reserve tools.\n"
             "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete. Every run must also emit per_compartment.npz + node_index_map.json + topology_summary.json (binary_states, continuous_states/time); validate with validate_per_compartment_outputs before marking status=complete.\n"
             "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
             "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
             "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
-            "8. When calling 'append_manifest' or 'reserve_and_register_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
-            "9. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
-            f"10. {proof_of_work_instruction}\n"
-            "11. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
-            f"12. {reflection_instruction}"
+            "8. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
+            f"9. {proof_of_work_instruction}\n"
+            "10. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"11. {reflection_instruction}"
         ),
         tools=[
-            get_run_paths,
-            resolve_path,
-            get_artifact_index,
-            list_artifacts,
-            list_artifacts_by_kind,
+            list_model_specs,
+            get_latest_model_spec,
+            list_experiment_results,
+            get_latest_metrics,
+            create_transport_artifact,
+            create_sensitivity_table_artifact,
+            create_intervention_table_artifact,
+            create_verification_note_artifact,
+            create_model_spec_artifact,
+            read_model_spec,
+            read_experiment_config,
+            read_metrics,
             read_artifact,
-            summarize_artifact,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            read_manifest_entry,
-            check_manifest,
-            check_manifest_unique_paths,
             build_graphs,
             run_biological_model,
             run_comp_sim,
@@ -346,7 +356,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             update_transport_manifest,
             update_hypothesis_trace,
             compute_model_metrics,
-            mirror_artifacts,
             read_npy_artifact,
             validate_per_compartment_outputs,
             manage_project_knowledge,
@@ -357,7 +366,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
     )
 
     analyst = _make_agent(
-        name="Analyst",
+        name="Scientific Visualization Expert",
         instructions=(
             "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n"
@@ -472,9 +481,9 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
     )
 
     interpreter = _make_agent(
-        name="Interpreter",
+        name="Theoretical Biological Interpreter",
         instructions=(
-            "You are an expert Mathematical-Biological Interpreter.\n"
+            "You are an expert Theoretical Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n"
             f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Interpreter')}\n{_summary_advisory('Interpreter')}\n"
             "Directives:\n"

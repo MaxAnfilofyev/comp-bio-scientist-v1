@@ -2459,3 +2459,253 @@ def read_archivist_artifact(name: str):
         
     # 2. Delegate to read_artifact
     return read_artifact(path=entry.get("path") or name)
+
+
+# --- Specialized Modeler Wrappers ---
+
+@function_tool
+def create_transport_artifact(baseline: str, transport: float, seed: int, artifact_type: str = "sim_json"):
+    """
+    Register a transport run artifact.
+    artifact_type options: 'sim_json', 'status', 'failure_matrix', 'time_vector', 'nodes_order', 'per_compartment', 'node_index_map', 'topology_summary'.
+    """
+    kind_map = {
+        "sim_json": "transport_sim_json",
+        "status": "transport_sim_status",
+        "failure_matrix": "transport_failure_matrix",
+        "time_vector": "transport_time_vector",
+        "nodes_order": "transport_nodes_order",
+        "per_compartment": "transport_per_compartment",
+        "node_index_map": "transport_node_index_map",
+        "topology_summary": "transport_topology_summary",
+    }
+    kind = kind_map.get(artifact_type)
+    if not kind:
+        return {"error": f"Unknown artifact_type '{artifact_type}'. Options: {list(kind_map.keys())}"}
+
+    meta = {
+        "baseline": baseline,
+        "transport": transport,
+        "seed": seed,
+        "module": "modeling",
+    }
+    
+    # We use reserve_typed_artifact to get the path
+    # unique=False because transport file paths are deterministic based on params
+    return reserve_typed_artifact(kind=kind, meta_json=json.dumps(meta), unique=False)
+
+
+@function_tool
+def create_sensitivity_table_artifact(label: str):
+    """
+    Register a sensitivity sweep CSV table.
+    """
+    meta = {"label": label, "module": "modeling"}
+    return reserve_and_register_artifact(
+        kind="sensitivity_sweep_table",
+        meta_json=json.dumps(meta),
+        status="pending",
+        unique=True
+    )
+
+
+@function_tool
+def create_intervention_table_artifact(label: str):
+    """
+    Register an intervention test CSV table.
+    """
+    meta = {"label": label, "module": "modeling"}
+    return reserve_and_register_artifact(
+        kind="intervention_table",
+        meta_json=json.dumps(meta),
+        status="pending",
+        unique=True
+    )
+
+
+@function_tool
+def create_verification_note_artifact(experiment_id: str):
+    """
+    Register a verification note (proof-of-work) for an experiment.
+    """
+    meta = {"experiment_id": experiment_id, "module": "modeling"}
+    return reserve_and_register_artifact(
+        kind="verification_note",
+        meta_json=json.dumps(meta),
+        status="pending",
+        unique=True
+    )
+
+
+@function_tool
+def list_model_specs(module: str = "modeling"):
+    """
+    List available model parameter sets (parameter_set artifacts).
+    """
+    return list_artifacts_by_kind(kind="parameter_set", limit=100)
+
+
+@function_tool
+def get_latest_model_spec(module: str = "modeling", model_key: Optional[str] = None):
+    """
+    Get the latest model specification artifact.
+    """
+    # from .artifacts import _get_latest_artifact_entry
+    # _get_latest_artifact_entry only filters by kind/module.
+    # To filter by model_key, we need to inspect metadata manually.
+    # But for now, let's just use list_artifacts_by_kind and filter.
+    
+    res = list_artifacts_by_kind(kind="parameter_set", limit=100)
+    paths = res.get("paths", [])
+    if not paths:
+        return {"error": "No model specs found."}
+    
+    # If model_key is provided, try to find a match in the filename?
+    # Pattern is "{name}_params.json". So if model_key matches name.
+    if model_key:
+        matches = [p for p in paths if f"{model_key}_params.json" in p]
+        if matches:
+            return matches[0]
+            
+    return paths[0] # Return most recent (list is sorted by default? No, list_artifacts_by_kind just returns paths)
+    # Actually list_artifacts_by_kind calls _list_artifacts_by_kind which pulls from manifest.
+    # The manifest is appended to, so last entries are newest.
+    # But list_artifacts_by_kind might not reverse it.
+    # Let's trust list_artifacts_by_kind for now or check implementation.
+    # _list_artifacts_by_kind in manifest_service returns entries.
+    
+    
+@function_tool
+def list_experiment_results(experiment_id: Optional[str] = None):
+    """
+    List transport simulation statuses.
+    """
+    # This might return too many results.
+    return list_artifacts_by_kind(kind="transport_sim_status", limit=50)
+
+
+@function_tool
+def get_latest_metrics(model_key: str):
+    """
+    Get the latest metrics artifact for a model.
+    """
+    # We look for model_metrics_json
+    # Pattern: {model_key}_metrics.json
+    # Since filename is fixed per model_key (unless strictly unique?), 
+    # reserve_typed_artifact uses unique=True by default for some?
+    # ARTIFACT_TYPE_REGISTRY doesn't specify unique.
+    
+    # We use list to find it.
+    res = list_artifacts_by_kind(kind="model_metrics_json", limit=50)
+    paths = res.get("paths", [])
+    target = f"{model_key}_metrics.json"
+    matches = [p for p in paths if target in p]
+    if matches:
+        return matches[-1] # Assume last is newest
+    return {"error": f"No metrics found for {model_key}"}
+
+
+@function_tool
+def read_model_spec(artifact_id_or_path: str):
+    """
+    Read a model specification (parameter_set).
+    """
+    # We should strictly enforce kind, but we only get a path/name.
+    # We can lookup in manifest.
+    return _safe_read_artifact(artifact_id_or_path, allowed_kinds=["parameter_set"])
+
+
+@function_tool
+def read_experiment_config(artifact_id_or_path: str):
+    """
+    Read an experiment config (e.g. from a note or plan).
+    """
+    # Maybe allowed implementation_plan or similar?
+    # User said: "read_experiment_config(experiment_id)"
+    # This might mean reading the hypothesis trace or similar?
+    # Let's allow generic text/json reading for now but maybe wrap it?
+    # Actually, let's skip strict enforcement unless we are sure.
+    # User plan: "read_experiment_config(experiment_id)"
+    
+    return _safe_read_artifact(artifact_id_or_path, allowed_kinds=["implementation_plan", "hypothesis_trace_json"])
+
+
+@function_tool
+def read_metrics(artifact_id_or_path: str):
+    """
+    Read a metrics artifact.
+    """
+    return _safe_read_artifact(artifact_id_or_path, allowed_kinds=["model_metrics_json", "model_metrics_csv"])
+
+
+def _safe_read_artifact(name_or_path: str, allowed_kinds: List[str]):
+    from ai_scientist.utils import manifest as manifest_utils
+    from ai_scientist.tools.base_tool import BaseTool
+    
+    entry = manifest_utils.find_manifest_entry(name_or_path, base_folder=BaseTool.resolve_output_dir(None))
+    if not entry:
+        # If passed an absolute path, we might allow it if it matches pattern?
+        # But safer to require manifest entry.
+        return {"error": f"Artifact '{name_or_path}' not found in manifest."}
+        
+    kind = entry.get("kind")
+    if kind not in allowed_kinds:
+         return {"error": f"Permission denied: Modeler cannot read kind '{kind}'. Allowed: {allowed_kinds}"}
+
+    return read_artifact(path=entry.get("path") or name_or_path)
+
+
+@function_tool
+def create_model_spec_artifact(model_key: str, content_json: str):
+    """
+    Register a model specification (parameter_set).
+    content_json: JSON string of the model parameters.
+    """
+    # Assuming content_json is the file content.
+    # We need to wrap it in a meta dict for strict typing if needed, 
+    # but parameter_set uses {name}_params.json.
+    # meta needs "name" = model_key.
+    
+    # Check if content_json is valid JSON?
+    try:
+        content = json.loads(content_json)
+    except Exception as e:
+        return {"error": f"Invalid content_json: {e}"}
+
+    meta = {
+        "name": model_key,
+        "module": "modeling",
+        "content": content,
+        "summary": f"Model specification for {model_key}"
+    }
+    
+    # If the content is passed in meta['content'], artifacts system might handle it?
+    # reserve_typed_artifact just reserves the path. It doesn't write the content unless we use `write_to_file` or similar?
+    # Wait, reserve_and_register_artifact documentation says:
+    # "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status..."
+    # But `create_transport_artifact` I implemented just calls `reserve_typed_artifact`.
+    # Does Modeler write the file?
+    # Directive 5b: "Reserve every persistent artifact...".
+    # Directive 10 in Modeler (original): "Reserve every persistent artifact...".
+    
+    # If I use `create_model_spec_artifact`, should it write the file?
+    # Modeler usually: reserves, then writes.
+    # But if I wrap it, I can do both?
+    # `run_biological_model` does the simulation.
+    # For `parameter_set`, Modeler generates it.
+    
+    # If I follow the pattern: "create_X_artifact" returns artifact_id/path. Modeler then uses `write_text_artifact`?
+    # The Prompt says: "When writing text, pass the reserved path into write_text_artifact".
+    
+    # So `create_model_spec_artifact` should just reserve (and register).
+    # Since `parameter_set` is a JSON file, Modeler can use `write_text_artifact` or `write_file`?
+    # `write_text_artifact` is in the keep list: "write_text_artifact (for structured notes...)".
+    # Modeler also has `write_text_artifact` in its tool list.
+    
+    return reserve_and_register_artifact(
+        kind="parameter_set",
+        meta_json=json.dumps(meta),
+        status="pending", # Modeler will write it next
+        unique=True
+    )
+

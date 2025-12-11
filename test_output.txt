@@ -1,0 +1,95 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.14, pytest-9.0.1, pluggy-1.6.0 -- /usr/local/opt/python@3.11/bin/python3.11
+cachedir: .pytest_cache
+rootdir: /Users/maxa/AI-Scientist-v2
+plugins: anyio-4.8.0, typeguard-4.1.5
+collecting ... collected 1 item
+
+tests/orchestrator/test_modeler_tools.py::test_modeler_tools_configuration FAILED [100%]
+
+=================================== FAILURES ===================================
+_______________________ test_modeler_tools_configuration _______________________
+
+    def test_modeler_tools_configuration():
+        # Mock idea and dirs
+        idea = {
+            "Title": "Test Project",
+            "Abstract": "Test Abstract",
+            "Short Hypothesis": "Test Hypothesis",
+            "Experiments": ["Exp 1"],
+            "Risk Factors and Limitations": []
+        }
+        dirs = {
+            "base": "/tmp/test",
+            "results": "/tmp/test/results"
+        }
+    
+        # Patch environment to avoid path issues if necessary
+        with patch.dict(os.environ, {"AISC_BASE_FOLDER": "/tmp/test"}):
+    
+            # We intercept _make_agent to inspect arguments passed to Modeler constructor
+            with patch("ai_scientist.orchestrator.agents._make_agent") as mock_make:
+    
+                build_team("test-model", idea, dirs)
+    
+                # Find the call for Modeler
+                modeler_call = None
+                for call in mock_make.call_args_list:
+                    # Check kwargs for name="Modeler"
+                    if "name" in call.kwargs and call.kwargs["name"] == "Modeler":
+                        modeler_call = call
+                    # Check args if positional
+                    elif len(call.args) > 0 and call.args[0] == "Modeler":
+                        modeler_call = call
+    
+                assert modeler_call, "Modeler was not created via _make_agent"
+    
+                # Extract tools list
+                tools_list = modeler_call.kwargs.get("tools")
+                if not tools_list and len(modeler_call.args) > 2:
+                    tools_list = modeler_call.args[2]
+    
+                assert tools_list, "No tools passed to Modeler"
+    
+                # Extract tool names. Depends on how tools are passed (functions or objects)
+                # The tool wrappers are usually decorated functions, so __name__ works.
+                # If they are bound methods or objects, we check appropriately.
+                tool_names = []
+                for t in tools_list:
+                    if hasattr(t, "tool_name"): # BaseTool or configured tool
+                        tool_names.append(t.tool_name)
+                    elif hasattr(t, "__name__"):
+                        tool_names.append(t.__name__)
+                    else:
+                        tool_names.append(str(t))
+    
+                print(f"Found Modeler tools: {tool_names}")
+    
+                # 1. Check for Required Wrappers
+                required = [
+                    "create_transport_artifact",
+                    "create_sensitivity_table_artifact",
+                    "create_intervention_table_artifact",
+                    "create_verification_note_artifact",
+                    "create_model_spec_artifact",
+                    "list_model_specs",
+                    "get_latest_model_spec",
+                    "list_experiment_results",
+                    "get_latest_metrics",
+                    "read_model_spec",
+                    "read_experiment_config",
+                    "read_metrics",
+                    "read_artifact",
+                ]
+                for req in required:
+>                   assert req in tool_names, f"Modeler missing required tool: {req}"
+E                   AssertionError: Modeler missing required tool: create_transport_artifact
+E                   assert 'create_transport_artifact' in [<MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool()().tool_name' id='5007481936'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>]
+
+tests/orchestrator/test_modeler_tools.py:92: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Found Modeler tools: [<MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool()().tool_name' id='5007481936'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>]
+=========================== short test summary info ============================
+FAILED tests/orchestrator/test_modeler_tools.py::test_modeler_tools_configuration - AssertionError: Modeler missing required tool: create_transport_artifact
+assert 'create_transport_artifact' in [<MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool()().tool_name' id='5007481936'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>, <MagicMock name='mock.function_tool().tool_name' id='4927411408'>]
+============================== 1 failed in 2.84s ===============================
