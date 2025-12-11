@@ -47,7 +47,7 @@ from ai_scientist.tools.per_compartment_validator import validate_per_compartmen
 from ai_scientist.tools.reference_verification import ReferenceVerificationTool
 from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
-from ai_scientist.perform_writeup import perform_writeup
+from ai_scientist.tools.writeup import perform_writeup
 from ai_scientist.tools.biological_interpretation import generate_biological_interpretation
 from ai_scientist.utils.notes import NOTE_NAMES, read_note_file, write_note_file, append_run_note
 from ai_scientist.utils.pathing import resolve_output_path
