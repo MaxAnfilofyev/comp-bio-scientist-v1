@@ -215,6 +215,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "{model_key}_metrics.csv",
         "description": "Computed metrics for a model (CSV).",
     },
+    "review_report": {
+        "rel_dir": "experiment_results/reviews",
+        "pattern": "review_report_{manuscript_version}.md",
+        "description": "Holistic review report for a manuscript version.",
+    },
 }
 
 

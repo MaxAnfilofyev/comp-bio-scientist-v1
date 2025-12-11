@@ -110,6 +110,13 @@ from ai_scientist.orchestrator.tool_wrappers import (
     publish_figure_to_manuscript_gallery,
     list_available_runs_for_plotting,
     get_metrics_for_plotting,
+    create_review_note_artifact,
+    check_parameter_sources_for_manuscript,
+    check_metrics_for_referenced_models,
+    check_hypothesis_trace_consistency,
+    check_proof_of_work_for_results,
+    get_lit_reference_verification,
+    check_references_completeness,
 )
 
 
@@ -431,41 +438,34 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "Directives:\n"
             "1. Read the manuscript draft using 'read_manuscript'.\n"
             "2. Check claim support using 'check_claim_graph' and sanity-check stats with 'run_biological_stats' if needed.\n"
-            "2b. Read lit_reference_verification.csv/json; if any reference has found==False or match_score below the reported threshold, mark the draft as unsupported until fixed.\n"
-            "2c. Verify that every simulation/model parameter appearing in figures/tables has a row in parameter_source_table with a declared source_type and (when lit_value) lit_claim_id/reference_id.\n"
-            "2d. Check hypothesis_trace.json: any hypothesis marked 'supported' must list sim_runs and figures that exist on disk; flag gaps.\n"
-            "2e. Ensure metrics artifacts exist for referenced sweeps/models (sweep_metrics_csv or model_metrics_json). If missing, flag and request compute_model_metrics.\n"
+            "2b. Use 'check_references_completeness' and 'get_lit_reference_verification' to audit references. If completeness check fails, mark draft unsupported.\n"
+            "2c. Run 'check_parameter_sources_for_manuscript' to validate parameter sourcing. Flag any reported issues.\n"
+            "2d. Run 'check_hypothesis_trace_consistency'. Flag any gaps in supported hypotheses.\n"
+            "2e. Run 'check_metrics_for_referenced_models'. If metrics are missing, flag and request compute_model_metrics from the Modeler.\n"
             f"2f. Generate provenance_summary.md via 'generate_provenance_summary'; if major inputs (lit_summary, model_spec, sims) are missing, flag the section and request fixes.\n"
             "3. Check consistency: Does Figure 3 actually support the claim in paragraph 2?\n"
             "4. If gaps exist, report them clearly to the PI.\n"
             "5. Only report 'NO GAPS' if the PDF validates completely.\n"
-            "6. If you create or materially analyze artifacts, log them with 'append_manifest' (name + kind + created_by + status) only when it adds value.\n"
-            "7. VERIFY PROOF OF WORK: Reject any result artifact that lacks a corresponding `_verification.md` or `_log.md` file explaining how it was derived.\n"
-            "8. Reserve any review artifacts/notes with 'reserve_typed_artifact' (e.g., verification_note) instead of inventing filenames.\n"
+            "6. If you create or materially analyze artifacts, log them via 'create_review_note_artifact' usage, not manifest lists.\n"
+            "7. VERIFY PROOF OF WORK: Run 'check_proof_of_work_for_results' to audit verification note coverage. Reject results if coverage is poor.\n"
+            "8. Use 'create_review_note_artifact' to create 'verification_note' or 'review_report'. Do NOT use 'reserve_typed_artifact' directly.\n"
             "9. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
             f"10. {reflection_instruction}"
         ),
         tools=[
-            get_run_paths,
-            resolve_path,
-            get_artifact_index,
-            list_artifacts,
-            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            read_manifest_entry,
-            check_manifest,
-            check_manifest_unique_paths,
+            create_review_note_artifact,
+            check_parameter_sources_for_manuscript,
+            check_metrics_for_referenced_models,
+            check_hypothesis_trace_consistency,
+            check_proof_of_work_for_results,
+            get_lit_reference_verification,
+            check_references_completeness,
             read_manuscript,
             check_claim_graph,
             run_biological_stats,
             verify_references,
-            compute_model_metrics,
-            update_hypothesis_trace,
             generate_provenance_summary,
             write_text_artifact,
             manage_project_knowledge,

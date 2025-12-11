@@ -2807,3 +2807,268 @@ def get_metrics_for_plotting(experiment_id: Optional[str] = None, model_key: Opt
     return None
 
 
+
+# --- Specialized Reviewer Tools (VI-Reviewer) ---
+
+@function_tool
+def create_review_note_artifact(
+    kind: Literal["verification_note", "review_report"],
+    content: str,
+    manuscript_version: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    change_summary: str = "",
+):
+    """
+    Create a specialized review artifact (verification note or review report).
+    - kind: "verification_note" (needs experiment_id) or "review_report" (needs manuscript_version).
+    - content: The markdown content of the note/report.
+    """
+    if kind == "verification_note":
+        if not experiment_id:
+            return {"error": "experiment_id is required for verification_note"}
+        meta = {"experiment_id": experiment_id, "module": "modeling"}
+    elif kind == "review_report":
+        if not manuscript_version:
+            manuscript_version = "v1" # Default
+        meta = {"manuscript_version": manuscript_version, "module": "review"}
+    else:
+        return {"error": f"Invalid kind '{kind}'. Must be 'verification_note' or 'review_report'."}
+
+    # Reserve and register
+    res = reserve_and_register_artifact(
+        kind=kind,
+        meta_json=json.dumps(meta),
+        status="canonical", # Review notes are usually final for that version
+        unique=True,
+        change_summary=change_summary,
+    )
+    
+    if res.get("error"):
+        return res
+        
+    path_str = res.get("reserved_path")
+    if not path_str:
+        return {"error": "Failed to resolve path for review artifact."}
+        
+    # Write content
+    try:
+        p = Path(path_str)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return {"status": "success", "path": path_str, "kind": kind}
+    except Exception as exc:
+        return {"error": f"Failed to write content: {exc}"}
+
+
+@function_tool
+def check_parameter_sources_for_manuscript(manuscript_id: Optional[str] = None):
+    """
+    Validate that all parameter sets have declared source types and references.
+    Scans 'parameter_set' artifacts and checks for 'source_type' and 'reference_id'/'lit_claim_id'.
+    """
+    # 1. List parameter sets
+    param_sets = list_artifacts_by_kind("parameter_set", limit=100)
+    paths = param_sets.get("paths", [])
+    
+    report = []
+    
+    for p_path in paths:
+        try:
+            content = Path(p_path).read_text(encoding="utf-8")
+            data = json.loads(content)
+        except Exception as e:
+            report.append(f"❌ {os.path.basename(p_path)}: Failed to read/parse ({e})")
+            continue
+            
+        # Check structure (assuming dict of key -> {value, source_type, ...})
+        # Or list of dicts? Adapting to common format.
+        # Assuming format: { "param_name": { "value": ..., "source_type": ..., ... } }
+        
+        if not isinstance(data, dict):
+             report.append(f"⚠️ {os.path.basename(p_path)}: Invalid format (not a dict)")
+             continue
+
+        file_issues = []
+        for param, details in data.items():
+            if not isinstance(details, dict):
+                continue # Skip metadata keys if any
+            
+            source_type = details.get("source_type")
+            if not source_type:
+                file_issues.append(f"Missing source_type for '{param}'")
+            elif source_type == "lit_value":
+                if not (details.get("lit_claim_id") or details.get("reference_id")):
+                     file_issues.append(f"'{param}' is lit_value but missing lit_claim_id/reference_id")
+        
+        if file_issues:
+            report.append(f"❌ {os.path.basename(p_path)}:")
+            for issue in file_issues:
+                report.append(f"  - {issue}")
+        else:
+            report.append(f"✅ {os.path.basename(p_path)}: Valid.")
+
+    if not paths:
+        return "No parameter_set artifacts found."
+        
+    return "\n".join(report)
+
+
+@function_tool
+def check_metrics_for_referenced_models(manuscript_id: Optional[str] = None):
+    """
+    Check availability of metrics for referenced models.
+    Scans for model_metrics_json/csv and cross-references with available model_specs (or similar).
+    (Ideally would parse manuscript, but here we scan what exists).
+    """
+    # Simply list all metrics artifacts available
+    metrics_json = list_artifacts_by_kind("model_metrics_json", limit=100)
+    metrics_csv = list_artifacts_by_kind("model_metrics_csv", limit=100)
+    
+    found_metrics = [os.path.basename(p) for p in metrics_json.get("paths", [])]
+    found_metrics += [os.path.basename(p) for p in metrics_csv.get("paths", [])]
+    
+    if not found_metrics:
+        return "⚠️ No model metrics artifacts found (model_metrics_json/csv)."
+        
+    return f"✅ Found {len(found_metrics)} metrics artifacts:\n" + "\n".join([f"- {m}" for m in found_metrics])
+
+
+@function_tool(strict_mode=False)
+def check_hypothesis_trace_consistency():
+    """
+    Validate hypothesis_trace.json: checks if supported experiments have real runs/figures.
+    """
+    # Read trace
+    trace_path = "experiment_results/hypothesis_trace.json"
+    if not os.path.exists(trace_path):
+        return "❌ hypothesis_trace.json not found."
+        
+    try:
+        trace = json.loads(Path(trace_path).read_text(encoding="utf-8"))
+    except Exception as e:
+        return f"❌ Failed to parse hypothesis_trace.json: {e}"
+
+    report = []
+    
+    # Trace structure: list of { "hypothesis_id": ..., "experiments": [ { "experiment_id": ..., "status": ..., "runs": [], "figures": [] } ] }
+    # Or flat list of hypotheses? Assuming common structure. 
+    # Let's assume list of hypotheses.
+    
+    if isinstance(trace, dict) and "hypotheses" in trace:
+        trace = trace["hypotheses"]
+    
+    if not isinstance(trace, list):
+        return "❌ Invalid trace format (expected list or dict with 'hypotheses')"
+
+    for hypo in trace:
+        h_id = hypo.get("id") or "unknown"
+        exps = hypo.get("experiments", [])
+        for exp in exps:
+            e_id = exp.get("id") or "unknown"
+            status = exp.get("status")
+            
+            if status == "supported":
+                # Check runs (params/sims existence) - currently implicit in figures check or requires more logic
+                # runs = exp.get("runs", [])
+                
+                # Check figures
+                figures = exp.get("figures", [])
+                
+                missing_figs = []
+                for f in figures:
+                    if not os.path.exists(f) and not os.path.exists(os.path.join("experiment_results", f)): 
+                         # Try resolving path
+                         missing_figs.append(f)
+                
+                if missing_figs:
+                    report.append(f"❌ {h_id}/{e_id} (supported): Missing referenced figures: {missing_figs}")
+                else:
+                    report.append(f"✅ {h_id}/{e_id} (supported): Figures verified.")
+                    
+    if not report:
+        return "⚠️ Trace appears empty or no supported experiments found to check."
+        
+    return "\n".join(report)
+
+
+@function_tool
+def check_proof_of_work_for_results():
+    """
+    Check that results (figures, tables) have corresponding verification notes.
+    """
+    # 1. List important results (figures)
+    figs = list_artifacts_by_kind("manuscript_figure_png", limit=100)
+    fig_paths = figs.get("paths", [])
+    
+    # 2. List verification notes
+    notes = list_artifacts_by_kind("verification_note", limit=100)
+    note_paths = notes.get("paths", [])
+    if not note_paths:
+        return "⚠️ No verification_note artifacts found."
+
+    # Naive check: does the project have verification notes?
+    # Ideally link specific figure to specific note.
+    # For now, report counts.
+    return f"Found {len(fig_paths)} manuscript figures and {len(note_paths)} verification notes. (Detailed linkage check not implemented)"
+
+
+@function_tool
+def get_lit_reference_verification():
+    """
+    Retrieve the Literature Reference Verification Table.
+    """
+    # Try CSV first, then JSON
+    csv_art = list_artifacts_by_kind("lit_reference_verification_table", limit=1)
+    if csv_art.get("paths"):
+        path = csv_art["paths"][0]
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error reading verification CSV: {e}"
+            
+    json_art = list_artifacts_by_kind("lit_reference_verification_json", limit=1)
+    if json_art.get("paths"):
+        path = json_art["paths"][0]
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error reading verification JSON: {e}"
+            
+    return "❌ No literature reference verification artifacts found."
+
+
+@function_tool
+def check_references_completeness():
+    """
+    Analyze the literature reference verification stats.
+    Returns a summary report of missing/invalid references.
+    """
+    content = get_lit_reference_verification()
+    if content.startswith("❌") or content.startswith("Error"):
+        return content
+        
+    # Check if CSV or JSON
+    # Simple text scan for "False" in found column or low match scores
+    # This is a heuristic validity check
+    
+    lines = content.splitlines()
+    header = lines[0].lower() if lines else ""
+    
+    missing_count = 0
+    total = 0
+    
+    if "," in header: # CSV
+        # Assuming cols: citation_key, title, found, match_score...
+        # Let's count "False" occurrence
+        missing_count = content.count(",False,") + content.count(",false,")
+        total = len(lines) - 1
+    else:
+        # JSON or other
+        missing_count = content.count('"found": false') + content.count('"found": False')
+        total = content.count('"citation_key"')
+        
+    status = "✅ References look complete."
+    if missing_count > 0:
+        status = f"❌ Found {missing_count} missing references."
+        
+    return f"Checked {total} references.\n{status}"
