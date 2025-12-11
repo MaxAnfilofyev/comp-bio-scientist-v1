@@ -22,7 +22,9 @@ except ImportError:
                 self.error = error
                 self.status = status
 
-from agents import Agent, function_tool as _function_tool
+import asyncio
+
+from agents import Agent, function_tool as _function_tool, FunctionTool
 
 # --- Underlying Tool Imports ---
 from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
@@ -118,6 +120,22 @@ from ai_scientist.orchestrator.transport import (
     resolve_baseline_path as resolve_baseline_path_impl,
     resolve_sim_path as resolve_sim_path_impl,
 )
+
+def _function_tool_sync_call(self, *args: Any, **kwargs: Any) -> Any:
+    """Allow invoking FunctionTool objects directly in sync contexts."""
+    if args:
+        raise TypeError(
+            "FunctionTool __call__ only supports keyword arguments when invoked directly."
+        )
+    payload = json.dumps(kwargs or {})
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(self.on_invoke_tool(None, payload))
+    finally:
+        loop.close()
+
+
+FunctionTool.__call__ = _function_tool_sync_call
 
 _CHECKPOINTS_SEEN: set[str] = set()
 
@@ -3294,4 +3312,3 @@ def log_status_to_user_inbox(status_block: str):
         }
     except Exception as e:
         return {"error": str(e)}
-
