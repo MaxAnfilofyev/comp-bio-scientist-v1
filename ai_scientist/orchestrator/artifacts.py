@@ -245,6 +245,16 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "implementation_plan_state.json",
         "description": "Machine-readable implementation plan state: experiments, tasks, decisions.",
     },
+    "interpretation_json": {
+        "rel_dir": "experiment_results/interpretation",
+        "pattern": "interpretation.json",
+        "description": "Theoretical biology interpretation (JSON).",
+    },
+    "interpretation_md": {
+        "rel_dir": "experiment_results/interpretation",
+        "pattern": "interpretation.md",
+        "description": "Theoretical biology interpretation (Markdown).",
+    },
 }
 
 

@@ -18,17 +18,18 @@ This project orchestrates multiple agent flows (ideation → experiments → int
    - Resuming: pass `--resume` to pick the latest folder matching the idea name, or `--base_folder <experiments/...>` to restart from a specific existing run directory without creating a new timestamped folder.
 - Additional awareness: plot aggregation (`perform_plotting.py`), modeling/stats utils (`perform_biological_modeling.py`, `perform_biological_stats.py`), interpretation (`perform_biological_interpretation.py`), manuscript reading (`ai_scientist/tools/manuscript_reader.py`), and alternative templates (`blank_bioinformatics_latex`, `blank_icbinb_latex`).
   - Prompts now link to `docs/artifact_metadata_requirements.md` and every role/PI prompt embeds the per-role context spec plus a summary-first reminder (via `ensure_module_summary`/`summarize_artifact`) so work stays aligned with the new system design principles.
-- Agent tool highlights:
-     - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`.
-     - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`.
-   - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
-   - Interpreter: `interpret_biological_results` wrapper for theoretical runs (`interpretation.json/md`).
-   - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`.
-   - Repair: `repair_sim_outputs` to bulk run `sim_postprocess` on sim.json entries lacking exported arrays, validate per-compartment artifacts, and update manifest/tool_summary (lock-aware, idempotent). CLI: `python ai_scientist/perform_repair_sim_outputs.py --manifest <path>`.
+   - Agent tool highlights:
+     - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `UpdateClaimGraph`, `create_lit_review_artifact`, `create_lit_bibliography_artifact`.
+     - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`, `create_verification_note_artifact`.
+     - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
+     - Interpreter: `interpret_biology` (theoretical runs), `create_interpretation_json_artifact`, `create_interpretation_md_artifact`.
+     - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`, `create_review_note_artifact`.
+     - Publisher: `create_release_manifest_artifact`, `create_code_release_archive_artifact`, `create_release_diff_patch_artifact`, `create_manuscript_figure_artifact`.
+     - Repair: `repair_sim_outputs` to bulk run `sim_postprocess` on sim.json entries lacking exported arrays, validate per-compartment artifacts, and update manifest/tool_summary (lock-aware, idempotent). CLI: `python ai_scientist/perform_repair_sim_outputs.py --manifest <path>`.
 
   ## Modular Orchestrator Support Modules
 
-  - `ai_scientist/orchestrator/tool_wrappers.py` now centralizes every `@function_tool` surface that role agents call. Each wrapper resolves canonical paths, gates operations via the dependence chain (lit/model/transport), pushes manifest entries, and exposes convenience helpers such as `inspect_manifest`, `reserve_typed_artifact`, `write_text_artifact`, and `append_run_note_tool`.
+  - `ai_scientist/orchestrator/tool_wrappers.py` (and specialized modules like `lit_tools.py`, `interpretation_tools.py`, `publisher_tools.py`) centralize the agent tool surface. The system follows a **Universal Specialized Tool Pattern**: agents do not use generic artifact reservation tools (`reserve_typed_artifact`). Instead, they are equipped with specialized `create_*_artifact` tools (e.g., `create_lit_review_artifact`, `create_interpretation_json_artifact`) that encapsulate path logic, type safety, manifest registration, and metadata for their specific domain.
   - `ai_scientist/orchestrator/agents.py` builds the curated agent team used by `agents_orchestrator.py`. It pulls the wrapper tools, stitches the per-role instructions/prompts, and provides the PI agent with the same tooling surface plus `build_team()` and `extract_run_output()` helper methods so the orchestrator only manages flow and deployment.
   - `ai_scientist/orchestrator/pi_orchestration.py` enforces that every PI run persists at least one writer tool call. The PI agent has `tool_choice="required"` enabled, and the orchestrator wraps each run with `enforce_pi_writer_tools()` to ensure persistent writes. If the PI only calls read-only tools (e.g., `check_project_state`, `list_artifacts`), the enforcement hook automatically logs the final message to `user_inbox.md` (truncated to 4000 chars). Writer tools that satisfy the requirement: `update_implementation_plan_from_state`, `log_status_to_user_inbox`, `write_pi_notes`.
   - `ai_scientist/orchestrator/pi_planning_helpers.py` provides **cumulative, merge-safe planning state** for the PI agent:
@@ -92,7 +93,9 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - **CheckClaimGraph** (`ai_scientist/tools/claim_graph_checker.py`)
   - Params: `path` to claim_graph.json; reports claims (and descendants) lacking support.
 - **Filesystem helpers** (agents_orchestrator.py wrappers)
-  - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode for large JSON), `reserve_output` (sanitizes names, rejects `..`, auto-uniques, and quarantines to `experiment_results/_unrouted` with a note if the primary path is unavailable), `resolve_path`, `get_run_paths`, `write_text_artifact` + conveniences (`write_interpretation_text`, `write_figures_readme`) which use the same sanitizer/quarantine behavior.
+  - `list_artifacts` (browse experiment_results/ subdirs), `read_artifact` (with summary-only mode), `write_text_artifact`.
+  - **Note on Reservation**: Generic `reserve_typed_artifact` and `reserve_output` are **deprecated** for direct agent use in favor of specialized creators (see Agent tool highlights). The system forces agents to use domain-specific tools which handle naming, quarantine, and manifest registration automatically.
+  - `resolve_path`, `get_run_paths` are implementation details abstracted away from most agents.
   - `ensure_module_summary` (new helper) checks the latest `integration_memo_md` for a module; PI prompts now call it before delegating, and `reserve_and_register_artifact` triggers memo generation whenever a module crosses the summary threshold.
   - Manifest helpers: `inspect_manifest` (default summary-only; filters by role/path_glob/since; returns shard metadata) + `inspect_recent_manifest_entries` share the same sharded backend (`experiment_results/manifest/manifest_shard_*.ndjson` with `manifest_index.json`, auto-rotated ~10k entries/shard, legacy file_manifest.json auto-migrated). `append_manifest`/`read_manifest`/`read_manifest_entry`/`check_manifest`/`get_artifact_index` all use this backend and drop health reports into `experiment_results/_health/verification_missing_report_post_run.json` when gaps are found.
   - `check_status` (reads *.status.json), `coder_create_python` (safe code writes under run folder), `run_ruff`, `run_pyright`, `summarize_artifact` (lightweight heads/shapes).

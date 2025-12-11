@@ -25,7 +25,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     assemble_lit_data,
     build_graphs,
     check_claim_graph,
-    check_manifest,
     check_manifest_unique_paths,
     check_project_state,
     check_status,
@@ -34,7 +33,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     compute_model_metrics,
     generate_provenance_summary,
     graph_diagnostics,
-    get_artifact_index,
     get_run_paths,
     head_artifact,
     inspect_manifest,
@@ -50,7 +48,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     generate_project_snapshot,
     read_artifact,
     read_manifest,
-    read_manifest_entry,
     read_manuscript,
     read_npy_artifact,
     read_note,
@@ -124,10 +121,26 @@ from ai_scientist.orchestrator.lit_tools import (
     create_lit_coverage_artifact,
     create_lit_integration_memo_artifact,
 )
+from ai_scientist.orchestrator.interpretation_tools import (
+    create_interpretation_json_artifact,
+    create_interpretation_md_artifact,
+)
+from ai_scientist.orchestrator.publisher_tools import (
+    create_release_manifest_artifact,
+    create_code_release_archive_artifact,
+    create_env_manifest_artifact,
+    create_release_diff_patch_artifact,
+    create_release_repro_status_artifact,
+    create_repro_methods_artifact,
+    create_repro_protocol_artifact,
+    create_manuscript_figure_artifact,
+    create_manuscript_figure_svg_artifact,
+)
 from ai_scientist.orchestrator.tool_wrappers import (
     check_lit_ready,
     check_model_provenance,
 )
+
 
 # TOOL WRITER PERMISSIONS (to prevent cargo-culting instructions across agents):
 # - hypothesis_trace writers: {Modeler, PI} only
@@ -242,26 +255,61 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
     experiments_plan = format_list_field(idea.get('Experiments', []))
     risk_factors = format_list_field(idea.get('Risk Factors and Limitations', []))
 
-    path_context = (
-        f"SYSTEM CONTEXT: Run Root='{dirs['base']}', Exp Results='{dirs['results']}'. "
-        f"Figures='{os.path.join(dirs['base'], 'figures')}'. "
-        "Use these paths directly; do NOT call get_run_paths. "
-        "Assume provided input paths exist; only list_artifacts if path is missing."
-    )
-    path_guardrails = (
-        "FILE IO POLICY: Every persistent artifact must be reserved via 'reserve_typed_artifact(kind=..., meta_json=...)' using the registry below; do NOT invent filenames or bypass the registry. "
-        f"Known kinds: {artifact_catalog}. "
-        "Refer to docs/artifact_metadata_requirements.md for the required metadata fields every artifact must carry. "
-        "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status via append_manifest. "
-        "Use 'reserve_output' only for PI/Coder scratch logs; other roles must stay within typed helpers. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
-        "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note. "
-        "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead. "
-        "Prefer 'summarize_artifact' to collect condensed views and call 'ensure_module_summary' for the relevant module before requesting full content."
-    )
-    metadata_reminder = (
-        "METADATA REMINDER: When calling 'reserve_typed_artifact' or 'reserve_and_register_artifact', pass 'meta_json' including "
-        "`id`, `type`, `version`, `parent_version`, `status`, `module`, `summary`, `content`, and `metadata` (see docs/artifact_metadata_requirements.md)."
-    )
+    def _agent_has_reserve_tools(role_name: str) -> bool:
+        spec = get_context_view_spec(role_name)
+        return spec is not None and "*" in spec.write_scope
+
+    def _get_path_context(role_name: str, dirs: Dict[str, str]) -> str:
+        spec = get_context_view_spec(role_name)
+        if not spec: 
+            return ""
+        if "*" in spec.read_scope or "*" in spec.write_scope:
+            return (
+                f"SYSTEM CONTEXT: Run Root='{dirs['base']}', Exp Results='{dirs['results']}'. "
+                f"Figures='{os.path.join(dirs['base'], 'figures')}'. "
+                "Use these paths directly; do NOT call get_run_paths. "
+                "Assume provided input paths exist; only list_artifacts if path is missing."
+            )
+        return (
+            "SYSTEM CONTEXT: Your specialized tools handle file paths automatically. "
+            "Focus on your domain tasks; path management is abstracted away."
+        )
+
+    def _get_file_io_policy(role_name: str) -> str:
+        spec = get_context_view_spec(role_name)
+        if not spec: 
+            return ""
+        
+        has_reserve_tools = "*" in spec.write_scope
+        
+        if has_reserve_tools:
+            return (
+                "FILE IO POLICY: Every persistent artifact must be reserved via 'reserve_typed_artifact(kind=..., meta_json=...)' using the registry below; do NOT invent filenames or bypass the registry. "
+                f"Known kinds: {artifact_catalog}. "
+                "Refer to docs/artifact_metadata_requirements.md for the required metadata fields every artifact must carry. "
+                "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status via append_manifest. "
+                "Use 'reserve_output' only for PI/Coder scratch logs; other roles must stay within typed helpers. When writing text, pass the reserved path into write_text_artifact instead of freehand names. "
+                "Outputs are anchored to experiment_results; if a directory is unavailable, writes are auto-rerouted to experiment_results/_unrouted with a manifest note. "
+                "NEVER log reflections or notes to the manifest—use append_run_note or manage_project_knowledge instead. "
+                "Prefer 'summarize_artifact' to collect condensed views and call 'ensure_module_summary' for the relevant module before requesting full content."
+            )
+
+        # Simplified policy
+        kinds_str = ", ".join(spec.write_scope)
+        return (
+            "FILE IO POLICY: Use specialized artifact creation tools provided to you. "
+            "Do NOT attempt to reserve artifacts directly—use the create_* helpers specific to your role. "
+            "These tools handle path reservation and manifest registration automatically. "
+            f"You are authorized to create: {kinds_str}."
+        )
+
+    def _get_metadata_reminder(role_name: str) -> str:
+        if _agent_has_reserve_tools(role_name):
+            return (
+                "METADATA REMINDER: When calling 'reserve_typed_artifact' or 'reserve_and_register_artifact', pass 'meta_json' including "
+                "`id`, `type`, `version`, `parent_version`, `status`, `module`, `summary`, `content`, and `metadata` (see docs/artifact_metadata_requirements.md)."
+            )
+        return ""
     def _context_spec_intro(role_name: str) -> str:
         spec = get_context_view_spec(role_name)
         if spec is None:
@@ -314,7 +362,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"## CONTEXT\n"
             f"{abstract}\n"
             f"Related Work to Consider: {related_work}\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n\n"
+            f"{_get_path_context('Archivist', dirs)}\n{_get_file_io_policy('Archivist')}\n{_get_metadata_reminder('Archivist')}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n\n"
             "## CORE WORKFLOW\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence\n"
@@ -374,7 +422,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"## HYPOTHESIS & PLAN\\n"
             f"{hypothesis}\\n"
             f"Experimental Plan:\\n{experiments_plan}\\n"
-            f"{path_context}\\n{path_guardrails}\\n{metadata_reminder}\\n{_context_spec_intro('Modeler')}\\n{_summary_advisory('Modeler')}\\n\\n"
+            f"{_get_path_context('Modeler', dirs)}\n{_get_file_io_policy('Modeler')}\n{_get_metadata_reminder('Modeler')}\n{_context_spec_intro('Modeler')}\n{_summary_advisory('Modeler')}\n\n"
             "## REQUIRED SEQUENCE (for each model)\\n"
             "BEFORE first sim → create_model_spec_artifact(model_key, params)\\n"
             "DURING sim       → run_comp_sim / run_transport_batch / run_sensitivity_sweep / run_intervention_tests\\n"
@@ -461,7 +509,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Scientific Visualization Expert.\n"
             "Goal: Convert simulation data into PLOS-quality figures.\n\n"
             "TL;DR: Read sim data → Validate hypothesis support → Plot → Publish to manuscript gallery\n\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Analyst')}\n{_summary_advisory('Analyst')}\n\n"
+            f"{_get_path_context('Analyst', dirs)}\n{_get_file_io_policy('Analyst')}\n{_get_metadata_reminder('Analyst')}\n{_context_spec_intro('Analyst')}\n{_summary_advisory('Analyst')}\n\n"
             "## CORE WORKFLOW\n"
             "1. Read data from provided input paths (do NOT list files; assume path is correct)\n"
             "2. CRITICAL: Assert data supports hypothesis BEFORE plotting\n"
@@ -493,7 +541,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "✓ provenance_summary.md exists\n\n"
             f"{common_efficiency_note}\n\n"
             f"{common_error_recovery}\n\n"
-            f"{proof_of_work_instruction}\n\n"
+            f"{proof_of_work_instruction}\\n\\n"
             "13. Log reflections via manage_project_knowledge; never to manifest\n"
             f"14. {reflection_instruction}"
         ),
@@ -532,7 +580,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "Goal: Identify logical gaps and structural flaws.\\n\\n"
             "TL;DR: Read manuscript → Audit references → Check claim support → Verify proof of work → Report gaps or approve\\n\\n"
             f"## RISK FACTORS TO CHECK\\n{risk_factors}\\n"
-            f"{path_context}\\n{path_guardrails}\\n{metadata_reminder}\\n{_context_spec_intro('Reviewer')}\\n{_summary_advisory('Reviewer')}\\n\\n"
+            f"{_get_path_context('Reviewer', dirs)}\n{_get_file_io_policy('Reviewer')}\n{_get_metadata_reminder('Reviewer')}\n{_context_spec_intro('Reviewer')}\n{_summary_advisory('Reviewer')}\n\n"
             "## CORE WORKFLOW\\n"
             "1. Read manuscript draft: 'read_manuscript'\\n"
             "2. Check claim support: 'check_claim_graph' and 'run_biological_stats' if needed\\n\\n"
@@ -599,15 +647,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Theoretical Biological Interpreter.\n"
             "Goal: Produce interpretation.json/md for theoretical biology projects.\n\n"
             "TL;DR: Check research type → Interpret biology → Reserve artifact → Write interpretation\n\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Interpreter')}\n{_summary_advisory('Interpreter')}\n\n"
+            f"{_get_path_context('Interpreter', dirs)}\n{_get_file_io_policy('Interpreter')}\n{_get_metadata_reminder('Interpreter')}\n{_context_spec_intro('Interpreter')}\n{_summary_advisory('Interpreter')}\n\n"
             "## WORKFLOW\n"
             "1. CRITICAL: Call 'interpret_biology' ONLY when biology.research_type == theoretical\n"
             "2. Use experiment summaries and idea text (do NOT hallucinate unsupported claims)\n"
-            "3. Reserve interpretation outputs via 'reserve_typed_artifact':\n"
-            "   - interpretation_json or interpretation_md\n"
-            "   - Use reserved path with 'write_text_artifact'\n"
-            "4. Before calling 'append_manifest', verify artifact adds new value\n"
-            "   - Log only when yes, with: name + kind + created_by + status\n\n"
+            "3. Create interpretation artifacts via specialized tools:\n"
+            "   - 'create_interpretation_json_artifact()' for JSON format\n"
+            "   - 'create_interpretation_md_artifact()' for Markdown format\n"
+            "   - Use reserved path with 'write_text_artifact' or 'write_interpretation_text'\n"
+            "4. These tools handle path reservation and manifest registration automatically\n\n"
             "## SUCCESS CRITERIA\n"
             "✓ Only called for theoretical research type\n"
             "✓ Interpretation grounded in experiment data\n"
@@ -618,24 +666,12 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"6. {reflection_instruction}"
         ),
         tools=[
-            get_run_paths,
-            resolve_path,
-            get_artifact_index,
-            list_artifacts,
-            list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            read_manifest_entry,
-            check_manifest,
-            check_manifest_unique_paths,
+            create_interpretation_json_artifact,
+            create_interpretation_md_artifact,
             write_text_artifact,
             write_interpretation_text,
-            write_figures_readme,
-            check_status,
             interpret_biology,
             manage_project_knowledge,
         ],
@@ -649,7 +685,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Utility Engineer.\n"
             "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n\n"
             "TL;DR: Create Python helpers → Document → Log to manifest → Lint check\n\n"
-            f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Coder')}\n{_summary_advisory('Coder')}\n\n"
+            f"{_get_path_context('Coder', dirs)}\n{_get_file_io_policy('Coder')}\n{_get_metadata_reminder('Coder')}\n{_context_spec_intro('Coder')}\n{_summary_advisory('Coder')}\n\n"
             "## CORE WORKFLOW\n"
             "1. Use 'coder_create_python' to create/update files under run root\n"
             "   - Do NOT write outside AISC_BASE_FOLDER\n"
@@ -702,7 +738,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "You are an expert Production Editor.\\n"
             "Goal: Compile final PDF.\\n\\n"
             "TL;DR: Integrate lit_summary + figures \u2192 Compile LaTeX \u2192 Debug errors \u2192 Produce PDF\\n\\n"
-            f"{path_context}\\n{path_guardrails}\\n{metadata_reminder}\\n{_context_spec_intro('Publisher')}\\n{_summary_advisory('Publisher')}\\n\\n"
+            f"{_get_path_context('Publisher', dirs)}\n{_get_file_io_policy('Publisher')}\n{_get_metadata_reminder('Publisher')}\n{_context_spec_intro('Publisher')}\n{_summary_advisory('Publisher')}\n\n"
             "## CORE WORKFLOW\\n"
             "1. Target the 'blank_theoretical_biology_latex' template\\n"
             "2. Integrate 'lit_summary.json' and figures into the text\\n"
@@ -734,11 +770,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             list_artifacts_by_kind,
             read_artifact,
             summarize_artifact,
-            reserve_output,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
+            create_release_manifest_artifact,
+            create_code_release_archive_artifact,
+            create_env_manifest_artifact,
+            create_release_diff_patch_artifact,
+            create_release_repro_status_artifact,
+            create_repro_methods_artifact,
+            create_repro_protocol_artifact,
+            create_manuscript_figure_artifact,
+            create_manuscript_figure_svg_artifact,
             check_manifest_unique_paths,
             write_text_artifact,
             write_figures_readme,
@@ -756,8 +796,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"You are an expert Principal Investigator for project: {title}.\\n"
             f"Hypothesis: {hypothesis}\\n\\n"
             f"TL;DR: Check state \u2192 Plan \u2192 Delegate to specialists \u2192 Monitor progress \u2192 Promote artifacts \u2192 Generate snapshot\\n\\n"
-            f"{_context_spec_intro('Principal Investigator')}\\n"
-            f"{metadata_reminder}\\n\\n"
+            f"{_get_path_context('Principal Investigator', dirs)}\\n"
+            f"{_get_file_io_policy('Principal Investigator')}\\n"
+            f"{_get_metadata_reminder('Principal Investigator')}\\n"
+            f"{_context_spec_intro('Principal Investigator')}\\n\\n"
             "## AGENT DELEGATION PRINCIPLES\\n"
             "Agents are stateless tools with ~40-turn budget. Do NOT send 'prepare' or 'wait until X' tasks.\\n"
             "- Delegate small, end-to-end units with concrete paths\\n"
