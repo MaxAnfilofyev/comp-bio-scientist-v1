@@ -89,6 +89,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     write_interpretation_text,
     write_pi_notes,
     write_text_artifact,
+    write_registered_artifact,
     format_list_field,
     create_lit_summary_artifact,
     create_claim_graph_artifact,
@@ -108,6 +109,10 @@ from ai_scientist.orchestrator.tool_wrappers import (
     create_model_spec_artifact,
     read_experiment_config,
     read_metrics,
+    save_model_spec,
+    save_verification_note,
+    save_simulation_metrics,
+    read_literature_context,
     create_plot_artifact,
     publish_figure_to_manuscript_gallery,
     list_available_runs_for_plotting,
@@ -427,52 +432,31 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             f"## FOCUS\\n"
             f"You do NOT care about LaTeX or writing styles. Focus on DATA.\\n\\n"
             f"## HYPOTHESIS & PLAN\\n"
-            f"{hypothesis}\\n"
-            f"Experimental Plan:\\n{experiments_plan}\\n"
-            f"{_get_path_context('Modeler', dirs)}\n{_get_file_io_policy('Modeler')}\n{_get_metadata_reminder('Modeler')}\n{_context_spec_intro('Modeler')}\n{_summary_advisory('Modeler')}\n\n"
-            "## REQUIRED SEQUENCE (for each model)\\n"
-            "BEFORE first sim → create_model_spec_artifact(model_key, params)\\n"
-            "DURING sim       → run_comp_sim / run_transport_batch / run_sensitivity_sweep / run_intervention_tests\\n"
-            "AFTER sim        → sim_postprocess (if arrays missing) → validate_per_compartment_outputs\\n"
-            "AFTER batch      → compute_model_metrics → update_hypothesis_trace(experiment_id, run_id)\\n\\n"
-            "## CORE WORKFLOW\\n"
-            "1. Build graphs: 'build_graphs'\\n"
-            "2. Run baselines: 'run_biological_model' or custom sims: 'run_comp_sim'\\n"
-            "3. Explore parameter space: 'run_sensitivity_sweep' and 'run_intervention_tests'\\n"
-            "4. Ensure parameter sweeps cover the range specified in the hypothesis\\n\\n"
-            "## ARTIFACT MANAGEMENT\\n"
-            "5. Save raw outputs to experiment_results/\\n"
-            "6. Use specialized helpers (do NOT use generic reserve tools):\\n"
-            "   - 'create_transport_artifact'\\n"
-            "   - 'create_sensitivity_table_artifact'\\n"
-            "   - 'create_intervention_table_artifact'\\n"
-            "   - 'create_verification_note_artifact'\\n\\n"
-            "## OUTPUT REQUIREMENTS\\n"
-            "7. Every run must produce:\\n"
-            "   - Arrays: failure_matrix.npy, time_vector.npy, nodes_order_*.txt\\n"
-            "   - Per-compartment: per_compartment.npz + node_index_map.json + topology_summary.json\\n"
-            "   - Metadata: sim.json + sim.status.json\\n"
-            "   - Run 'sim_postprocess' if arrays missing, 'validate_per_compartment_outputs' before marking complete\\n\\n"
-            "## TRANSPORT RUN MANIFEST\\n"
-            "8. Use read_transport_manifest / update_transport_manifest:\\n"
-            "   - Consult before reruns\\n"
-            "   - Update after completing or failing a run\\n"
-            "   - Do NOT mark status=complete unless all files exist (arrays + sim.json + sim.status.json)\\n"
-            "   - Otherwise mark 'partial' and note missing files\\n"
-            "9. Resolve baselines via 'resolve_baseline_path' before batches\\n"
-            "   - Only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json\\n"
-            "10. Process one baseline per call; load run_recipe.json if it exists under experiment_results/simulations/transport_runs\\n\\n"
-            "## SUCCESS CRITERIA\\n"
-            "✓ Every model has model_spec_artifact registered\\n"
-            "✓ Every completed run has metrics computed (compute_model_metrics)\\n"
-            "✓ Every run has verification note with input files listed\\n"
-            "✓ hypothesis_trace.json updated after each experiment\\n"
-            "✓ All required output files present before marking complete\\n\\n"
-            f"{common_efficiency_note}\\n\\n"
-            f"{common_error_recovery}\\n\\n"
-            f"{proof_of_work_instruction}\\n\\n"
-            "11. Log reflections via 'append_run_note_tool' or manage_project_knowledge; never to manifest\\n"
-            f"12. {reflection_instruction}"
+            f"You are an expert Computational Biologist.\n"
+            f"Goal: Execute simulations for '{title}'.\n"
+            f"Hypothesis: {hypothesis}\n"
+            f"Experimental Plan:\n{experiments_plan}\n"
+            f"{_get_path_context('Modeler', dirs)}\n{_get_file_io_policy('Modeler')}\n{_get_metadata_reminder('Modeler')}\n{_context_spec_intro('Modeler')}\n{_summary_advisory('Modeler')}\n"
+            "Directives:\n"
+            "1. You do NOT care about LaTeX or writing styles. Focus on DATA.\n"
+            "2. Build graphs ('build_graphs'), run baselines ('run_biological_model') or custom sims ('run_comp_sim').\n"
+            "3. Explore parameter space using 'run_sensitivity_sweep' and 'run_intervention_tests'.\n"
+            "3b. Before first sim of a given model_key, call 'save_model_spec' to register the model specification and readme. Update the ledger if you change parameters; runs missing rows are a hard failure.\n"
+            "3c. Update hypothesis_trace.json after each sim/ensemble: record hypothesis_id/experiment_id, sim run identifiers, and metrics produced.\n"
+            "3d. After sweeps or transport batches, call 'compute_model_metrics' to emit metrics. You can use 'get_latest_metrics' to verify they exist; rerun if metrics are missing when figures/text depend on them. Use 'save_simulation_metrics' for custom metrics.\n"
+            "4. Ensure parameter sweeps cover the range specified in the hypothesis.\n"
+            "5. Save raw outputs to experiment_results/.\n"
+            "5b. Use specialized helpers ('create_transport_artifact', 'create_sensitivity_table_artifact', 'create_intervention_table_artifact') to reserve artifacts. Use 'save_verification_note' for proof-of-work. Do NOT use generic reserve tools.\n"
+            "5c. You CANNOT create images (.png, .svg). Leave that to the Analyst.\n"
+            "5d. You CANNOT write to user_inbox directly. Log issues/reflections to Project Knowledge.\n"
+            "6. Always produce arrays for each (baseline, transport, seed): prefer export_arrays during sim; otherwise immediately run 'sim_postprocess' on the produced sim.json so failure_matrix.npy/time_vector.npy/nodes_order_*.txt exist before marking the run complete. Every run must also emit per_compartment.npz + node_index_map.json + topology_summary.json (binary_states, continuous_states/time); validate with validate_per_compartment_outputs before marking status=complete.\n"
+            "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
+            "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
+            "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
+            "8. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
+            f"9. {proof_of_work_instruction}\n"
+            "10. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"11. {reflection_instruction}"
         ),
         tools=[
             list_model_specs,
@@ -482,12 +466,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             create_transport_artifact,
             create_sensitivity_table_artifact,
             create_intervention_table_artifact,
-            create_verification_note_artifact,
-            create_model_spec_artifact,
+            save_verification_note, # Replaces create_verification_note_artifact + write
+            create_model_spec_artifact, # Keep just in case, or remove if save_model_spec covers it? Plan said "Add save_model_spec". Maybe keep both or deprecate create? create_model_spec just reserves. save writes. Let's keep create_model_spec_artifact but rely on save_model_spec directives.
+            save_model_spec,
             read_model_spec,
             read_experiment_config,
             read_metrics,
-            read_artifact,
+            read_literature_context,
+            save_simulation_metrics,
+            # read_artifact, # REMOVED
             build_graphs,
             run_biological_model,
             run_comp_sim,
@@ -504,7 +491,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             read_npy_artifact,
             validate_per_compartment_outputs,
             manage_project_knowledge,
-            write_text_artifact,
+            # write_text_artifact, # REMOVED
         ],
         model=model,
         settings=common_settings,
@@ -557,7 +544,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             get_metrics_for_plotting,
             create_plot_artifact,
             publish_figure_to_manuscript_gallery,
-            create_verification_note_artifact,
+            save_verification_note, # Replaces create_verification_note_artifact + write
+            read_model_spec,
             read_artifact,
             summarize_artifact,
             read_transport_manifest,
@@ -634,6 +622,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             check_metrics_for_referenced_models,
             check_hypothesis_trace_consistency,
             check_proof_of_work_for_results,
+            read_model_spec,
             get_lit_reference_verification,
             check_references_completeness,
             read_manuscript,

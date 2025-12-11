@@ -145,6 +145,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "manuscript_figure_svg",
             "model_metrics_json",
             "sweep_metrics_csv",
+            "parameter_set",
         ],
         write_scope=[
             "plot_intermediate",
@@ -169,6 +170,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "hypothesis_trace_json",
             "transport_sim_json",
             "transport_manifest",
+            "parameter_set",
         ],
         write_scope=[
             "verification_note",

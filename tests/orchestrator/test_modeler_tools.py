@@ -24,10 +24,24 @@ sys.modules["agents"] = mock_agents
 sys.modules["agents.types"] = MagicMock()
 sys.modules["anthropic"] = MagicMock()
 # Mock high-level modules that import heavy dependencies
+# Consolidate all dependency mocks here
+sys.modules["anthropic"] = MagicMock()
+sys.modules["pymupdf"] = MagicMock()
+sys.modules["pymupdf4llm"] = MagicMock()
+sys.modules["omegaconf"] = MagicMock()
+sys.modules["omegaconf.errors"] = MagicMock()
+sys.modules["coolname"] = MagicMock()
+sys.modules["shutup"] = MagicMock()
+sys.modules["igraph"] = MagicMock()
+
+# Mock high-level modules that import heavy dependencies
 sys.modules["ai_scientist.perform_writeup"] = MagicMock()
 sys.modules["ai_scientist.perform_biological_interpretation"] = MagicMock()
 sys.modules["ai_scientist.perform_vlm_review"] = MagicMock()
 sys.modules["ai_scientist.perform_llm_review"] = MagicMock()
+sys.modules["ai_scientist.tools.writeup"] = MagicMock()
+sys.modules["ai_scientist.tools.vlm_review"] = MagicMock()
+sys.modules["ai_scientist.tools.biological_interpretation"] = MagicMock()
 
 # Now we can safely import
 from ai_scientist.orchestrator.agents import build_team  # noqa: E402
@@ -92,8 +106,9 @@ def test_modeler_tools_configuration():
                 "create_transport_artifact",
                 "create_sensitivity_table_artifact",
                 "create_intervention_table_artifact",
-                "create_verification_note_artifact",
+                "save_verification_note", # Replaced create...
                 "create_model_spec_artifact",
+                "save_model_spec",
                 "list_model_specs",
                 "get_latest_model_spec",
                 "list_experiment_results",
@@ -101,7 +116,8 @@ def test_modeler_tools_configuration():
                 "read_model_spec",
                 "read_experiment_config",
                 "read_metrics",
-                "read_artifact", 
+                "read_literature_context",
+                "save_simulation_metrics",
             ]
             for req in required:
                 assert req in tool_names, f"Modeler missing required tool: {req}"
@@ -121,7 +137,9 @@ def test_modeler_tools_configuration():
                 "check_manifest",
                 "check_manifest_unique_paths",
                 "mirror_artifacts",
-                "summarize_artifact"
+                "summarize_artifact",
+                "read_artifact", # Now forbidden
+                "write_text_artifact", # Now forbidden
             ]
             for forb in forbidden:
                 assert forb not in tool_names, f"Modeler has forbidden tool: {forb}"
