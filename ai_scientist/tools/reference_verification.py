@@ -97,7 +97,7 @@ class ReferenceVerificationTool(BaseTool):
             {
                 "name": "output_dir",
                 "type": "str",
-                "description": "Output directory for verification artifacts. Defaults to experiment_results.",
+                "description": "Output directory for verification artifacts. Defaults to experiment_results/literature.",
             },
             {
                 "name": "max_results",
@@ -255,6 +255,8 @@ class ReferenceVerificationTool(BaseTool):
         records = self._load_records(lit_path)
 
         out_dir = BaseTool.resolve_output_dir(output_dir_arg)
+        if str(out_dir).endswith("experiment_results") and not output_dir_arg:
+            out_dir = out_dir / "literature"
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "lit_reference_verification.csv"
         json_path = out_dir / "lit_reference_verification.json"

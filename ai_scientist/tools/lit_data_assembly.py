@@ -329,7 +329,7 @@ class LitDataAssemblyTool(BaseTool):
         """
         Resolve a fixed output directory for lit summaries using the canonical run folder.
         """
-        return BaseTool.resolve_output_dir(None)
+        return BaseTool.resolve_output_dir(None) / "literature"
 
     def use_tool(self, **kwargs: Any) -> Dict[str, Any]:
         out_dir = self._resolve_out_dir()

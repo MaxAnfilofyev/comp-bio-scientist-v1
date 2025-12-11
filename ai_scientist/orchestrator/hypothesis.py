@@ -201,7 +201,12 @@ def resolve_lit_summary_path(path: Optional[str]) -> Path:
     if path:
         return BaseTool.resolve_input_path(path)
     exp_dir = BaseTool.resolve_output_dir(None)
-    for candidate in (exp_dir / "lit_summary.json", exp_dir / "lit_summary.csv"):
+    for candidate in (
+        exp_dir / "literature" / "lit_summary.json",
+        exp_dir / "literature" / "lit_summary.csv",
+        exp_dir / "lit_summary.json",
+        exp_dir / "lit_summary.csv",
+    ):
         if candidate.exists():
             return candidate
     raise FileNotFoundError("lit_summary.json/csv not found under experiment_results.")
@@ -212,6 +217,8 @@ def resolve_verification_path(path: Optional[str]) -> Path:
         return BaseTool.resolve_input_path(path)
     exp_dir = BaseTool.resolve_output_dir(None)
     for candidate in (
+        exp_dir / "literature" / "lit_reference_verification.json",
+        exp_dir / "literature" / "lit_reference_verification.csv",
         exp_dir / "lit_reference_verification.json",
         exp_dir / "lit_reference_verification.csv",
     ):
@@ -514,7 +521,7 @@ def ensure_model_spec_and_params(model_key: str) -> Dict[str, Any]:
     exp_dir = BaseTool.resolve_output_dir(None)
     spec_path, _, _ = resolve_output_path(
         subdir="models",
-        name=f"{model_key}_spec.yaml",
+        name=f"{model_key}_spec_v1.json",
         run_root=exp_dir,
         allow_quarantine=False,
         unique=False,

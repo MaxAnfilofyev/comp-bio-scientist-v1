@@ -92,7 +92,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     write_interpretation_text,
     write_pi_notes,
     write_text_artifact,
-    write_registered_artifact,
+    # write_registered_artifact,
     format_list_field,
     create_lit_summary_artifact,
     create_claim_graph_artifact,
@@ -103,7 +103,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     create_transport_artifact,
     create_sensitivity_table_artifact,
     create_intervention_table_artifact,
-    create_verification_note_artifact,
+    # create_verification_note_artifact,
     list_model_specs,
     get_latest_model_spec,
     list_experiment_results,
@@ -874,7 +874,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "```\\n\\n"
             "✓ **GOOD - Concrete paths**:\\n"
             "```\\n"
-            "modeler(task='Run experiment E1 (bifurcation). Use model_spec at experiment_results/model_spec_v1.json. "
+            "modeler(task='Run experiment E1 (bifurcation). Use model_spec at experiment_results/models/model_spec_v1.json. "
             "Output to experiment_results/simulations/E1/. Compute metrics, update hypothesis_trace.')\\n"
             "```\\n\\n"
             "✗ **BAD - Vague delegation**:\\n"

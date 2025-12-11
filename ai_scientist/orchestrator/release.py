@@ -387,7 +387,7 @@ def freeze_release(tag: str, description: str = "", include_large_artifacts: boo
     key_sources = [
         base_root / "project_knowledge.md",
         exp_dir / "hypothesis_trace.json",
-        exp_dir / "claim_graph.json",
+        BaseTool.resolve_input_path("claim_graph.json", must_exist=False),
         prov_path,
     ]
     manifest_sources = _collect_manifest_artifacts(exp_dir)

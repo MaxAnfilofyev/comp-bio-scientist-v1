@@ -117,6 +117,19 @@ class BaseTool(ABC):
                 candidates.append(Path(base) / p)
                 candidates.append(Path(base) / default_subdir / p.name)
                 candidates.append(Path(base) / p.name)
+        
+        # Check canonical subdirectories for specific known types
+        # This handles cases where tools look for "binary_tree_X.gpickle" or "lit_summary.json"
+        # without knowing they've been moved to morphologies/ or literature/
+        if default_subdir == "experiment_results":
+             if env_dir:
+                 candidates.append(Path(env_dir) / "morphologies" / p.name)
+                 candidates.append(Path(env_dir) / "literature" / p.name)
+                 candidates.append(Path(env_dir) / "models" / p.name)
+             if base:
+                 candidates.append(Path(base) / "experiment_results" / "morphologies" / p.name)
+                 candidates.append(Path(base) / "experiment_results" / "literature" / p.name)
+                 candidates.append(Path(base) / "experiment_results" / "models" / p.name)
 
         for cand in candidates:
             if cand.exists():

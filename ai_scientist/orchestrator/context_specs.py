@@ -280,7 +280,9 @@ def active_role() -> str:
 
 def _context_log_path() -> Path:
     exp_dir = BaseTool.resolve_output_dir(None)
-    return Path(exp_dir) / "context_usage.log"
+    if exp_dir.name == "experiment_results":
+        return exp_dir.parent / "context_usage.log"
+    return exp_dir / "context_usage.log"
 
 
 def record_context_access(

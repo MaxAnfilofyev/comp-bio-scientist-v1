@@ -2849,7 +2849,7 @@ def create_model_spec_artifact(model_key: str, content_json: str):
     # Modeler also has `write_text_artifact` in its tool list.
     
     return reserve_and_register_artifact(
-        kind="parameter_set",
+        kind="model_spec",
         meta_json=json.dumps(meta),
         status="pending", # Modeler will write it next
         unique=True
@@ -2860,35 +2860,29 @@ def create_model_spec_artifact(model_key: str, content_json: str):
 def save_model_spec(model_key: str, content_json: str, readme: str):
     """
     Save a model specification and its readme.
-    Writes to experiment_results/model_params/params_{model_key}.json and params_{model_key}_readme.txt.
+    Writes to experiment_results/models/{model_key}_spec_{version}.json and a readme note.
     """
     # 1. Access the content
     try:
-        content_dict = json.loads(content_json)
+        json.loads(content_json)
     except json.JSONDecodeError as e:
         return {"error": f"Invalid content_json: {e}"}
 
     # 2. Reserve and write the JSON
     # We use reserve_and_register to get path, then write.
-    # But wait, create_model_spec_artifact was supposed to do reservation.
-    # If we want to COMBINE them (as per plan "Combines reservation and writing"), we should do it here.
     
-    # Let's reuse create_model_spec_artifact logic but also write.
-    # Actually, create_model_spec_artifact calls reserve_and_register_artifact.
-    # We can just call reserve_and_register directly here or use create_model_spec_artifact.
-    
-    # Using reserve_and_register_artifact for params JSON
+    # Using reserve_and_register_artifact for model_spec JSON
     meta_json = {
-        "name": model_key, 
+        "model_key": model_key, 
         "module": "modeling", 
         "summary": f"Model specification for {model_key}"
     }
     
     # We need to construct the artifact entry manually or use reserve_and_register
-    # Kind: parameter_set -> patterns: params_{name}.json
+    # Kind: model_spec -> patterns: {model_key}_spec_{version}.json
     
     res_json = reserve_and_register_artifact(
-        kind="parameter_set",
+        kind="model_spec",
         meta_json=json.dumps(meta_json),
         unique=True
     )
@@ -2921,7 +2915,7 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     readme_name = base_name.replace(".json", "_readme.txt")
     readme_path = os.path.join(dir_name, readme_name)
     
-    write_res_readme = write_text_artifact(name=readme_path, content=readme)
+    write_text_artifact(name=readme_path, content=readme)
     
     return {
         "status": "success",
@@ -3043,7 +3037,7 @@ def read_literature_context(include_summary: bool = True, include_refs: bool = T
         # We can check if file exists at expected location?
         
         # Use manifest utils?
-        from .artifacts import _get_latest_artifact_entry
+        pass
         # If we can't import private, better to rely on known path structure ENFORCED by Archivist.
         
         # Archivist creates "lit_summary_main" at "experiment_results/literature/lit_summary.json".

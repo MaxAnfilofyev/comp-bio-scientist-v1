@@ -40,7 +40,35 @@ class ClaimGraphTool(BaseTool):
         status: str = "unlinked",
         notes: str = "",
     ) -> Dict[str, Any]:
-        p = Path(path)
+        # Resolve path canonically
+        if not path or path == "claim_graph.json":
+             path = "claim_graph.json"
+             # Resolving input path will check canonical dirs. 
+             # But for creation we want to ensure it goes to literature if likely new/default
+             out_dir = BaseTool.resolve_output_dir(None) / "literature"
+             p = out_dir / "claim_graph.json"
+             # If that doesn't exist but we have one elsewhere that resolve_input_path finds, we might want that?
+             # Actually, we want to ENFORCE location.
+             if not p.exists():
+                 # checking if it exists elsewhere to migrate?
+                 try:
+                     existing = BaseTool.resolve_input_path("claim_graph.json", must_exist=True, default_subdir="literature")
+                     p = existing
+                 except FileNotFoundError:
+                     pass
+        else:
+             p = Path(path)
+             if not p.is_absolute():
+                 # If relative, anchor to literature if simple filename, else trust caller?
+                 # Safest is to use standard resolution
+                 try:
+                      p = BaseTool.resolve_input_path(path, must_exist=False, default_subdir="literature")
+                 except Exception:
+                      p = BaseTool.resolve_output_dir(None) / "literature" / path
+        
+        # Ensure parent exists
+        p.parent.mkdir(parents=True, exist_ok=True)
+        
         graph: List[Dict[str, Any]] = []
         if p.exists():
             try:
