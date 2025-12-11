@@ -2709,3 +2709,101 @@ def create_model_spec_artifact(model_key: str, content_json: str):
         unique=True
     )
 
+
+@function_tool
+def create_plot_artifact(
+    kind: Literal["plot_intermediate", "manuscript_figure_png", "manuscript_figure_svg"],
+    figure_name: str,
+    change_summary: str = "",
+    metadata_json: Optional[str] = None
+):
+    """
+    Create a registered plot artifact.
+    kind: Must be one of 'plot_intermediate', 'manuscript_figure_png', 'manuscript_figure_svg'.
+    figure_name: Base name for the figure (e.g. 'fig_1').
+    """
+    if kind not in ["plot_intermediate", "manuscript_figure_png", "manuscript_figure_svg"]:
+        return {"error": f"Invalid plot kind '{kind}'. Must be one of: plot_intermediate, manuscript_figure_png, manuscript_figure_svg."}
+    
+    meta = {}
+    if metadata_json:
+        try:
+            meta = json.loads(metadata_json)
+        except Exception:
+            return {"error": "Invalid metadata_json"}
+            
+    if kind == "plot_intermediate":
+        if "slug" not in meta:
+            meta["slug"] = figure_name
+    elif kind.startswith("manuscript_figure"):
+        if "figure_id" not in meta:
+            clean_name = figure_name
+            if clean_name.startswith("fig_"):
+                clean_name = clean_name[4:]
+            meta["figure_id"] = clean_name
+            
+    return reserve_and_register_artifact(
+        kind=kind,
+        meta_json=json.dumps(meta),
+        change_summary=change_summary,
+        unique=True 
+    )
+
+@function_tool
+def publish_figure_to_manuscript_gallery(
+    artifact_id: str,
+    name_suffix: str = "",
+):
+    """
+    Publish a figure artifact to the manuscript gallery (experiment_results/figures_for_manuscript).
+    Wrapper around mirror_artifacts.
+    """
+    return mirror_artifacts(
+        src_paths=[artifact_id],
+        dest_dir="experiment_results/figures_for_manuscript",
+        mode="copy",
+        suffix=name_suffix
+    )
+
+@function_tool
+def list_available_runs_for_plotting(experiment_id: Optional[str] = None):
+    """
+    List available simulation runs specifically for plotting.
+    Filters the transport manifest for completed runs.
+    """
+    manifest_data = read_transport_manifest()
+    runs = manifest_data.get("runs", [])
+    valid_runs = []
+    if isinstance(runs, list):
+        for r in runs:
+            if isinstance(r, dict) and r.get("status") == "complete":
+                run_id = f"{r.get('baseline')}_transport_{r.get('transport')}_seed_{r.get('seed')}"
+                valid_runs.append(run_id)
+    return valid_runs
+
+@function_tool
+def get_metrics_for_plotting(experiment_id: Optional[str] = None, model_key: Optional[str] = None):
+    """
+    Find metrics artifacts (CSV/JSON) for a given model or experiment.
+    """
+    candidates = []
+    
+    r1 = list_artifacts_by_kind("model_metrics_json")
+    if isinstance(r1, dict):
+        candidates.extend(r1.get("paths", []) or [])
+    
+    r2 = list_artifacts_by_kind("model_metrics_csv")
+    if isinstance(r2, dict):
+        candidates.extend(r2.get("paths", []) or [])
+    
+    if model_key:
+        filtered = [str(c) for c in candidates if model_key in str(c)]
+        if filtered:
+            json_matches = [f for f in filtered if f.endswith(".json")]
+            if json_matches:
+                return json_matches[0]
+            return filtered[0]
+            
+    return None
+
+

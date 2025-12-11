@@ -106,6 +106,10 @@ from ai_scientist.orchestrator.tool_wrappers import (
     create_model_spec_artifact,
     read_experiment_config,
     read_metrics,
+    create_plot_artifact,
+    publish_figure_to_manuscript_gallery,
+    list_available_runs_for_plotting,
+    get_metrics_for_plotting,
 )
 
 
@@ -375,14 +379,14 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "1. Read data from provided input paths. Do NOT list files to find them; assume the path is correct.\n"
             "2. Assert that the data supports the hypothesis BEFORE plotting. If data contradicts hypothesis, report this back immediately.\n"
             "3. Generate PNG/SVG files using 'run_biological_plotting'. Use 'sim_postprocess' if you need failure_matrix/time_vector/node order from sim.json before plotting.\n"
-            "3b. Use the transport run manifest (read_transport_manifest / resolve_sim_path / update_transport_manifest) to decide what to plot or skip; resolve sim.json via resolve_sim_path instead of guessing paths, and error if the requested transport/seed is missing.\n"
-            "3c. After plotting, mirror outputs into experiment_results/figures_for_manuscript using 'mirror_artifacts' (use prefix/suffix if name collisions occur). Do not leave final plots only in nested subfolders.\n"
+            "3b. Use 'list_available_runs_for_plotting' to see what completed runs are available. Resolve sim.json via resolve_sim_path if needed.\n"
+            "3c. When a figure is final, call 'publish_figure_to_manuscript_gallery(artifact_id=...)' to mirror it to the manuscript folder. Do NOT manually copy/move files.\n"
             "3d. Before computing cluster/finite-size metrics, run validate_per_compartment_outputs on the sim folder; if per_compartment artifacts are missing or invalid, report and request rerun instead of plotting placeholders.\n"
             "3e. Update hypothesis_trace.json with figure filenames under the correct hypothesis/experiment after plotting.\n"
-            "3f. Prefer metrics artifacts (sweep_metrics_csv/model_metrics_json) over raw CSVs when plotting; if missing, ask Modeler to run compute_model_metrics.\n"
-            "3g. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
+            "3f. Use 'get_metrics_for_plotting' to find pre-computed metrics. Do NOT run compute_model_metrics yourself.\n"
+            "3g. Call 'create_plot_artifact' for any new figure (plot_intermediate/manuscript_figure_png/svg). Do not call reserve_typed_artifact directly for plots.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
-            "5. When calling 'append_manifest' or 'reserve_and_register_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
+            "5. When calling 'create_plot_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
             "7. When plots are ready, confirm provenance_summary.md exists or ask Reviewer to generate it.\n"
             f"7. {proof_of_work_instruction}\n"
@@ -390,35 +394,25 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"9. {reflection_instruction}"
         ),
         tools=[
-            get_run_paths,
-            resolve_path,
-            get_artifact_index,
-            list_artifacts,
-            list_artifacts_by_kind,
+            list_available_runs_for_plotting,
+            get_metrics_for_plotting,
+            create_plot_artifact,
+            publish_figure_to_manuscript_gallery,
+            create_verification_note_artifact,
             read_artifact,
             summarize_artifact,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            read_manifest_entry,
-            check_manifest,
-            check_manifest_unique_paths,
             read_transport_manifest,
-            resolve_baseline_path,
+            resolve_sim_path,
+            update_transport_manifest,
+            update_hypothesis_trace,
             run_biological_plotting,
             run_validation_compare,
             run_biological_stats,
             sim_postprocess,
-            run_transport_batch,
-            resolve_sim_path,
-            update_transport_manifest,
-            compute_model_metrics,
-            update_hypothesis_trace,
+            update_transport_manifest, # Duplicate? read_transport_manifest is there. update is needed for plot status/figure linkage? User said: "update_transport_manifest (only for plot status / figure linkage)" - wait, user said "Keep directly: update_transport_manifest". I will keep it.
             write_figures_readme,
             write_text_artifact,
             graph_diagnostics,
-            mirror_artifacts,
             read_npy_artifact,
             validate_per_compartment_outputs,
             manage_project_knowledge,
