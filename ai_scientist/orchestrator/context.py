@@ -17,7 +17,18 @@ def _fill_output_dir(output_dir: Optional[str]) -> str:
     if output_dir:
         if os.path.isabs(output_dir):
             return output_dir
-        anchored, _, _ = resolve_output_path(subdir=None, name=output_dir, allow_quarantine=False, unique=False)
+        # Fix: If agent provides "experiment_results/foo", strip the prefix to avoid
+        # "experiment_results/experiment_results/foo" via resolve_output_path.
+        clean_name = output_dir
+        if clean_name.startswith("experiment_results/") or clean_name == "experiment_results":
+            clean_name = clean_name.replace("experiment_results/", "", 1)
+            if clean_name == "experiment_results":
+                clean_name = ""
+        
+        if not clean_name:
+            return base
+
+        anchored, _, _ = resolve_output_path(subdir=None, name=clean_name, allow_quarantine=False, unique=False)
         return str(anchored)
     return base
 

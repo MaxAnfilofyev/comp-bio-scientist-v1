@@ -1048,7 +1048,7 @@ def verify_references(
 @function_tool
 def run_comp_sim(
     graph_path: Optional[str] = None,
-    output_dir: Optional[str] = None,
+    # output_dir removed from signature
     steps: int = 200,
     dt: float = 0.1,
     transport_rate: float = 0.05,
@@ -1076,9 +1076,14 @@ def run_comp_sim(
     except Exception:
         pass
     ensure_lit_gate_ready(skip_gate=skip_lit_gate)
+    
+    # Canonical path logic
+    sim_subdir = f"simulations/{experiment_id}" if experiment_id else f"simulations/adhoc_{seed}"
+    output_dir_path = _fill_output_dir(sim_subdir)
+
     res = RunCompartmentalSimTool().use_tool(
         graph_path=graph_path,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=output_dir_path,
         steps=steps,
         dt=dt,
         transport_rate=transport_rate,
@@ -1475,9 +1480,11 @@ def get_lit_recommendations(
 
 
 @function_tool
-def build_graphs(n_nodes: int = 100, output_dir: Optional[str] = None, seed: int = 0):
+def build_graphs(n_nodes: int = 100, seed: int = 0):
     """Generate canonical graphs (binary tree, heavy-tailed, random tree)."""
-    res = BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=_fill_output_dir(output_dir), seed=seed)
+    # Force canonical directory to prevent cluttering root
+    output_dir_path = _fill_output_dir("morphologies")
+    res = BuildGraphsTool().use_tool(n_nodes=n_nodes, output_dir=output_dir_path, seed=seed)
     for graph_type, paths in res.items():
         for k, v in paths.items():
             _append_manifest_entry(
@@ -2818,6 +2825,7 @@ def create_model_spec_artifact(model_key: str, content_json: str):
 
     meta = {
         "model_key": model_key,
+        "version": "v1",
         "module": "modeling",
         "content": content,
         "summary": f"Model specification for {model_key}"
@@ -2851,7 +2859,8 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     
     # Using reserve_and_register_artifact for model_spec JSON
     meta_json = {
-        "model_key": model_key, 
+        "model_key": model_key,
+        "version": "v1", 
         "module": "modeling", 
         "summary": f"Model specification for {model_key}"
     }
@@ -2867,7 +2876,7 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     if "error" in res_json:
         return res_json
 
-    path_json = res_json.get("path")
+    path_json = res_json.get("reserved_path")
     if not path_json:
          return {"error": "Failed to reserve path for model spec JSON."}
          
@@ -2918,7 +2927,7 @@ def save_verification_note(experiment_id: str, content: str):
     if "error" in res:
         return res
         
-    path = res.get("path")
+    path = res.get("reserved_path")
     if not path:
         return {"error": "Failed to reserve path for verification note."}
         
@@ -2976,7 +2985,7 @@ def save_simulation_metrics(experiment_id: str, metrics_json: str):
     if "error" in res:
         return res
     
-    path = res.get("path")
+    path = res.get("reserved_path")
     return write_text_artifact(name=path, content=metrics_json)
 
 
