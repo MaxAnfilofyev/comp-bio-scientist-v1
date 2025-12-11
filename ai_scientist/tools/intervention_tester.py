@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 
@@ -47,8 +47,8 @@ class RunInterventionTesterTool(BaseTool):
         self,
         graph_path: str,
         output_dir: str = "experiment_results",
-        transport_vals: List[float] | None = None,
-        demand_vals: List[float] | None = None,
+        transport_vals: Optional[List[float]] = None,
+        demand_vals: Optional[List[float]] = None,
         baseline_transport: float = 0.05,
         baseline_demand: float = 0.5,
         failure_threshold: float = 0.2,

@@ -1,6 +1,6 @@
 import csv
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 
@@ -49,8 +49,8 @@ class RunSensitivitySweepTool(BaseTool):
         self,
         graph_path: str,
         output_dir: str = "experiment_results",
-        transport_vals: List[float] | None = None,
-        demand_vals: List[float] | None = None,
+        transport_vals: Optional[List[float]] = None,
+        demand_vals: Optional[List[float]] = None,
         steps: int = 150,
         dt: float = 0.1,
         failure_threshold: float = 0.2,

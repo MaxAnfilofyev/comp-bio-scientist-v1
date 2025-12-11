@@ -1,12 +1,164 @@
-# pyright: reportMissingImports=false
-from pathlib import Path
-from typing import Any, Dict, List
+from __future__ import annotations
+
+import os
+import re
 import json
+from pathlib import Path
+from typing import Any, Dict, List, Iterable, Sequence, Optional, Union
+
+import matplotlib
+# Use a non-interactive backend for batch/scripted runs
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402  (import after backend selection)
+from matplotlib.figure import Figure
 import numpy as np
+from numpy.typing import NDArray
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.pathing import resolve_output_path
-from ai_scientist.perform_biological_plotting import BiologicalPlotter
+
+
+class BiologicalPlotter:
+    """Plotting utilities for computational biology models."""
+
+    def __init__(self, figures_dir: str = "figures"):
+        self.figures_dir = figures_dir
+        self._ensure_dir(self.figures_dir)
+
+    def _ensure_dir(self, path: str) -> None:
+        os.makedirs(path, exist_ok=True)
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Create a filesystem-friendly filename stem."""
+        if not name:
+            return "figure"
+        stem = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+        return stem or "figure"
+
+    def _save_fig(self, fig: Figure, filename: Optional[str]) -> str:
+        stem = self._sanitize_filename(filename or "figure")
+        path = os.path.join(self.figures_dir, f"{stem}.png")
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
+    def plot_time_series(
+        self,
+        time: Sequence[float],
+        trajectories: np.ndarray,
+        labels: Optional[Iterable[str]] = None,
+        title: str = "Time Series",
+        xlabel: str = "Time",
+        ylabel: str = "Value",
+        filename: Optional[str] = None,
+    ) -> str:
+        """Plot trajectories over time for multiple variables."""
+        arr = np.asarray(trajectories)
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        t = np.asarray(time)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        num_series = arr.shape[1]
+
+        if labels is None:
+            labels = [f"Series {i+1}" for i in range(num_series)]
+
+        for idx in range(num_series):
+            ax.plot(t, arr[:, idx], label=list(labels)[idx], linewidth=2)
+
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        return self._save_fig(fig, filename or title)
+
+    def plot_phase_portrait(
+        self,
+        x: Union[Sequence[float], NDArray[np.floating[Any]]],
+        y: Union[Sequence[float], NDArray[np.floating[Any]]],
+        title: str = "Phase Portrait",
+        xlabel: str = "Variable 1",
+        ylabel: str = "Variable 2",
+        filename: Optional[str] = None,
+        annotate_start: bool = True,
+        annotate_end: bool = True,
+    ) -> str:
+        """
+        Plot a 2D trajectory (e.g., cooperation vs. defection).
+
+        Args:
+            x: Values for the horizontal axis.
+            y: Values for the vertical axis.
+            annotate_start: Mark the starting point.
+            annotate_end: Mark the ending point.
+        """
+        x = np.asarray(x)
+        y = np.asarray(y)
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.plot(x, y, color="tab:blue", linewidth=2)
+
+        if annotate_start and len(x) > 0:
+            ax.scatter(x[0], y[0], color="green", s=60, label="start", zorder=3)
+        if annotate_end and len(x) > 0:
+            ax.scatter(x[-1], y[-1], color="red", s=60, label="end", zorder=3)
+
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        return self._save_fig(fig, filename or title)
+
+    def plot_bifurcation(
+        self,
+        params: Sequence[float],
+        observable: Sequence[float],
+        title: str = "Bifurcation Diagram",
+        xlabel: str = "Parameter",
+        ylabel: str = "Observable",
+        filename: Optional[str] = None,
+    ) -> str:
+        """Plot a simple bifurcation/parameter sweep curve."""
+        params_arr = np.asarray(params)
+        obs_arr = np.asarray(observable)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(params_arr, obs_arr, marker="o", linestyle="-", linewidth=2)
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        return self._save_fig(fig, filename or title)
+
+    def plot_heatmap(
+        self,
+        data: np.ndarray,
+        x_labels: Optional[Sequence[str]] = None,
+        y_labels: Optional[Sequence[str]] = None,
+        title: str = "Heatmap",
+        xlabel: str = "",
+        ylabel: str = "",
+        filename: Optional[str] = None,
+        cmap: str = "viridis",
+    ) -> str:
+        """Plot a heatmap (useful for parameter sweeps over two axes)."""
+        arr = np.asarray(data)
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(arr, aspect="auto", cmap=cmap, origin="lower")
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        if x_labels is not None:
+            ax.set_xticks(range(len(x_labels)))
+            ax.set_xticklabels(x_labels, rotation=45, ha="right")
+        if y_labels is not None:
+            ax.set_yticks(range(len(y_labels)))
+            ax.set_yticklabels(y_labels)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        return self._save_fig(fig, filename or title)
 
 
 class RunBiologicalPlottingTool(BaseTool):
@@ -94,6 +246,11 @@ class RunBiologicalPlottingTool(BaseTool):
                 variables = labels
             else:
                 data = np.array([])
+        
+        # If time is missing but we have steps, approximate
+        if time.size == 0 and data.size > 0:
+            # Try to guess DT or just use indices
+            time = np.arange(data.shape[0])
 
         if downsample > 1:
             time = time[::downsample]
@@ -142,8 +299,8 @@ class RunBiologicalPlottingTool(BaseTool):
                         "  <rect width='100%' height='100%' fill='white'/>",
                     ]
                     def _embed_image(img_path: Path, x: int) -> str:
-                        data = base64.b64encode(img_path.read_bytes()).decode("ascii")
-                        return f"  <image href='data:image/png;base64,{data}' x='{x}' y='0' width='600' height='600'/>"
+                        data_str = base64.b64encode(img_path.read_bytes()).decode("ascii")
+                        return f"  <image href='data:image/png;base64,{data_str}' x='{x}' y='0' width='600' height='600'/>"
                     svg_lines.append(_embed_image(ts_file, 0))
                     if pp_file.exists():
                         svg_lines.append(_embed_image(pp_file, 600))

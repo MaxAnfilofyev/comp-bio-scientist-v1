@@ -47,3 +47,4 @@ pandas  # Data manipulation for biological datasets
 requests  # API access to biological databases
 plotly  # Interactive biological visualizations
 seaborn  # Advanced statistical plotting for biological data
+# Updated during refactor

@@ -11,7 +11,8 @@ The `ai_scientist` root directory contains the primary entry points and stage-sp
   - **Tools**: Accesses literature via `SearchSemanticScholar` and `AssembleLitData` to ground ideas in reality.
 
 ### 2. Literature Assembly
-- **`perform_lit_data_assembly.py`**: The "Archivist" engine. It constructs the knowledge base for a run.
+- **Literature Search**: The `Archivist` agent uses `assemble_lit_data` (using `ai_scientist.tools.lit_data_assembly`) to search Semantic Scholar and aggregate results.
+se for a run.
   - **Key Features**:
     - **Semantic Scholar Integration**: Fetches paper metadata, abstracts, and citations.
     - **Deduplication**: Merges results from multiple queries and seeds.
@@ -20,12 +21,12 @@ The `ai_scientist` root directory contains the primary entry points and stage-sp
   - **Outputs**: `experiment_results/lit_summary.json` (and .csv).
 
 ### 3. Experiments & Modeling
-- **`perform_biological_modeling.py`**: Runs core biological simulations (e.g., compartmental models).
-- **`perform_biological_stats.py`**: Performs statistical analysis (enrichment, p-value adjustment).
-- **`perform_plotting.py`**: Aggregates results into figures. This is often an "LLM-assisted" step where the agent writes code to call this script.
+- **Biological Modeling**: The `Modeler` agent uses `run_biological_model` (using `ai_scientist.tools.biological_model`) to run simulations.
+- **Biological Stats**: The `Analyst` agent uses `run_biological_stats` (using `ai_scientist.tools.biological_stats`) for statistical analysis (enrichment, p-value adjustment).
+- **Biological Plotting**: The `Analyst` agent uses `run_biological_plotting` (using `ai_scientist.tools.biological_plotting`) to create plots from simulation outputs.
 
 ### 4. Interpretation & Writeup
-- **`perform_biological_interpretation.py`**: For theoretical runs, synthesizes findings into an `interpretation.md` document.
+- **Biological Interpretation**: The `Interpreter` agent uses `interpret_biology` (wrapping `ai_scientist.tools.biological_interpretation`) to synthesize findings into `interpretation.json` and `interpretation.md`.
 - **`perform_writeup.py`**: Compiles the final manuscript.
   - Generates LaTeX from templates (`blank_theoretical_biology_latex`, etc.).
   - Renders PDF using `pdflatex`.

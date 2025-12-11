@@ -48,7 +48,7 @@ from ai_scientist.tools.reference_verification import ReferenceVerificationTool
 from ai_scientist.tools.compute_model_metrics import ComputeModelMetricsTool
 
 from ai_scientist.perform_writeup import perform_writeup
-from ai_scientist.perform_biological_interpretation import interpret_biological_results
+from ai_scientist.tools.biological_interpretation import generate_biological_interpretation
 from ai_scientist.utils.notes import NOTE_NAMES, read_note_file, write_note_file, append_run_note
 from ai_scientist.utils.pathing import resolve_output_path
 from ai_scientist.utils.transport_index import resolve_transport_sim
@@ -1739,14 +1739,11 @@ def interpret_biology(base_folder: Optional[str] = None, config_path: Optional[s
     ]
     cfg = next((c for c in cfg_candidates if c and os.path.exists(c)), cfg_candidates[-1])
 
-    return {
-        "success": interpret_biological_results(
-            base_folder=base,
-            config_path=cfg,
-        ),
-        "base_folder": base,
-        "config_path": cfg,
-    }
+    result = generate_biological_interpretation(
+        base_folder=base,
+        config_path=cfg,
+    )
+    return result
 
 
 @function_tool

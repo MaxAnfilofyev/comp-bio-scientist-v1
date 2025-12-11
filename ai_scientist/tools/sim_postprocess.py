@@ -1,7 +1,7 @@
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -12,7 +12,7 @@ from ai_scientist.utils.pathing import resolve_output_path
 
 
 def export_sim_timeseries(
-    sim_json_path: Path | str,
+    sim_json_path: Union[Path, str],
     graph_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     failure_threshold: float = 0.2,

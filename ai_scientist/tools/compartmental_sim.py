@@ -3,7 +3,7 @@ import json
 import pickle
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Tuple, Union, Optional
 
 import networkx as nx
 import numpy as np
@@ -27,7 +27,7 @@ def _resolve_graph_path(p: Path) -> Path:
     return BaseTool.resolve_input_path(str(p), allow_dir=False)
 
 
-def load_graph(graph_path: Path | str) -> nx.Graph:
+def load_graph(graph_path: Union[Path, str]) -> nx.Graph:
     """
     Load a graph from common formats used in the project.
     """

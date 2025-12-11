@@ -235,11 +235,11 @@ Best experiment summaries (JSON):
         return None
 
 
-def interpret_biological_results(
+def generate_biological_interpretation(
     base_folder: str,
     config_path: str,
     model: str = "gpt-5.1-2025-11-13",
-) -> bool:
+) -> Dict[str, Any]:
     """
     Run a mathematical-biological interpretation phase for a given experiment.
 
@@ -247,16 +247,15 @@ def interpret_biological_results(
     - Loads the per-run config (including `biology` block),
     - Short-circuits for non-theoretical projects,
     - Loads idea text and experiment summaries,
-    - Calls an LLM to synthesize a structured interpretation, and
-    - Writes `interpretation.json` and `interpretation.md` into `base_folder`.
+    - Calls an LLM to synthesize a structured interpretation.
 
     Returns:
-        True if interpretation artifacts were successfully generated, else False.
+        Dict with "json" (Dict) and "markdown" (str) keys if successful.
+        Returns {"error": "..."} on failure or skip.
     """
     cfg_path = Path(config_path)
     if not cfg_path.exists():
-        print(f"Skipping interpretation: config not found at {cfg_path}")
-        return False
+        return {"error": f"Skipping interpretation: config not found at {cfg_path}"}
     try:
         cfg = load_cfg(cfg_path)
     except ConfigAttributeError:
@@ -264,20 +263,17 @@ def interpret_biological_results(
         print(f"Config at {config_path} missing expected keys (e.g., desc_file); using minimal config.")
         cfg = SimpleNamespace(biology=None)
     except Exception:
-        print(f"Failed to load config from: {config_path}")
         print(traceback.format_exc())
-        return False
+        return {"error": f"Failed to load config from: {config_path}"}
 
     biology = getattr(cfg, "biology", None)
     if biology is None or getattr(biology, "research_type", None) != "theoretical":
         # Interpretation phase is only defined for theoretical computational biology
-        print("Skipping biological interpretation (not a theoretical biology project).")
-        return False
+        return {"error": "Skipping biological interpretation (not a theoretical biology project)."}
 
     try:
         idea_text = load_idea_text(base_folder)
     except Exception:
-        print("Error loading idea text for interpretation:")
         print(traceback.format_exc())
         idea_text = ""
 
@@ -288,7 +284,6 @@ def interpret_biological_results(
             exp_summaries, step_name="writeup"
         )
     except Exception:
-        print("Error loading experiment summaries for interpretation:")
         print(traceback.format_exc())
         filtered_summaries = {}
 
@@ -300,29 +295,17 @@ def interpret_biological_results(
         model=model,
     )
     if interpretation is None:
-        print("Biological interpretation LLM call failed.")
-        return False
+        return {"error": "Biological interpretation LLM call failed."}
 
-    # Write JSON artifact
-    json_path = osp.join(base_folder, "interpretation.json")
-    try:
-        with open(json_path, "w") as f:
-            json.dump(interpretation, f, indent=2)
-    except Exception:
-        print("Error writing interpretation.json:")
-        print(traceback.format_exc())
-        return False
-
-    # Write markdown narrative
-    md_path = osp.join(base_folder, "interpretation.md")
+    # Generate markdown narrative
     try:
         md_text = _interpretation_to_markdown(interpretation)
-        with open(md_path, "w") as f:
-            f.write(md_text)
-    except Exception:
-        print("Error writing interpretation.md:")
+    except Exception as e:
         print(traceback.format_exc())
-        return False
+        return {"error": f"Error generating markdown: {e}"}
 
-    print(f"Biological interpretation written to:\n- {json_path}\n- {md_path}")
-    return True
+    return {
+        "json": interpretation,
+        "markdown": md_text,
+        "success": True
+    }

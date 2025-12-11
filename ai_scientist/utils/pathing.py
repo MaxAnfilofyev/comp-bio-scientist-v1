@@ -1,38 +1,11 @@
 import os
 import uuid
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
+# ...
 
-class ResolvedPath(Dict[str, object]):
-    """Dictionary style return for resolved output paths."""
-
-
-def _sanitize_relative(path: Path) -> Path:
-    cleaned_parts = []
-    for part in path.parts:
-        if part in {"", ".", "/"}:
-            continue
-        if part == "..":
-            raise ValueError("Path traversal ('..') is not allowed for outputs.")
-        cleaned_parts.append(part)
-    return Path(*cleaned_parts)
-
-
-def _make_unique(path: Path) -> Path:
-    if not path.exists():
-        return path
-    stem = path.stem
-    suffix = path.suffix
-    parent = path.parent
-    for _ in range(32):
-        candidate = parent / f"{stem}__{uuid.uuid4().hex[:8]}{suffix}"
-        if not candidate.exists():
-            return candidate
-    return parent / f"{stem}__{uuid.uuid4().hex}{suffix}"
-
-
-def _resolve_output_root(run_root: Path | None = None) -> Path:
+def _resolve_output_root(run_root: Optional[Path] = None) -> Path:
     """
     Resolve a base output directory without importing BaseTool to avoid circular imports.
     Prefers (in order): provided run_root, AISC_EXP_RESULTS, AISC_BASE_FOLDER/experiment_results, then relative experiment_results.
@@ -49,14 +22,14 @@ def _resolve_output_root(run_root: Path | None = None) -> Path:
 
 
 def resolve_output_path(
-    subdir: str | None,
+    subdir: Optional[str],
     name: str,
     *,
-    run_root: Path | None = None,
+    run_root: Optional[Path] = None,
     create: bool = True,
     allow_quarantine: bool = True,
     unique: bool = True,
-) -> Tuple[Path, bool, str | None]:
+) -> Tuple[Path, bool, Optional[str]]:
     """
     Resolve an output path anchored to experiment_results, rejecting traversal and auto-creating parents.
     Returns (path, quarantined, note).

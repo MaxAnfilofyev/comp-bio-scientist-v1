@@ -482,7 +482,7 @@ def _model_metadata_from_key(model_key: str) -> Dict[str, Any]:
     params: Dict[str, Any] = {}
     initial_conditions: Dict[str, Any] = {}
     try:
-        from ai_scientist.perform_biological_modeling import create_sample_models
+        from ai_scientist.tools.biological_model import create_sample_models
 
         models = create_sample_models()
         model = models.get(model_key)

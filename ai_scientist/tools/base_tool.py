@@ -1,8 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List
-
+from typing import Any, Dict, List, Optional, Union
 
 class BaseTool(ABC):
     """
@@ -25,7 +24,7 @@ class BaseTool(ABC):
         self.parameters = parameters
 
     @staticmethod
-    def resolve_output_dir(output_dir: str | None, default: str = "experiment_results") -> Path:
+    def resolve_output_dir(output_dir: Optional[str], default: str = "experiment_results") -> Path:
         """
         Resolve an output directory, preferring the orchestrator-provided env var when present.
         Falls back to the caller-provided path, then a project-relative default.

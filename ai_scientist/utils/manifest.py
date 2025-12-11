@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.utils.health import log_missing_or_corrupt
@@ -18,7 +18,7 @@ def _iso_now() -> str:
     return datetime.now().isoformat()
 
 
-def _manifest_paths(base_folder: Optional[str | Path]) -> Tuple[Path, Path, Path, Path, Path]:
+def _manifest_paths(base_folder: Optional[Union[str, Path]]) -> Tuple[Path, Path, Path, Path, Path]:
     """
     Resolve manifest directories relative to the active run.
     """
@@ -151,7 +151,7 @@ def _normalize_v2_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return norm
 
 
-def unique_path_check(*, base_folder: Optional[str | Path] = None) -> Dict[str, Any]:
+def unique_path_check(*, base_folder: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
     """
     Return counts for total vs distinct paths to ensure manifest deduplication.
     """
@@ -334,7 +334,7 @@ def _migrate_legacy_manifest(legacy_path: Path, manifest_dir: Path, index: Dict[
     return None
 
 
-def bootstrap_manifest(base_folder: Optional[str | Path] = None, shard_size: int = DEFAULT_SHARD_SIZE) -> Dict[str, Any]:
+def bootstrap_manifest(base_folder: Optional[Union[str, Path]] = None, shard_size: int = DEFAULT_SHARD_SIZE) -> Dict[str, Any]:
     """
     Ensure manifest/index exist; migrate legacy file_manifest.json if present.
     """
@@ -395,7 +395,7 @@ def _active_shard(index: Dict[str, Any], manifest_dir: Path, shard_size: int) ->
 def append_manifest_entry(
     entry: Dict[str, Any],
     *,
-    base_folder: Optional[str | Path] = None,
+    base_folder: Optional[Union[str, Path]] = None,
     shard_size: Optional[int] = None,
     dedupe_key: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -408,7 +408,7 @@ def append_manifest_entry(
 def append_or_update(
     entry: Dict[str, Any],
     *,
-    base_folder: Optional[str | Path] = None,
+    base_folder: Optional[Union[str, Path]] = None,
     shard_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
@@ -528,7 +528,7 @@ def _iter_entries(
 
 def inspect_manifest(
     *,
-    base_folder: Optional[str | Path] = None,
+    base_folder: Optional[Union[str, Path]] = None,
     role: Optional[str] = None,
     path_glob: Optional[str] = None,
     since: Optional[str] = None,
@@ -587,7 +587,7 @@ def inspect_manifest(
     }
 
 
-def find_manifest_entry(path_or_name: str, *, base_folder: Optional[str | Path] = None) -> Optional[Dict[str, Any]]:
+def find_manifest_entry(path_or_name: str, *, base_folder: Optional[Union[str, Path]] = None) -> Optional[Dict[str, Any]]:
     """
     Locate a single manifest entry by exact path or basename. Returns latest match.
     """
@@ -602,7 +602,7 @@ def find_manifest_entry(path_or_name: str, *, base_folder: Optional[str | Path] 
 
 def load_entries(
     *,
-    base_folder: Optional[str | Path] = None,
+    base_folder: Optional[Union[str, Path]] = None,
     limit: Optional[int] = None,
     role: Optional[str] = None,
     path_glob: Optional[str] = None,
