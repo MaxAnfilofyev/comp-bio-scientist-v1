@@ -240,6 +240,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "implementation_plan.md",
         "description": "Structured implementation plan: experiments, tasks, owners, status, and links to artifacts.",
     },
+    "implementation_plan_state_json": {
+        "rel_dir": "experiment_results",
+        "pattern": "implementation_plan_state.json",
+        "description": "Machine-readable implementation plan state: experiments, tasks, decisions.",
+    },
 }
 
 

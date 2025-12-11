@@ -3136,6 +3136,27 @@ def update_implementation_plan_from_state(
         tasks_data = json.loads(tasks_json)
         decisions_data = json.loads(decisions_json)
         
+        # Backward compatibility: convert string fields to lists
+        for exp in experiments_data:
+            # Convert inputs to list if it's a string
+            if isinstance(exp.get("inputs"), str):
+                exp["inputs"] = [s.strip() for s in exp["inputs"].split(",") if s.strip()]
+            elif not isinstance(exp.get("inputs"), list):
+                exp["inputs"] = []
+            
+            # Convert outputs to list if it's a string
+            if isinstance(exp.get("outputs"), str):
+                exp["outputs"] = [s.strip() for s in exp["outputs"].split(",") if s.strip()]
+            elif not isinstance(exp.get("outputs"), list):
+                exp["outputs"] = []
+        
+        for task in tasks_data:
+            # Convert linked_artifacts to list if it's a string
+            if isinstance(task.get("linked_artifacts"), str):
+                task["linked_artifacts"] = [s.strip() for s in task["linked_artifacts"].split(",") if s.strip()]
+            elif not isinstance(task.get("linked_artifacts"), list):
+                task["linked_artifacts"] = []
+        
         # Convert to dataclasses
         experiments = [ExperimentPlan(**exp) for exp in experiments_data]
         tasks = [TaskPlan(**task) for task in tasks_data]
