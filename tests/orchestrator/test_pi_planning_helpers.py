@@ -297,6 +297,33 @@ class TestPIPlanningHelpers(unittest.TestCase):
         inbox_content = inbox_path.read_text()
         self.assertIn("Modeling phase started", inbox_content)
 
+    def test_pi_run_without_writer_tools_creates_inbox_entry(self) -> None:
+        """
+        Integration test: Simulate a PI run that only calls read-only tools.
+        Verify that user_inbox.md gets created with the final message.
+        """
+        from ai_scientist.orchestrator.pi_orchestration import (
+            enforce_pi_writer_tools,
+            ToolCallRecord,
+        )
+        
+        final_message = "I analyzed the project state and found 3 missing artifacts."
+        tool_calls = [
+            ToolCallRecord(name="check_project_state", arguments={}),
+            ToolCallRecord(name="list_artifacts", arguments={"kind": "lit_summary"}),
+        ]
+        
+        # Execute enforcement
+        enforce_pi_writer_tools(self.base, final_message, tool_calls)
+        
+        # Verify user_inbox.md was created
+        inbox_path = self.exp / "user_inbox.md"
+        self.assertTrue(inbox_path.exists(), "user_inbox.md should be created")
+        
+        content = inbox_path.read_text()
+        self.assertIn("Status Update", content)
+        self.assertIn(final_message, content)
+
 
 if __name__ == "__main__":
     unittest.main()

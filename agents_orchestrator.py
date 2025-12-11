@@ -4,6 +4,7 @@ import os
 import os.path as osp
 from datetime import datetime
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 try:
@@ -53,6 +54,11 @@ from ai_scientist.orchestrator.manuscript_processor import (
 )
 
 from ai_scientist.orchestrator.agents import build_team
+
+from ai_scientist.orchestrator.pi_orchestration import (
+    enforce_pi_writer_tools,
+    ToolCallRecord,
+)
 
 # Cached idea for hypothesis trace bootstrapping
 _ACTIVE_IDEA: Optional[Dict[str, Any]] = None
@@ -239,12 +245,26 @@ def main():
 
     # Execution with Robust Timeout
     async def run_lab():
-        return await Runner.run(
+        result = await Runner.run(
             pi_agent, 
             input=initial_prompt, 
             context={"work_dir": base_folder}, 
             max_turns=args.max_cycles
         )
+        
+        # Enforce writer tool usage
+        try:
+            final_message = _extract_final_message(result)
+            tool_calls = _extract_tool_calls(result)
+            enforce_pi_writer_tools(
+                run_root=Path(base_folder),
+                final_message=final_message,
+                tool_calls=tool_calls
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to enforce writer tools: {e}")
+        
+        return result
 
     try:
         result = asyncio.run(asyncio.wait_for(run_lab(), timeout=args.timeout))
@@ -261,5 +281,47 @@ def main():
         with open(osp.join(base_folder, "error_log.txt"), "w") as f:
             f.write(str(e))
 
+def _extract_final_message(result: RunResult) -> str:
+    """Extract the final assistant message from a RunResult."""
+    # Try various fields that might contain the final message
+    if hasattr(result, "final_output") and result.final_output:
+        return str(result.final_output)
+    if hasattr(result, "output") and result.output:
+        return str(result.output)
+    if hasattr(result, "messages") and result.messages:
+        last_msg = result.messages[-1]
+        if hasattr(last_msg, "content"):
+            return str(last_msg.content)
+        if isinstance(last_msg, dict):
+            return str(last_msg.get("content", ""))
+    return str(result)
+
+
+def _extract_tool_calls(result: RunResult) -> list[ToolCallRecord]:
+    """Extract tool calls from a RunResult."""
+    tool_calls: list[ToolCallRecord] = []
+    
+    if hasattr(result, "new_items"):
+        for item in result.new_items or []:
+            tool_name = None
+            tool_args = {}
+            
+            if hasattr(item, "tool_name"):
+                tool_name = item.tool_name
+                tool_args = getattr(item, "tool_input", {}) or {}
+            elif isinstance(item, dict):
+                tool_name = item.get("tool_name")
+                tool_args = item.get("tool_input", {}) or {}
+            
+            if tool_name:
+                tool_calls.append(ToolCallRecord(
+                    name=str(tool_name),
+                    arguments=tool_args if isinstance(tool_args, dict) else {}
+                ))
+    
+    return tool_calls
+
+
 if __name__ == "__main__":
     main()
+

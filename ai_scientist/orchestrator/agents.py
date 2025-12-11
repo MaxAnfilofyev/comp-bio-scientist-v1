@@ -633,7 +633,13 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "7. PROMOTION & END OF RUN: Review major artifacts. If they are final/valid, call 'promote_artifact_to_canonical(name=..., kind=..., notes=...)' to lock them. Check for stale dependencies via 'check_dependency_staleness' before promoting.\n"
             "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated. Before stopping, call 'generate_project_snapshot' to create a human-readable summary.\n"
             "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest.\n"
-            "10. STATUS PERSISTENCE: Whenever you provide a human-readable status update or plan in your reply, also call 'log_status_to_user_inbox' to append a concise version to user_inbox.md so the user sees it outside the chat."
+            "10. STATUS PERSISTENCE (HARD REQUIREMENT):\n"
+            "   - Chat messages are ephemeral and are NOT read by the user or by future agent calls.\n"
+            "   - If you want the user or future PI to know something, you MUST write it to a file via tools.\n"
+            "   - After ANY nontrivial reasoning or planning, you must:\n"
+            "     1) Update the implementation plan via 'update_implementation_plan_from_state' if your decisions changed the plan, and\n"
+            "     2) Call 'log_status_to_user_inbox' with a concise status_block summarizing what you did and what should happen next.\n"
+            "   - If you do not call at least one of these tools, your work will be treated as LOST by the system."
         ),
         model=model,
         tools=[
