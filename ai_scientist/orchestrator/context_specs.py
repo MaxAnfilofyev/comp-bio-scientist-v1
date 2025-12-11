@@ -270,6 +270,7 @@ def record_context_access(
     path: Optional[str],
     access_type: str,
     artifact_id: Optional[str] = None,
+    version: Optional[str] = None,
 ) -> None:
     log_entry = {
         "timestamp": datetime.utcnow().isoformat(),
@@ -278,6 +279,7 @@ def record_context_access(
         "kind": kind,
         "path": path,
         "artifact_id": artifact_id,
+        "version": version,
     }
     log_path = _context_log_path()
     try:
@@ -286,6 +288,61 @@ def record_context_access(
             fh.write(json.dumps(log_entry) + "\n")
     except Exception:
         pass  # best effort logging
+    
+    _update_role_status(role, access_type, kind, path, artifact_id, version)
+
+
+def _update_role_status(
+    role: str, 
+    access_type: str, 
+    kind: Optional[str], 
+    path: Optional[str], 
+    artifact_id: Optional[str],
+    version: Optional[str]
+) -> None:
+    if not role or role == "unknown":
+        return
+    
+    exp_dir = Path(BaseTool.resolve_output_dir(None))
+    status_dir = exp_dir / "_status"
+    try:
+        status_dir.mkdir(parents=True, exist_ok=True)
+        status_file = status_dir / f"status_{role}.json"
+        
+        # Simple atomic-ish update: read, update, write
+        # In high concurrency this might race, but for single-threaded agent steps it's okay.
+        # We rely on filesystem lock or just hope for best in this prototype.
+        
+        data = {"role": role, "read": {}, "written": {}, "updated_at": datetime.utcnow().isoformat()}
+        if status_file.exists():
+            try:
+                with open(status_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass 
+        
+        # We track unique artifacts by path or ID.
+        # Key = path (since ID might be missing for some reads)
+        key = path or artifact_id or "unknown"
+        val = {
+            "kind": kind,
+            "id": artifact_id,
+            "version": version,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        if "read" in access_type:
+            data.setdefault("read", {})[key] = val
+        elif "write" in access_type:
+            data.setdefault("written", {})[key] = val
+            
+        data["updated_at"] = datetime.utcnow().isoformat()
+        
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            
+    except Exception:
+        pass
 
 
 def ensure_write_permission(kind: str, role: str) -> tuple[bool, Optional[str]]:

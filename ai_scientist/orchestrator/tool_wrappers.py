@@ -160,6 +160,17 @@ def promote_artifact_to_canonical(name: str, kind: str, notes: str = ""):
     return _promote(name, kind, notes)
 
 @function_tool
+def check_dependency_staleness(artifact_name: str):
+    from ai_scientist.orchestrator.integrity import check_dependency_staleness as _check
+    return json.dumps(_check(artifact_name))
+
+@function_tool
+def generate_project_snapshot():
+    from ai_scientist.orchestrator.snapshots import generate_project_snapshot as _gen
+    return _gen()
+
+
+@function_tool
 def read_manifest_entry(path_or_name: str):
     from .manifest_service import read_manifest_entry as raw_read_manifest_entry
     return raw_read_manifest_entry(path_or_name)

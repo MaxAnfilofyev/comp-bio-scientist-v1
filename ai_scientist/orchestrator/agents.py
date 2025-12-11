@@ -46,6 +46,8 @@ from ai_scientist.orchestrator.tool_wrappers import (
     manage_project_knowledge,
     mirror_artifacts,
     promote_artifact_to_canonical,
+    check_dependency_staleness,
+    generate_project_snapshot,
     read_artifact,
     read_manifest,
     read_manifest_entry,
@@ -613,8 +615,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "   - Validated & Ready -> Publisher\n"
             "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
             "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
-            "7. PROMOTION & END OF RUN: Review major artifacts. If they are final/valid, call 'promote_artifact_to_canonical(name=..., kind=..., notes=...)' to lock them. Then write a concise summary and next actions using 'write_pi_notes'.\n"
-            "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated.\n"
+            "7. PROMOTION & END OF RUN: Review major artifacts. If they are final/valid, call 'promote_artifact_to_canonical(name=..., kind=..., notes=...)' to lock them. Check for stale dependencies via 'check_dependency_staleness' before promoting.\n"
+            "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated. Before stopping, call 'generate_project_snapshot' to create a human-readable summary.\n"
             "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest."
         ),
         model=model,
@@ -640,6 +642,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             read_note,
             write_pi_notes,
             promote_artifact_to_canonical,
+            check_dependency_staleness,
+            generate_project_snapshot,
             manage_project_knowledge,
             scan_transport_manifest,
             read_transport_manifest,

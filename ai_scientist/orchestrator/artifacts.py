@@ -115,6 +115,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "sweep__{label}.csv",
         "description": "Sensitivity sweep CSV output.",
     },
+    "project_snapshot_md": {
+        "rel_dir": "experiment_results",
+        "pattern": "project_snapshot.md",
+        "description": "Full project snapshot summary.",
+    },
     "intervention_table": {
         "rel_dir": "experiment_results/simulations/interventions",
         "pattern": "intervention__{label}.csv",
@@ -328,7 +333,14 @@ def _reserve_typed_artifact_impl(
     result["metadata"] = normalized_meta
     if note:
         result["note"] = note
-    record_context_access(active_role(), kind, result["reserved_path"], "write", artifact_id=normalized_meta.get("id"))
+    record_context_access(
+        active_role(), 
+        kind, 
+        result["reserved_path"], 
+        "write", 
+        artifact_id=normalized_meta.get("id"),
+        version=normalized_meta.get("version")
+    )
     return result
 
 
