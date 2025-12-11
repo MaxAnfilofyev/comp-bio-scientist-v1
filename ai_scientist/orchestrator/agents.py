@@ -250,7 +250,7 @@ async def extract_run_output(run_result: RunResult) -> str:
 
 def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
     artifact_catalog = _artifact_kind_catalog()
-    common_settings = ModelSettings(tool_choice="auto")
+    common_settings = ModelSettings(tool_choice="auto")  # pyright: ignore[reportAnyInstantiation]
     role_max_turns = 40
     title = idea.get('Title', 'Project')
     abstract = idea.get('Abstract', '')
@@ -1048,7 +1048,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
                 custom_output_extractor=extract_run_output
             ),
         ],
-        model_settings=ModelSettings(tool_choice="required"),
+        model_settings=ModelSettings(tool_choice="required"),  # pyright: ignore[reportAnyInstantiation]
     )
 
     return pi
