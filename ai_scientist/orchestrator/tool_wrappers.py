@@ -2807,11 +2807,9 @@ def create_model_spec_artifact(model_key: str, content_json: str):
     Register a model specification (parameter_set).
     content_json: JSON string of the model parameters.
     """
-    # Assuming content_json is the file content.
-    # We need to wrap it in a meta dict for strict typing if needed, 
-    # but parameter_set uses {name}_params.json.
-    # meta needs "name" = model_key.
-    
+    # Sanitize model_key: remove path and extensions
+    model_key = os.path.basename(model_key).replace(".json", "")
+
     # Check if content_json is valid JSON?
     try:
         content = json.loads(content_json)
@@ -2819,34 +2817,11 @@ def create_model_spec_artifact(model_key: str, content_json: str):
         return {"error": f"Invalid content_json: {e}"}
 
     meta = {
-        "name": model_key,
+        "model_key": model_key,
         "module": "modeling",
         "content": content,
         "summary": f"Model specification for {model_key}"
     }
-    
-    # If the content is passed in meta['content'], artifacts system might handle it?
-    # reserve_typed_artifact just reserves the path. It doesn't write the content unless we use `write_to_file` or similar?
-    # Wait, reserve_and_register_artifact documentation says:
-    # "Preferred flow: 'reserve_and_register_artifact' -> write -> (optional) update status..."
-    # But `create_transport_artifact` I implemented just calls `reserve_typed_artifact`.
-    # Does Modeler write the file?
-    # Directive 5b: "Reserve every persistent artifact...".
-    # Directive 10 in Modeler (original): "Reserve every persistent artifact...".
-    
-    # If I use `create_model_spec_artifact`, should it write the file?
-    # Modeler usually: reserves, then writes.
-    # But if I wrap it, I can do both?
-    # `run_biological_model` does the simulation.
-    # For `parameter_set`, Modeler generates it.
-    
-    # If I follow the pattern: "create_X_artifact" returns artifact_id/path. Modeler then uses `write_text_artifact`?
-    # The Prompt says: "When writing text, pass the reserved path into write_text_artifact".
-    
-    # So `create_model_spec_artifact` should just reserve (and register).
-    # Since `parameter_set` is a JSON file, Modeler can use `write_text_artifact` or `write_file`?
-    # `write_text_artifact` is in the keep list: "write_text_artifact (for structured notes...)".
-    # Modeler also has `write_text_artifact` in its tool list.
     
     return reserve_and_register_artifact(
         kind="model_spec",
@@ -2862,6 +2837,9 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     Save a model specification and its readme.
     Writes to experiment_results/models/{model_key}_spec_{version}.json and a readme note.
     """
+    # Sanitize model_key: remove path and extensions
+    model_key = os.path.basename(model_key).replace(".json", "")
+
     # 1. Access the content
     try:
         json.loads(content_json)

@@ -254,9 +254,10 @@ class ReferenceVerificationTool(BaseTool):
         lit_path = self._resolve_lit_path(lit_path_arg)
         records = self._load_records(lit_path)
 
-        out_dir = BaseTool.resolve_output_dir(output_dir_arg)
-        if str(out_dir).endswith("experiment_results") and not output_dir_arg:
-            out_dir = out_dir / "literature"
+        if output_dir_arg:
+            out_dir = BaseTool.resolve_output_dir(output_dir_arg)
+        else:
+            out_dir = BaseTool.resolve_output_dir(None) / "literature"
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "lit_reference_verification.csv"
         json_path = out_dir / "lit_reference_verification.json"
