@@ -2445,17 +2445,26 @@ def read_archivist_artifact(name: str):
     
     kind = entry.get("kind")
     allowed_kinds = {
-        "lit_summary_main", 
-        "lit_summary_aux", 
+        "lit_summary_main",
+        "lit_summary_csv",
+        "lit_reference_verification_table",
+        "lit_reference_verification_json",
+        "lit_review_md",
+        "lit_bibliography_bib",
+        "lit_coverage_json",
+        "integration_memo_md",
         "claim_graph_main",
-        "task_spec",      # If needed for context
-        "project_brief"   # If needed for context
     }
     
     if kind not in allowed_kinds:
         return {
             "error": f"Permission denied: Archivist cannot read artifact kind '{kind}'. Allowed: {sorted(allowed_kinds)}"
         }
+        
+    if kind == "integration_memo_md":
+        # Enforce module='lit'
+        if entry.get("module") != "lit":
+            return {"error": "Permission denied: Archivist can only read integration memos for module='lit'."}
         
     # 2. Delegate to read_artifact
     return read_artifact(path=entry.get("path") or name)

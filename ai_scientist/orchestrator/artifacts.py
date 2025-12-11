@@ -45,6 +45,21 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "claim_graph.json",
         "description": "Claim graph JSON.",
     },
+    "lit_review_md": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_review.md",
+        "description": "Concise manuscript-style literature review text for the current experiment.",
+    },
+    "lit_bibliography_bib": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_bibliography.bib",
+        "description": "BibTeX bibliography for literature review and manuscript references.",
+    },
+    "lit_coverage_json": {
+        "rel_dir": "experiment_results",
+        "pattern": "lit_coverage.json",
+        "description": "Coverage metrics and top candidates for the literature verification process.",
+    },
     "graph_pickle": {
         "rel_dir": "experiment_results/graphs",
         "pattern": "{graph_id}.gpickle",

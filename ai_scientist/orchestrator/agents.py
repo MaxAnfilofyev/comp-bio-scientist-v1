@@ -118,6 +118,12 @@ from ai_scientist.orchestrator.tool_wrappers import (
     get_lit_reference_verification,
     check_references_completeness,
 )
+from ai_scientist.orchestrator.lit_tools import (
+    create_lit_review_artifact,
+    create_lit_bibliography_artifact,
+    create_lit_coverage_artifact,
+    create_lit_integration_memo_artifact,
+)
 
 
 def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
@@ -287,7 +293,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
-            "3. Use 'create_lit_summary_artifact(module=\"lit\")' and 'create_claim_graph_artifact(module=\"lit\")' to create new artifacts. Do NOT use generic reserve calls.\n"
+            "3. Use 'create_lit_summary_artifact(module=\"lit\")' and 'create_claim_graph_artifact(module=\"lit\")' to create new artifacts. Use 'create_lit_review_artifact', 'create_lit_bibliography_artifact', 'create_lit_coverage_artifact', 'create_lit_integration_memo_artifact' to persist respective outputs. Do NOT use generic reserve calls.\n"
             "4. Immediately run 'verify_references' on lit_summary to produce lit_reference_verification.csv/json. Treat this as REQUIRED provenance.\n"
             "5. Reject readiness if more than 20% of references are missing (found==False) or any match_score < 0.5; report FAILURE with counts.\n"
             "6. If verification repeatedly fails for a venue/source, log a reflection via manage_project_knowledge with the specific venue.\n"
@@ -305,6 +311,10 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             append_run_note_tool,
             create_lit_summary_artifact,
             create_claim_graph_artifact,
+            create_lit_review_artifact,
+            create_lit_bibliography_artifact,
+            create_lit_coverage_artifact,
+            create_lit_integration_memo_artifact,
             list_lit_summaries,
             list_claim_graphs,
             read_archivist_artifact,
