@@ -31,7 +31,22 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - `ai_scientist/orchestrator/tool_wrappers.py` now centralizes every `@function_tool` surface that role agents call. Each wrapper resolves canonical paths, gates operations via the dependence chain (lit/model/transport), pushes manifest entries, and exposes convenience helpers such as `inspect_manifest`, `reserve_typed_artifact`, `write_text_artifact`, and `append_run_note_tool`.
   - `ai_scientist/orchestrator/agents.py` builds the curated agent team used by `agents_orchestrator.py`. It pulls the wrapper tools, stitches the per-role instructions/prompts, and provides the PI agent with the same tooling surface plus `build_team()` and `extract_run_output()` helper methods so the orchestrator only manages flow and deployment.
   - `ai_scientist/orchestrator/pi_orchestration.py` enforces that every PI run persists at least one writer tool call. The PI agent has `tool_choice="required"` enabled, and the orchestrator wraps each run with `enforce_pi_writer_tools()` to ensure persistent writes. If the PI only calls read-only tools (e.g., `check_project_state`, `list_artifacts`), the enforcement hook automatically logs the final message to `user_inbox.md` (truncated to 4000 chars). Writer tools that satisfy the requirement: `update_implementation_plan_from_state`, `log_status_to_user_inbox`, `write_pi_notes`.
-  - Keep running `ruff check agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py ai_scientist/orchestrator/pi_orchestration.py` and `pyright agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py ai_scientist/orchestrator/pi_orchestration.py` after edits to keep the modularization healthy.
+  - `ai_scientist/orchestrator/pi_planning_helpers.py` provides **cumulative, merge-safe planning state** for the PI agent:
+    - **Dual-format state**: JSON (`implementation_plan_state.json`) is the canonical machine-readable state; markdown (`implementation_plan.md`) is a rendered human-readable view.
+    - **Merge semantics**: When PI calls `update_implementation_plan_from_state`, the system merges the new state into existing state rather than overwriting:
+      - Experiments/tasks are merged by ID (new overrides old for same ID, old entries preserved if not in new update)
+      - Decisions are concatenated and deduplicated
+      - Hypothesis/phase use new value if non-empty, else preserve old
+    - **Data model**: `ExperimentPlan`, `TaskPlan`, and `PlanState` dataclasses with JSON serialization (`to_dict()`, `from_dict()`)
+    - **Helper functions**:
+      - `get_or_create_implementation_plan(run_root)` - ensures both JSON and markdown exist
+      - `load_implementation_plan_state(run_root)` - loads JSON state
+      - `save_implementation_plan_state(run_root, state)` - saves JSON atomically
+      - `update_implementation_plan_from_state(plan_path, state)` - merges and saves both formats
+    - **Backward compatibility**: Tool wrapper converts string inputs/outputs to lists automatically
+    - **Migration**: Existing markdown-only plans get JSON state auto-created on first access
+    - **PI guidance**: Agent prompt explains that updates are cumulative deltas, not full replacements
+  - Keep running `ruff check agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py ai_scientist/orchestrator/pi_orchestration.py ai_scientist/orchestrator/pi_planning_helpers.py` and `pyright agents_orchestrator.py ai_scientist/orchestrator/tool_wrappers.py ai_scientist/orchestrator/agents.py ai_scientist/orchestrator/pi_orchestration.py ai_scientist/orchestrator/pi_planning_helpers.py` after edits to keep the modularization healthy.
 
 3. **Plot aggregation (`perform_plotting.py`)**
    - Aggregates plots from experiment results (LLM-assisted).
