@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Literal
 
 from ai_scientist.utils.health import log_missing_or_corrupt
 from ai_scientist.utils import manifest as manifest_utils
-from ai_scientist.utils.notes import append_run_note
 
 from agents import function_tool
 
@@ -211,7 +210,7 @@ def _load_manifest_map(manifest_path: Path) -> Dict[str, Dict[str, Any]]:
     return manifest_map
 
 
-def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
+def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False, change_summary: str = ""):
     from ai_scientist.tools.base_tool import BaseTool
     exp_dir = BaseTool.resolve_output_dir(None)
 
@@ -224,7 +223,7 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
 
     meta: Dict[str, Any] = {}
     if metadata_json:
-        if len(metadata_json) > 400:
+        if len(metadata_json) > 800:
             return {"error": "metadata_json too long; keep kind/created_by/status short", "raw_len": len(metadata_json)}
         try:
             parsed_meta = json.loads(metadata_json)
@@ -234,6 +233,9 @@ def _append_manifest_entry(name: str, metadata_json: Optional[str] = None, allow
                 return {"error": "metadata_json must be a JSON object", "raw": metadata_json}
         except Exception as exc:
             return {"error": f"Invalid metadata_json: {exc}", "raw": metadata_json}
+    
+    if change_summary:
+        meta["change_summary"] = change_summary
 
     path_str = str(target_path)
     name_only = os.path.basename(name or path_str)

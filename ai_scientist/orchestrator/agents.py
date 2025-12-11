@@ -45,6 +45,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     log_strategic_pivot,
     manage_project_knowledge,
     mirror_artifacts,
+    promote_artifact_to_canonical,
     read_artifact,
     read_manifest,
     read_manifest_entry,
@@ -312,7 +313,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "7. Use the transport run manifest (read_transport_manifest / update_transport_manifest); consult it before reruns and update it after completing or failing a run. Do not mark status=complete unless arrays + sim.json + sim.status.json all exist; otherwise mark partial and note missing files.\n"
             "7b. Resolve baselines via resolve_baseline_path before running batches; only pass graph baselines (.npy/.npz/.graphml/.gpickle/.gml), never sim.json.\n"
             "7c. Process one baseline per call; if run_recipe.json exists under experiment_results/simulations/transport_runs, load it for template/output roots instead of embedding long paths. Append ensemble CSV incrementally and write per-baseline status to pi_notes/user_inbox.\n"
-            "8. Before calling 'append_manifest', ask if appending new info to the artifact's record in the manifest adds new value (new file or materially new analysis/description). Log only when yes, with name + kind + created_by + status.\n"
+            "8. When calling 'append_manifest' or 'reserve_and_register_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
             "9. If you encounter simulation failures or parameter issues, log them to Project Knowledge via 'manage_project_knowledge'.\n"
             f"10. {proof_of_work_instruction}\n"
             "11. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
@@ -373,7 +374,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "3f. Prefer metrics artifacts (sweep_metrics_csv/model_metrics_json) over raw CSVs when plotting; if missing, ask Modeler to run compute_model_metrics.\n"
             "3g. Reserve figure and verification outputs via 'reserve_typed_artifact' (plot_intermediate/manuscript_figure_png/manuscript_figure_svg/verification_note); do NOT invent filenames or call reserve_output for figures.\n"
             "4. Validate models vs lit via 'run_validation_compare' and use 'run_biological_stats' for significance/enrichment.\n"
-            "5. Before calling 'append_manifest', ask if the artifact adds new value (new figure/analysis). Log only when yes, with name + kind + created_by + status.\n"
+            "5. When calling 'append_manifest' or 'reserve_and_register_artifact', provide a 'change_summary' if you are updating an existing artifact or creating a significant new version. Explain WHAT changed and WHY.\n"
             "6. Check Project Knowledge for visualization standards (e.g., colormaps) before starting.\n"
             "7. When plots are ready, confirm provenance_summary.md exists or ask Reviewer to generate it.\n"
             f"7. {proof_of_work_instruction}\n"
@@ -520,7 +521,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             f"{path_context}\n{path_guardrails}\n{metadata_reminder}\n{_context_spec_intro('Coder')}\n{_summary_advisory('Coder')}\n"
             "Directives:\n"
             "1. Use 'coder_create_python' to create/update files under the run root; do NOT write outside AISC_BASE_FOLDER.\n"
-            "2. If you add tools/helpers, document them briefly and log via 'append_manifest' (name + kind + created_by + status).\n"
+            "2. If you add tools/helpers, document them briefly and log via 'append_manifest' (name + kind + created_by + status). Include 'change_summary' if updating.\n"
             "3. Prefer small, dependency-light snippets; avoid large libraries or network access.\n"
             "4. If you need existing artifacts, list them with 'list_artifacts' or read via 'read_artifact' (use summary_only for large files).\n"
             "5. Log code patterns or library constraints to Project Knowledge.\n"
@@ -612,7 +613,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "   - Validated & Ready -> Publisher\n"
             "5. ASYNC FEEDBACK: Call `check_user_inbox` frequently (e.g., between tasks) to see if the user has steered the project.\n"
             "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
-            "7. END OF RUN: Write a concise summary and next actions using 'write_pi_notes' so it persists across resumes.\n"
+            "7. PROMOTION & END OF RUN: Review major artifacts. If they are final/valid, call 'promote_artifact_to_canonical(name=..., kind=..., notes=...)' to lock them. Then write a concise summary and next actions using 'write_pi_notes'.\n"
             "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated.\n"
             "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest."
         ),
@@ -638,6 +639,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             check_manifest_unique_paths,
             read_note,
             write_pi_notes,
+            promote_artifact_to_canonical,
             manage_project_knowledge,
             scan_transport_manifest,
             read_transport_manifest,

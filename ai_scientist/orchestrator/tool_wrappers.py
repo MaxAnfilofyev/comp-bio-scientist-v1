@@ -151,8 +151,13 @@ def inspect_recent_manifest_entries(base_folder: str) -> str:
         return json.dumps({"error": str(exc)})
 
 @function_tool
-def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False):
-    return _append_manifest_entry(name=name, metadata_json=metadata_json, allow_missing=allow_missing)
+def append_manifest(name: str, metadata_json: Optional[str] = None, allow_missing: bool = False, change_summary: str = ""):
+    return _append_manifest_entry(name=name, metadata_json=metadata_json, allow_missing=allow_missing, change_summary=change_summary)
+
+@function_tool
+def promote_artifact_to_canonical(name: str, kind: str, notes: str = ""):
+    from ai_scientist.orchestrator.artifacts import promote_artifact_to_canonical as _promote
+    return _promote(name, kind, notes)
 
 @function_tool
 def read_manifest_entry(path_or_name: str):

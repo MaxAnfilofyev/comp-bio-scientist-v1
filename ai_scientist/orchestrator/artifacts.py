@@ -276,6 +276,12 @@ def _prepare_artifact_metadata(meta: Dict[str, Any], kind: str) -> Dict[str, Any
     metadata.setdefault("created_by", metadata.get("created_by") or os.environ.get("AISC_ACTIVE_ROLE") or "unknown")
     metadata.setdefault("tags", [])
     metadata.setdefault("tools_used", [])
+    
+    # Handle change_summary if it was passed at top level or in metadata
+    cs = normalized.pop("change_summary", None)
+    if cs:
+        metadata["change_summary"] = cs
+        
     normalized["metadata"] = metadata
     return normalized
 
@@ -340,6 +346,7 @@ def reserve_and_register_artifact(
     status: str = "pending",
     unique: bool = True,
     skip_summary: bool = False,
+    change_summary: str = "",
 ):
     role = active_role()
     allowed, reason = ensure_write_permission(kind, role)
@@ -348,6 +355,23 @@ def reserve_and_register_artifact(
     parsed_meta, err = _load_meta_dict(meta_json)
     if err:
         return {"error": err, "kind": kind}
+    
+    # Auto-versioning logic
+    # If version is NOT provided in meta, try to increment
+    if not parsed_meta.get("version"):
+        module = parsed_meta.get("module")
+        latest = _get_latest_artifact_entry(kind, module)
+        if latest:
+            latest_ver = latest.get("version") or latest.get("metadata", {}).get("version")
+            parsed_meta["parent_version"] = latest_ver
+            parsed_meta["version"] = _next_version(latest_ver)
+        else:
+            parsed_meta["version"] = "v1"
+            parsed_meta["parent_version"] = None
+
+    if change_summary:
+        parsed_meta["change_summary"] = change_summary
+
     try:
         normalized_meta = _prepare_artifact_metadata(parsed_meta, kind)
     except ValueError as exc:
@@ -406,12 +430,77 @@ def reserve_output(name: str, subdir: Optional[str] = None):
     return result
 
 
-def _next_summary_version(parent_version: Optional[str]) -> str:
+def _next_version(parent_version: Optional[str]) -> str:
     if parent_version and isinstance(parent_version, str) and parent_version.startswith("v"):
         digits = parent_version[1:]
         if digits.isdigit():
             return f"v{int(digits) + 1}"
-    return f"v{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    return "v1"
+
+
+def _next_summary_version(parent_version: Optional[str]) -> str:
+    return _next_version(parent_version)
+
+
+def _get_latest_artifact_entry(kind: str, module: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    exp_dir = BaseTool.resolve_output_dir(None)
+    entries = load_entries(base_folder=exp_dir, limit=None)
+    # Filter by kind
+    candidates = [e for e in entries if (e.get("kind") or e.get("metadata", {}).get("kind")) == kind]
+    # Filter by module if specified
+    if module:
+        candidates = [e for e in candidates if (e.get("module") or e.get("metadata", {}).get("module")) == module]
+    
+    if not candidates:
+        return None
+    
+    # Sort by created_at (most recent first)
+    def sort_key(e):
+        ts = e.get("created_at")
+        if not ts or ts == "null":
+            return ""
+        return str(ts)
+    
+    candidates.sort(key=sort_key, reverse=True)
+    return candidates[0]
+
+
+def promote_artifact_to_canonical(name: str, kind: str, notes: str = ""):
+    """
+    Promote an artifact to 'canonical' status.
+    Updates the manifest entry AND reserves a new manifest entry to log the status change.
+    """
+    exp_dir = BaseTool.resolve_output_dir(None)
+    from ai_scientist.utils import manifest as manifest_utils
+    entry = manifest_utils.find_manifest_entry(name, base_folder=exp_dir)
+    if not entry:
+        return {"error": f"Artifact '{name}' not found in manifest."}
+    
+    if entry.get("kind") != kind:
+        return {"error": f"Artifact kind mismatch: found '{entry.get('kind')}', expected '{kind}'"}
+
+    new_entry = dict(entry)
+    new_entry["status"] = "canonical"
+    
+    # Add promotion notes to metadata
+    meta = new_entry.get("metadata", {})
+    if isinstance(meta, dict):
+        promotions = meta.get("promotions", [])
+        promotions.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "actor": os.environ.get("AISC_ACTIVE_ROLE", "unknown"),
+            "notes": notes
+        })
+        meta["promotions"] = promotions
+        new_entry["metadata"] = meta
+        
+    manifest_res = append_or_update(new_entry, base_folder=exp_dir)
+    return {
+        "status": "promoted", 
+        "name": name, 
+        "version": new_entry.get("version"),
+        "manifest_result": manifest_res
+    }
 
 
 def _maybe_trigger_module_summary(module_name: str, base_folder: str, threshold: int) -> None:
