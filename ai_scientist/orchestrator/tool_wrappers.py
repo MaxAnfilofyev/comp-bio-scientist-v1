@@ -3081,3 +3081,115 @@ def check_references_completeness():
         status = f"❌ Found {missing_count} missing references."
         
     return f"Checked {total} references.\n{status}"
+
+
+# --- PI PLANNING TOOLS ---
+
+@function_tool
+def get_or_create_implementation_plan():
+    """
+    Get or create the structured implementation plan for the current run.
+    Returns the path to implementation_plan.md and whether it was newly created.
+    """
+    from ai_scientist.orchestrator.pi_planning_helpers import get_or_create_implementation_plan as _get_or_create_impl
+    
+    run_root = BaseTool.resolve_output_dir(None).parent
+    try:
+        plan_path, created = _get_or_create_impl(run_root)
+        return {
+            "path": str(plan_path),
+            "created": created,
+            "status": "created" if created else "exists"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@function_tool
+def update_implementation_plan_from_state(
+    hypothesis: str,
+    current_phase: str,
+    experiments_json: str,
+    tasks_json: str,
+    decisions_json: str
+):
+    """
+    Update the implementation plan with structured state.
+    
+    Args:
+        hypothesis: Current hypothesis text
+        current_phase: One of: planning, modeling, analysis, writeup, publication
+        experiments_json: JSON array of experiments, each with: experiment_id, description, owner_role, status, inputs, outputs, notes
+        tasks_json: JSON array of tasks, each with: task_id, experiment_id, description, assigned_to, status, linked_artifacts, last_updated
+        decisions_json: JSON array of decision strings (will be formatted as bullet points)
+    """
+    from ai_scientist.orchestrator.pi_planning_helpers import (
+        update_implementation_plan_from_state as _update_impl,
+        PlanState,
+        ExperimentPlan,
+        TaskPlan,
+    )
+    
+    try:
+        # Parse JSON inputs
+        experiments_data = json.loads(experiments_json)
+        tasks_data = json.loads(tasks_json)
+        decisions_data = json.loads(decisions_json)
+        
+        # Convert to dataclasses
+        experiments = [ExperimentPlan(**exp) for exp in experiments_data]
+        tasks = [TaskPlan(**task) for task in tasks_data]
+        
+        # Create PlanState
+        now = datetime.utcnow().isoformat()
+        state = PlanState(
+            hypothesis=hypothesis,
+            current_phase=current_phase,
+            last_updated=now,
+            experiments=experiments,
+            tasks=tasks,
+            decisions=decisions_data
+        )
+        
+        # Get plan path
+        run_root = BaseTool.resolve_output_dir(None).parent
+        from ai_scientist.orchestrator.pi_planning_helpers import get_or_create_implementation_plan as _get_or_create_impl
+        plan_path, _ = _get_or_create_impl(run_root)
+        
+        # Update the plan
+        _update_impl(plan_path, state)
+        
+        return {
+            "status": "updated",
+            "path": str(plan_path),
+            "experiments_count": len(experiments),
+            "tasks_count": len(tasks),
+            "decisions_count": len(decisions_data)
+        }
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid JSON: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@function_tool
+def log_status_to_user_inbox(status_block: str):
+    """
+    Append a timestamped status update to user_inbox.md.
+    Use this to persist important status updates so the user can see them outside the chat.
+    
+    Args:
+        status_block: The status message to log (will be timestamped automatically)
+    """
+    from ai_scientist.orchestrator.pi_planning_helpers import log_status_to_user_inbox as _log_status_impl
+    
+    run_root = BaseTool.resolve_output_dir(None).parent
+    try:
+        _log_status_impl(run_root, status_block)
+        return {
+            "status": "logged",
+            "message": "Status appended to user_inbox.md"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+

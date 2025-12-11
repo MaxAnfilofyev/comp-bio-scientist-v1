@@ -126,6 +126,7 @@ from ai_scientist.orchestrator.lit_tools import (
 )
 
 
+
 def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
     return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
 
@@ -611,7 +612,11 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "0. Agents are stateless tools with a hard ~40-turn budget (including their tool calls). Do NOT send 'prepare' or 'wait until X' tasks. Delegate small, end-to-end units with concrete paths; if a job is large, split it into multiple invocations (e.g., one per batch of sims/plots) and ask the agent to persist outputs plus a brief status note to user_inbox.md/pi_notes.md before returning. You may spawn multiple parallel calls to the same role if that speeds work, as long as each request is end-to-end and self-contained. If you already know the relevant file paths or artifact names, include them in the prompt to save turn budget.\n"
             "1. STATE CHECK: First, read the provided PI_notes, user_inbox, and prior 'check_project_state' runs that appears in your system/user message. Only call 'read_note' or 'check_project_state' if you need a fresh snapshot beyond what is already provided.\n"
             "2. REVIEW KNOWLEDGE: Check 'manage_project_knowledge' for constraints or decisions before delegating.\n"
-            "3. MITIGATE ITERATIVE GAP: Before complex phases (e.g., large simulations, drafting full sections), write an `implementation_plan.md` using `write_text_artifact` (default path: experiment_results/implementation_plan.md). Update the plan when priorities or completion status change—do not carry a stale plan forward. If `--human_in_the_loop` is active, call `wait_for_human_review` on this plan before proceeding.\n"
+            "3. STRUCTURED PLANNING: Maintain a structured implementation plan:\n"
+            "   - Use 'get_or_create_implementation_plan' to obtain the implementation_plan_md artifact.\n"
+            "   - After any major decision (planned/started/completed/blocked experiments or tasks), call 'update_implementation_plan_from_state' with the current PlanState (hypothesis, current_phase, experiments, tasks, decisions).\n"
+            "   - Never leave the implementation plan stale at the end of your run.\n"
+            "   - If `--human_in_the_loop` is active, call `wait_for_human_review` on the plan before proceeding.\n"
             "3b. Maintain hypothesis_trace.json: when drafting the plan, ensure every idea experiment is mapped to a hypothesis/experiment id (H*, E*) in hypothesis_trace.json (skeleton allowed). Update as new experiments/figures/sim runs become planned.\n"
             "4. DELEGATE: Handoff to specialized agents based on missing artifacts. **MANDATORY: When calling a sub-agent, lookup the exact file paths first (via inspect_manifest or list_artifacts) and pass the EXACT PATH in the prompt. Do not ask them to 'find the file'.**\n"
             "   - Before delegating to a module, call 'ensure_module_summary' with the module name from the context spec (e.g., 'modeling', 'analysis', 'writeup'). If it reports 'missing' or 'stale', wait for the integration memo to materialize or re-run the summarizer before proceeding.\n"
@@ -627,10 +632,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "6. HANDLE FAILURES: If a sub-agent reports error or max turns, call 'inspect_manifest(summary_only=False, role=..., limit=50)' to see what they accomplished before crashing. If artifacts exist, instruct the next run to continue from there rather than restarting.\n"
             "7. PROMOTION & END OF RUN: Review major artifacts. If they are final/valid, call 'promote_artifact_to_canonical(name=..., kind=..., notes=...)' to lock them. Check for stale dependencies via 'check_dependency_staleness' before promoting.\n"
             "8. TERMINATE: Stop only when Reviewer confirms 'NO GAPS' and PDF is generated. Before stopping, call 'generate_project_snapshot' to create a human-readable summary.\n"
-            "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest."
+            "9. Keep reflections/notes in run_notes via append_run_note_tool or project_knowledge; never store notes in manifest.\n"
+            "10. STATUS PERSISTENCE: Whenever you provide a human-readable status update or plan in your reply, also call 'log_status_to_user_inbox' to append a concise version to user_inbox.md so the user sees it outside the chat."
         ),
         model=model,
         tools=[
+            # Import planning tools inline to avoid circular dependency
+            *([getattr(__import__('ai_scientist.orchestrator.tool_wrappers', fromlist=['get_or_create_implementation_plan']), 'get_or_create_implementation_plan'),
+               getattr(__import__('ai_scientist.orchestrator.tool_wrappers', fromlist=['update_implementation_plan_from_state']), 'update_implementation_plan_from_state'),
+               getattr(__import__('ai_scientist.orchestrator.tool_wrappers', fromlist=['log_status_to_user_inbox']), 'log_status_to_user_inbox')]),
             check_project_state,
             log_strategic_pivot,
             inspect_manifest,

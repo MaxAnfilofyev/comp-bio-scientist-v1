@@ -235,6 +235,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "review_report_{manuscript_version}.md",
         "description": "Holistic review report for a manuscript version.",
     },
+    "implementation_plan_md": {
+        "rel_dir": "experiment_results",
+        "pattern": "implementation_plan.md",
+        "description": "Structured implementation plan: experiments, tasks, owners, status, and links to artifacts.",
+    },
 }
 
 
