@@ -16,13 +16,13 @@ os.makedirs(mpl_config_dir, exist_ok=True)
 os.makedirs(cache_dir, exist_ok=True)
 
 try:
-    from scipy.integrate import solve_ivp
-    from scipy.optimize import fsolve, minimize_scalar
+    from scipy.integrate import solve_ivp  # type: ignore
+    from scipy.optimize import fsolve, minimize_scalar  # type: ignore
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
 
-    def solve_ivp(func, t_span, y0, t_eval, method="RK45", **kwargs):
+    def solve_ivp(func, t_span, y0, t_eval, method="RK45", **kwargs):  # type: ignore
         """Minimal RK4 fallback when SciPy is unavailable."""
         y0_arr = np.array(y0, dtype=float)
         t_eval_arr = np.array(t_eval, dtype=float)
@@ -43,10 +43,10 @@ except ImportError:
 
         return SimpleNamespace(success=True, t=t_eval_arr, y=ys)
 
-    def fsolve(*args, **kwargs):
+    def fsolve(*args, **kwargs):  # type: ignore
         raise ImportError("SciPy is required for fsolve; install scipy to enable equilibrium solving.")
 
-    def minimize_scalar(*args, **kwargs):
+    def minimize_scalar(*args, **kwargs):  # type: ignore
         raise ImportError("SciPy is required for minimize_scalar; install scipy to enable optimization.")
 
 warnings.filterwarnings('ignore')

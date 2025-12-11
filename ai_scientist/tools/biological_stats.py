@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 from scipy.stats import fisher_exact
@@ -20,7 +20,7 @@ class MultipleTestingResult:
 
 
 def adjust_pvalues(
-    pvalues: Sequence[float],
+    pvalues: Union[Sequence[float], np.ndarray],
     alpha: float = 0.05,
     method: str = "benjamini_hochberg",
 ) -> MultipleTestingResult:

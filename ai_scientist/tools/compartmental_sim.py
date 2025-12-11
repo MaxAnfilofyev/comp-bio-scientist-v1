@@ -235,17 +235,20 @@ class RunCompartmentalSimTool(BaseTool):
             return_arrays=True,
         )
 
+        # Ensure sim_result is treated as a dict
+        sim_result_dict: Dict[str, Any] = sim_result  # type: ignore
+        
         if downsample > 1:
             e_arr = e_arr[::downsample]
             m_arr = m_arr[::downsample]
-            sim_result["time"] = sim_result["time"][::downsample]
-            sim_result["E"] = e_arr.tolist()
-            sim_result["M"] = m_arr.tolist()
+            sim_result_dict["time"] = sim_result_dict["time"][::downsample]
+            sim_result_dict["E"] = e_arr.tolist()
+            sim_result_dict["M"] = m_arr.tolist()
         else:
-            sim_result["E"] = e_arr.tolist()
-            sim_result["M"] = m_arr.tolist()
+            sim_result_dict["E"] = e_arr.tolist()
+            sim_result_dict["M"] = m_arr.tolist()
 
-        result = sim_result
+        result = sim_result_dict
 
         if not store_timeseries:
             result = {
@@ -290,7 +293,7 @@ class RunCompartmentalSimTool(BaseTool):
         per_compartment_output = bool(kwargs.get("write_per_compartment", True))
         per_comp_status: Dict[str, Any] = {}
         if per_compartment_output:
-            time_arr = np.array(sim_result["time"], dtype=float)
+            time_arr = np.array(sim_result_dict["time"], dtype=float)
             binary_states = (e_arr < failure_threshold).astype(np.uint8)
             continuous_states = np.stack([e_arr, m_arr], axis=-1)
             nodes = list(graph.nodes())
@@ -313,7 +316,7 @@ class RunCompartmentalSimTool(BaseTool):
                 export_result = export_sim_timeseries(
                     sim_json_path=out_path,
                     graph_path=graph_path,
-                    output_dir=export_output_dir,
+                    output_dir=str(export_output_dir),
                     failure_threshold=failure_threshold,
                 )
             except Exception as exc:  # pragma: no cover - defensive

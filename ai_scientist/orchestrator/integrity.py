@@ -48,6 +48,8 @@ def check_dependency_staleness(artifact_name_or_path: str) -> Dict[str, Any]:
             continue
             
         lookup_target = dep_path or dep_name
+        if not lookup_target:
+            continue
         current_dep_entry = find_manifest_entry(lookup_target, base_folder=exp_dir)
         print(f"DEBUG: Looking up '{lookup_target}' -> Found: {current_dep_entry is not None}")
         

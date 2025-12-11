@@ -44,7 +44,7 @@ class BiologicalPlotter:
 
     def plot_time_series(
         self,
-        time: Sequence[float],
+        time: Union[Sequence[float], np.ndarray],
         trajectories: np.ndarray,
         labels: Optional[Iterable[str]] = None,
         title: str = "Time Series",

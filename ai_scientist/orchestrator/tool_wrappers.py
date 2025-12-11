@@ -22,7 +22,7 @@ except ImportError:
                 self.error = error
                 self.status = status
 
-from agents import Agent, function_tool as _function_tool, ModelSettings
+from agents import Agent, function_tool as _function_tool
 
 # --- Underlying Tool Imports ---
 from ai_scientist.tools.lit_data_assembly import LitDataAssemblyTool
@@ -398,8 +398,8 @@ def _run_cli_tool(tool_name: str, args: str = "") -> Any:
 
 # _report_capabilities and _ensure_transport_readme are imported from context
 
-def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
-    return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
+def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: Any) -> Any:
+    return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)  # type: ignore
 
 
 async def extract_run_output(run_result: RunResult) -> str:

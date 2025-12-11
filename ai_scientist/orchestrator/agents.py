@@ -11,7 +11,11 @@ except ImportError:
             self.error = error
             self.status = status
 
-from agents import Agent, ModelSettings
+try:
+    from agents import Agent, ModelSettings
+except ImportError:
+    Agent = Any  # type: ignore
+    ModelSettings = Any  # type: ignore
 
 from ai_scientist.orchestrator.artifacts import _artifact_kind_catalog
 from ai_scientist.orchestrator.context_specs import (
@@ -150,7 +154,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
 
 
 
-def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: ModelSettings) -> Agent:
+def _make_agent(name: str, instructions: str, tools: List[Any], model: str, settings: Any) -> Any:
     return Agent(name=name, instructions=instructions, model=model, tools=tools, model_settings=settings)
 
 
@@ -244,7 +248,7 @@ async def extract_run_output(run_result: RunResult) -> str:
     return "\n".join(parts)
 
 
-def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
+def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
     artifact_catalog = _artifact_kind_catalog()
     common_settings = ModelSettings(tool_choice="auto")
     role_max_turns = 40
@@ -793,7 +797,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
         settings=common_settings,
     )
 
-    pi = Agent(
+    pi = Agent(  # type: ignore
         name="Principal Investigator",
         instructions=(
             f"You are an expert Principal Investigator for project: {title}.\\n"

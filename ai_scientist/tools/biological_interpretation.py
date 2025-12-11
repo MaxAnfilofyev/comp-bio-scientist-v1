@@ -2,7 +2,7 @@ import json
 import os.path as osp
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from types import SimpleNamespace
 from omegaconf.errors import ConfigAttributeError
 
@@ -155,7 +155,7 @@ def _interpretation_to_markdown(interpretation: Dict[str, Any]) -> str:
 
 
 def _call_interpretation_llm(
-    cfg: Config,
+    cfg: Union[Config, SimpleNamespace],
     idea_text: str,
     summaries: Dict[str, Any],
     base_folder: str,
