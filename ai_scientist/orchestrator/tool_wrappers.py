@@ -2382,3 +2382,80 @@ def check_user_inbox():
     if not content:
         return "Inbox empty."
     return f"USER MESSAGE: {content}"
+
+# --- ARCHIVIST SPECIALIZED TOOLS ---
+
+@function_tool
+def create_lit_summary_artifact(module: str = "lit"):
+    """
+    Create and register a new 'lit_summary_main' artifact.
+    Use this when updating or creating the primary literature summary.
+    """
+    return reserve_and_register_artifact(
+        kind="lit_summary_main",
+        meta_json=json.dumps({"module": module}),
+        status="pending",
+        unique=True,
+    )
+
+
+@function_tool
+def create_claim_graph_artifact(module: str = "lit"):
+    """
+    Create and register a new 'claim_graph_main' artifact.
+    Use this when creating the claim graph.
+    """
+    return reserve_and_register_artifact(
+        kind="claim_graph_main",
+        meta_json=json.dumps({"module": module}),
+        status="pending",
+        unique=True,
+    )
+
+
+@function_tool
+def list_lit_summaries(module: str = "lit"):
+    """
+    List existing literature summary artifacts for the given module.
+    """
+    return list_artifacts_by_kind(kind="lit_summary_main", limit=50)
+
+
+@function_tool
+def list_claim_graphs(module: str = "lit"):
+    """
+    List existing claim graph artifacts for the given module.
+    """
+    return list_artifacts_by_kind(kind="claim_graph_main", limit=50)
+
+
+@function_tool
+def read_archivist_artifact(name: str):
+    """
+    Read a literature-related artifact (lit_summary, claim_graph).
+    Restricted to specific allowed kinds.
+    """
+    # 1. Resolve artifact to get kind
+    from ai_scientist.utils import manifest as manifest_utils
+    from ai_scientist.tools.base_tool import BaseTool
+    
+    entry = manifest_utils.find_manifest_entry(name, base_folder=BaseTool.resolve_output_dir(None))
+    if not entry:
+        return {"error": f"Artifact '{name}' not found in manifest. Archivist can only read registered artifacts."}
+    
+    kind = entry.get("kind")
+    allowed_kinds = {
+        "lit_summary_main", 
+        "lit_summary_aux", 
+        "claim_graph_main",
+        "task_spec",      # If needed for context
+        "project_brief"   # If needed for context
+    }
+    
+    if kind not in allowed_kinds:
+        return {
+            "error": f"Permission denied: Archivist cannot read artifact kind '{kind}'. Allowed: {sorted(allowed_kinds)}"
+        }
+        
+    # 2. Delegate to read_artifact
+    return read_artifact(path=entry.get("path") or name)

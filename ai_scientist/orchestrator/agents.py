@@ -89,6 +89,11 @@ from ai_scientist.orchestrator.tool_wrappers import (
     write_pi_notes,
     write_text_artifact,
     format_list_field,
+    create_lit_summary_artifact,
+    create_claim_graph_artifact,
+    list_lit_summaries,
+    list_claim_graphs,
+    read_archivist_artifact,
 )
 
 
@@ -259,28 +264,15 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "Directives:\n"
             "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers.\n"
             "2. Maintain a claim graph via 'update_claim_graph' when mapping evidence.\n"
-            "3. Use 'reserve_typed_artifact(kind=\"lit_summary_main\")' for lit summaries and 'reserve_typed_artifact(kind=\"claim_graph_main\")' for claim graphs; do not invent filenames.\n"
+            "3. Use 'create_lit_summary_artifact(module=\"lit\")' and 'create_claim_graph_artifact(module=\"lit\")' to create new artifacts. Do NOT use generic reserve calls.\n"
             "4. Immediately run 'verify_references' on lit_summary to produce lit_reference_verification.csv/json. Treat this as REQUIRED provenance.\n"
             "5. Reject readiness if more than 20% of references are missing (found==False) or any match_score < 0.5; report FAILURE with counts.\n"
             "6. If verification repeatedly fails for a venue/source, log a reflection via manage_project_knowledge with the specific venue.\n"
-            "7. If you create or deeply analyze artifacts not yet in the manifest, log them with 'append_manifest' (include kind + created_by + status).\n"
-            "8. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
-            "9. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
-            f"10. {reflection_instruction}"
+            "7. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations.\n"
+            "8. Log reflections to run_notes via 'append_run_note_tool' or manage_project_knowledge; never to manifest.\n"
+            f"9. {reflection_instruction}"
         ),
         tools=[
-            get_run_paths,
-            resolve_path,
-            list_artifacts,
-            list_artifacts_by_kind,
-            read_artifact,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            read_manifest_entry,
-            check_manifest,
-            check_manifest_unique_paths,
             assemble_lit_data,
             validate_lit_summary,
             verify_references,
@@ -288,6 +280,11 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             update_claim_graph,
             manage_project_knowledge,
             append_run_note_tool,
+            create_lit_summary_artifact,
+            create_claim_graph_artifact,
+            list_lit_summaries,
+            list_claim_graphs,
+            read_archivist_artifact,
         ],
         model=model,
         settings=common_settings,
