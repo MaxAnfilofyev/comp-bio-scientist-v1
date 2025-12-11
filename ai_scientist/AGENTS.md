@@ -29,7 +29,7 @@ The `ai_scientist` root directory contains the primary entry points and stage-sp
 - **Biological Interpretation**: The `Interpreter` agent uses `interpret_biology` (wrapping `ai_scientist.tools.biological_interpretation`) to synthesize findings into `interpretation.json` and `interpretation.md`.
 - **`writeup.py`** (was `perform_writeup.py`): Compiles the final manuscript.
   - **Location**: `ai_scientist/tools/writeup.py`
-  - Generates LaTeX from templates (`blank_theoretical_biology_latex`, etc.).
+  - Generates LaTeX from templates (`ai_scientist/templates/blank_theoretical_biology_latex`, etc.).
   - Renders PDF using `pdflatex`.
   - Injects release metadata if a release tag is provided.
 

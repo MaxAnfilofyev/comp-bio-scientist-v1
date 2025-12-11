@@ -743,7 +743,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Agent:
             "TL;DR: Integrate lit_summary + figures \u2192 Compile LaTeX \u2192 Debug errors \u2192 Produce PDF\\n\\n"
             f"{_get_path_context('Publisher', dirs)}\n{_get_file_io_policy('Publisher')}\n{_get_metadata_reminder('Publisher')}\n{_context_spec_intro('Publisher')}\n{_summary_advisory('Publisher')}\n\n"
             "## CORE WORKFLOW\\n"
-            "1. Target the 'blank_theoretical_biology_latex' template\\n"
+            "1. Target the 'ai_scientist/templates/blank_theoretical_biology_latex' template\\n"
             "2. Integrate 'lit_summary.json' and figures into the text\\n"
             "3. Reserve outputs via 'reserve_typed_artifact' before writing:\\n"
             "   - figures README\\n"

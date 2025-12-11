@@ -727,7 +727,7 @@ def perform_writeup(
     big_model="gpt-5.1-2025-11-13",
     n_writeup_reflections=3,
     page_limit=4,
-    template_dir="ai_scientist/blank_icbinb_latex",
+    template_dir="ai_scientist/templates/blank_icbinb_latex",
 ):
     pdf_file = osp.join(base_folder, f"{osp.basename(base_folder)}.pdf")
     latex_folder = osp.join(base_folder, "latex")
