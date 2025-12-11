@@ -2,7 +2,6 @@
 Unit tests for PI planning helpers.
 """
 
-import json
 import os
 import sys
 import tempfile
@@ -13,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ai_scientist.orchestrator.pi_planning_helpers import (
+from ai_scientist.orchestrator.pi_planning_helpers import (  # noqa: E402
     get_or_create_implementation_plan,
     update_implementation_plan_from_state,
     log_status_to_user_inbox,

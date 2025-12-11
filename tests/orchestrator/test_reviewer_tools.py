@@ -1,8 +1,7 @@
 
 import sys
 import json
-import pytest
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, patch
 
 # Mock agents module
 mock_agents = MagicMock()
@@ -21,7 +20,7 @@ sys.modules["omegaconf"] = MagicMock()
 sys.modules["ai_scientist.perform_biological_interpretation"] = MagicMock()
 
 # Import tools to test
-from ai_scientist.orchestrator.tool_wrappers import (
+from ai_scientist.orchestrator.tool_wrappers import (  # noqa: E402
     create_review_note_artifact,
     check_parameter_sources_for_manuscript,
     check_metrics_for_referenced_models,

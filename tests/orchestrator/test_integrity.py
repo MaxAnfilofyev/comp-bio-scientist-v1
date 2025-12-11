@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 from ai_scientist.orchestrator.artifacts import reserve_and_register_artifact
 from ai_scientist.orchestrator.integrity import check_dependency_staleness
-from ai_scientist.tools.base_tool import BaseTool
 
 @pytest.fixture
 def temp_workspace():
@@ -46,18 +45,14 @@ def test_dependency_staleness(temp_workspace):
     assert not dependent.get("error"), f"Reservation failed: {dependent}"
     assert dependent.get("metadata", {}).get("tools_used"), "Tools used missing in metadata"
     
-    # Debug manifest content
-    exp_dir = os.path.join(temp_workspace, "experiment_results")
-    from ai_scientist.utils.manifest import load_entries
-    entries = load_entries(base_folder=exp_dir)
-    
     fresh_check = check_dependency_staleness(dependent["name"])
     assert not fresh_check["stale"]
     assert len(fresh_check["stale_dependencies"]) == 0
     
     # Create new version of dependency (v2)
     # File must exist for uniqueness
-    with open(dep_v1["reserved_path"], "w") as f: f.write("v1")
+    with open(dep_v1["reserved_path"], "w") as f:
+        f.write("v1")
     
     import time
     time.sleep(1.1)

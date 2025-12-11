@@ -4,7 +4,6 @@ from datetime import datetime
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.orchestrator.artifacts import reserve_and_register_artifact
 from ai_scientist.orchestrator.lifecycle import refresh_project_spine
-from ai_scientist.utils.manifest import find_manifest_entry
 
 def generate_project_snapshot() -> str:
     """
@@ -18,7 +17,8 @@ def generate_project_snapshot() -> str:
     
     # Helper to read text content
     def read_text(path):
-        if not path: return "N/A"
+        if not path:
+            return "N/A"
         full_path = path if os.path.isabs(path) else exp_dir / path
         try:
             with open(full_path, "r", encoding="utf-8") as f:

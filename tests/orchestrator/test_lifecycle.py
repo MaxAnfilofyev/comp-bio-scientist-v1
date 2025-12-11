@@ -8,7 +8,6 @@ from unittest.mock import patch
 from ai_scientist.orchestrator.artifacts import reserve_and_register_artifact
 from ai_scientist.orchestrator.lifecycle import refresh_project_spine, deprecate_stale_drafts
 from ai_scientist.orchestrator.snapshots import generate_project_snapshot
-from ai_scientist.tools.base_tool import BaseTool
 
 @pytest.fixture
 def temp_workspace():
@@ -29,7 +28,8 @@ def test_spine_and_snapshot(temp_workspace):
         meta_json=json.dumps({"content": "Lit Content", "module": "lit"}),
         status="canonical"
     )
-    with open(res_lit["reserved_path"], "w") as f: f.write("Lit Content")
+    with open(res_lit["reserved_path"], "w") as f:
+        f.write("Lit Content")
     
     # 2. Integration Memo (canonical)
     res_memo = reserve_and_register_artifact(
@@ -38,7 +38,8 @@ def test_spine_and_snapshot(temp_workspace):
         status="canonical"
     )
     assert not res_memo.get("error"), f"Memo reservation failed: {res_memo}"
-    with open(res_memo["reserved_path"], "w") as f: f.write("Memo content")
+    with open(res_memo["reserved_path"], "w") as f:
+        f.write("Memo content")
     
     # 3. Non-canonical draft (should be ignored by spine)
     res_draft = reserve_and_register_artifact(
@@ -46,7 +47,8 @@ def test_spine_and_snapshot(temp_workspace):
         meta_json=json.dumps({"content": "Draft memo", "module": "modeling_draft"}),
         status="draft"
     )
-    with open(res_draft["reserved_path"], "w") as f: f.write("Draft memo")
+    with open(res_draft["reserved_path"], "w") as f:
+        f.write("Draft memo")
     
     
     import time

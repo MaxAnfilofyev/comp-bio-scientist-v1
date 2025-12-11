@@ -6,7 +6,6 @@ import pytest
 from unittest.mock import patch
 
 from ai_scientist.orchestrator.context_specs import record_context_access
-from ai_scientist.tools.base_tool import BaseTool
 
 @pytest.fixture
 def temp_workspace():

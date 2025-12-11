@@ -2,11 +2,7 @@
 Unit tests for literature artifact creation and access control.
 Tests the new lit-related artifact types and specialized helper tools.
 """
-import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

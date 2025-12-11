@@ -1,12 +1,10 @@
 import argparse
 import os
-import platform
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ai_scientist.utils.notes import NOTE_NAMES, ensure_note_files
+from ai_scientist.utils.notes import ensure_note_files
 from ai_scientist.utils.pathing import resolve_output_path
 
 

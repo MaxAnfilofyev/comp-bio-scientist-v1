@@ -1,5 +1,4 @@
-from typing import Any, Dict, List, Optional
-import os
+from typing import Any, Dict, List
 import json
 from datetime import datetime, timedelta
 from ai_scientist.utils.manifest import load_entries, append_or_update
@@ -66,7 +65,7 @@ def refresh_project_spine() -> Dict[str, Any]:
 
     # Write spine artifact
     # We use reserve_and_register to make it first-class
-    spine_res = reserve_and_register_artifact(
+    reserve_and_register_artifact(
         kind="current_spine_json",
         meta_json=json.dumps({"content": spine, "summary": "Project spine snapshot"}),
         status="generated",

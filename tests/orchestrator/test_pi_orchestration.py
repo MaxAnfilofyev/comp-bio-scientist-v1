@@ -3,10 +3,7 @@ Tests for PI orchestration enforcement logic.
 """
 
 import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
 
 from ai_scientist.orchestrator.pi_orchestration import (
     PI_WRITER_TOOL_NAMES,
@@ -123,7 +120,6 @@ class TestEnforcePiWriterTools:
         enforce_pi_writer_tools(run_root, final_message, tool_calls)
         
         # Verify no duplicate entry (writer tool was already called)
-        inbox_path = run_root / "user_inbox.md"
         # The log_status_to_user_inbox tool would have been called, creating the file
         # But enforce_pi_writer_tools should not add another entry
         # Since we're mocking, we just verify the function doesn't raise

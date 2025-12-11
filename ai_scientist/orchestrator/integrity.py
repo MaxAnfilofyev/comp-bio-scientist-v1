@@ -1,6 +1,5 @@
-from typing import Any, Dict, List, Optional
-import os
-from ai_scientist.utils.manifest import find_manifest_entry, load_entries
+from typing import Any, Dict
+from ai_scientist.utils.manifest import find_manifest_entry
 from ai_scientist.tools.base_tool import BaseTool
 
 def check_dependency_staleness(artifact_name_or_path: str) -> Dict[str, Any]:

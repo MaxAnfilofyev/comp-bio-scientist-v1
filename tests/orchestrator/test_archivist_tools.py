@@ -63,7 +63,7 @@ sys.modules["dataclasses_json"] = MagicMock()
 sys.modules["dataclasses_json"].DataClassJsonMixin = MockMixin
 # -----------------------------------------
 
-from ai_scientist.orchestrator.tool_wrappers import (
+from ai_scientist.orchestrator.tool_wrappers import (  # noqa: E402
     create_lit_summary_artifact,
     create_claim_graph_artifact,
     list_lit_summaries,
@@ -72,7 +72,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     # Helper to setup environment akin to tests/orchestrator/test_integrity.py
     reserve_and_register_artifact 
 )
-from ai_scientist.orchestrator.agents import build_team, ModelSettings
+from ai_scientist.orchestrator.agents import build_team  # noqa: E402
 
 @pytest.fixture
 def temp_workspace():

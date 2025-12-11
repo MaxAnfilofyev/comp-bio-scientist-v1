@@ -30,7 +30,7 @@ sys.modules["ai_scientist.perform_vlm_review"] = MagicMock()
 sys.modules["ai_scientist.perform_llm_review"] = MagicMock()
 
 # Now we can safely import
-from ai_scientist.orchestrator.agents import build_team
+from ai_scientist.orchestrator.agents import build_team  # noqa: E402
 
 def test_modeler_tools_configuration():
     # Mock idea and dirs

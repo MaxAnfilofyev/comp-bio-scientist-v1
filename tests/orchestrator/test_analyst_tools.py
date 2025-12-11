@@ -21,12 +21,11 @@ sys.modules["ai_scientist.perform_biological_interpretation"] = MagicMock()
 
 
 
-from ai_scientist.orchestrator.tool_wrappers import (
+from ai_scientist.orchestrator.tool_wrappers import (  # noqa: E402
     create_plot_artifact,
     publish_figure_to_manuscript_gallery,
     list_available_runs_for_plotting,
-    get_metrics_for_plotting,
-    create_verification_note_artifact
+    get_metrics_for_plotting
 )
 
 @patch("ai_scientist.orchestrator.tool_wrappers.reserve_and_register_artifact")
