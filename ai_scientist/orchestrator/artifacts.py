@@ -271,6 +271,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "interpretation.md",
         "description": "Theoretical biology interpretation (Markdown).",
     },
+    "parameter_source_table": {
+        "rel_dir": "parameters",
+        "pattern": "{name}_param_sources.csv",
+        "description": "Parameter source tracking table.",
+    },
 }
 
 
