@@ -840,7 +840,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "Agents are stateless tools with ~40-turn budget. Do NOT send 'prepare' or 'wait until X' tasks.\\n"
             "- Delegate small, end-to-end units with concrete paths\\n"
             "- If job is large, split into multiple invocations (e.g., one per batch)\\n"
-            "- Ask agents to persist outputs + status note to user_inbox.md/pi_notes.md\\n"
+            "- Ask agents to persist outputs + status note pi_notes.md\\n"
             "- You may spawn parallel calls if each is end-to-end and self-contained\\n"
             "- If you know file paths/artifact names, include them to save turn budget\\n\\n"
             "## WORKFLOW\\n\\n"
@@ -853,7 +853,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "Maintain implementation plan:\\n"
             "- Use 'get_or_create_implementation_plan' to obtain implementation_plan_md\\n"
             "- After major decisions, call 'update_implementation_plan_from_state'\\n"
-            "- Never leave plan stale at end of run\\n"
+            "- Never leave plan stale at end of run - update the plan with your last message to the user.\\n"
             "- If --human_in_the_loop active, call 'wait_for_human_review' before proceeding\\n"
             "- Maintain hypothesis_trace.json: map every experiment to H*/E* ids\\n\\n"
             "**IMPORTANT - Plan Merge Behavior**:\\n"
@@ -865,6 +865,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "  (e.g., '2025-12-11: Drop E4 due to irrelevance')\\n\\n"
             "### 4. EXECUTE PLAN VIA AGENT TOOL CALLS\\n\\n"
             "You have access to specialized agent tools. **Delegation means calling these tools directly.**\\n\\n"
+            "Agents have their own tools with which they read/write files and perform tasks.\\n"
+            "Tell agents what tasks you want for them to perform and relevant information for the task but not how to perform the tasks.\\n\\n"
             "**Available Agent Tools**:\\n"
             "- `archivist` - Literature search, reference verification, claim graphs, lit summaries\\n"
             "- `modeler` - Simulations, parameter sweeps, metrics computation, hypothesis trace updates\\n"
@@ -1033,17 +1035,17 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
                 max_turns=role_max_turns,
                 custom_output_extractor=extract_run_output
             ),
-            coder.as_tool(
-                tool_name="coder",
-                tool_description=(
-                    "Execute code generation workflow. This agent will: write/update Python helper scripts, "
-                    "run linting (ruff/pyright), document code, register artifacts in manifest. "
-                    "Use when you need custom analysis scripts or utilities. Specify requirements and file locations "
-                    "(confined to run folder only)."
-                ),
-                max_turns=role_max_turns,
-                custom_output_extractor=extract_run_output
-            ),
+            # coder.as_tool(
+            #     tool_name="coder",
+            #     tool_description=(
+            #         "Execute code generation workflow. This agent will: write/update Python helper scripts, "
+            #         "run linting (ruff/pyright), document code, register artifacts in manifest. "
+            #         "Use when you need custom analysis scripts or utilities. Specify requirements and file locations "
+            #         "(confined to run folder only)."
+            #     ),
+            #     max_turns=role_max_turns,
+            #     custom_output_extractor=extract_run_output
+            # ),
             interpreter.as_tool(
                 tool_name="interpreter",
                 tool_description=(
