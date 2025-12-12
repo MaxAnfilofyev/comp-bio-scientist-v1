@@ -44,27 +44,27 @@ class ClaimGraphTool(BaseTool):
         if not path or path == "claim_graph.json":
              path = "claim_graph.json"
              # Resolving input path will check canonical dirs. 
-             # But for creation we want to ensure it goes to literature if likely new/default
-             out_dir = BaseTool.resolve_output_dir(None) / "literature"
+             # But for creation we want to ensure it goes to root if likely new/default
+             out_dir = BaseTool.resolve_output_dir(None)
              p = out_dir / "claim_graph.json"
              # If that doesn't exist but we have one elsewhere that resolve_input_path finds, we might want that?
              # Actually, we want to ENFORCE location.
              if not p.exists():
                  # checking if it exists elsewhere to migrate?
                  try:
-                     existing = BaseTool.resolve_input_path("claim_graph.json", must_exist=True, default_subdir="literature")
+                     existing = BaseTool.resolve_input_path("claim_graph.json", must_exist=True, default_subdir=None)
                      p = existing
                  except FileNotFoundError:
                      pass
         else:
              p = Path(path)
              if not p.is_absolute():
-                 # If relative, anchor to literature if simple filename, else trust caller?
+                 # If relative, anchor to root if simple filename, else trust caller?
                  # Safest is to use standard resolution
                  try:
-                      p = BaseTool.resolve_input_path(path, must_exist=False, default_subdir="literature")
+                      p = BaseTool.resolve_input_path(path, must_exist=False, default_subdir=None)
                  except Exception:
-                      p = BaseTool.resolve_output_dir(None) / "literature" / path
+                      p = BaseTool.resolve_output_dir(None) / path
         
         # Ensure parent exists
         p.parent.mkdir(parents=True, exist_ok=True)

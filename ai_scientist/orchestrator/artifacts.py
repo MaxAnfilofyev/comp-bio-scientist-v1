@@ -42,7 +42,7 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "description": "Reference verification table (JSON).",
     },
     "claim_graph_main": {
-        "rel_dir": "literature",
+        "rel_dir": ".",
         "pattern": "claim_graph.json",
         "description": "Claim graph JSON.",
     },
