@@ -236,7 +236,7 @@ async def extract_run_output(run_result: RunResult) -> str:
             pass
 
     if out:
-        parts.append(f"FINAL MSG: {str(out)[:500]}...")
+        parts.append(f"FINAL MSG: {str(out)}")
 
     try:
         ni = getattr(run_result, "new_items", None)
