@@ -62,6 +62,47 @@ from ai_scientist.orchestrator.pi_orchestration import (
 
 # Cached idea for hypothesis trace bootstrapping
 _ACTIVE_IDEA: Optional[Dict[str, Any]] = None
+
+# --- Helper Functions ---
+
+def _sanitize_folder_name(name: str) -> str:
+    """Sanitize a string to be safe for folder names."""
+    # Replace spaces with underscores
+    name = name.replace(" ", "_")
+    # Keep only alphanumeric, underscores, and hyphens
+    name = "".join(c for c in name if c.isalnum() or c in ("_", "-"))
+    # Remove multiple underscores
+    while "__" in name:
+        name = name.replace("__", "_")
+    return name.strip("_")
+
+def _get_llm_shortened_name(title: str, model: str) -> str:
+    """Use LLM to shorten the title for a folder name."""
+    from ai_scientist.llm import create_client, get_response_from_llm
+    
+    try:
+        client, client_model = create_client(model)
+        system_prompt = (
+            "You are a helpful assistant. Your task is to shorten a scientific paper title "
+            "into a concise, snake_case string suitable for a folder name. "
+            "The name must be less than 50 characters, contain only alphanumeric characters and underscores. "
+            "Do not include file extensions or date prefixes. "
+            "Return ONLY the shortened name."
+        )
+        prompt = f"Shorten this title: '{title}'"
+        
+        response, _ = get_response_from_llm(
+            prompt,
+            client,
+            model=client_model,
+            system_message=system_prompt,
+            temperature=0.2
+        )
+        return _sanitize_folder_name(response.strip())
+    except Exception as e:
+        print(f"⚠️ Failed to get shortened name from LLM ({e}). Using heuristic fallback.")
+        return _sanitize_folder_name(title)[:50]
+
 # --- Canonical Artifact Types (VI-01)
 # Each kind maps to a canonical subdirectory (relative to experiment_results) and a filename pattern.
 # Patterns may use {placeholders} that must be provided via meta_json in reserve_typed_artifact.
@@ -115,7 +156,17 @@ def main():
             raise FileNotFoundError(f"--base_folder '{base_folder}' does not exist")
         print(f"Restarting from existing folder: {base_folder}")
     else:
-        base_folder = f"experiments/{timestamp}_{idea.get('Name', 'Project')}"
+        base_folder = args.base_folder
+        original_name = idea.get('Name', 'Project')
+        
+        if args.load_manuscript:
+            # Use LLM (or fallback) to shorten the name
+            short_name = _get_llm_shortened_name(original_name, args.model)
+            print(f"Naming project folder: {short_name}")
+            base_folder = f"experiments/{timestamp}_{short_name}"
+        else:
+            base_folder = f"experiments/{timestamp}_{original_name}"
+
         
         # Handle resume
         if args.resume:
