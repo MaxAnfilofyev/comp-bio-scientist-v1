@@ -1,7 +1,7 @@
 # pyright: reportMissingImports=false
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
 from ai_scientist.orchestrator.pi_planning_helpers import load_implementation_plan_state
 
@@ -14,11 +14,25 @@ except ImportError:
             self.error = error
             self.status = status
 
-try:
-    from agents import Agent, ModelSettings
-except ImportError:
-    Agent = Any  # type: ignore
-    ModelSettings = Any  # type: ignore
+if TYPE_CHECKING:
+    class Agent:
+        def __init__(self, name: str, instructions: str, model: str, tools: List[Any], model_settings: Any):
+            pass
+
+    class ModelSettings:
+        def __init__(self, tool_choice: str = "auto"):
+            pass
+else:
+    try:
+        from agents import Agent, ModelSettings  # pyright: ignore
+    except ImportError:
+        class Agent:  # type: ignore
+            def __init__(self, name: str, instructions: str, model: str, tools: List[Any], model_settings: Any):
+                pass
+
+        class ModelSettings:  # type: ignore
+            def __init__(self, tool_choice: str = "auto"):
+                pass
 
 from ai_scientist.orchestrator.artifacts import _artifact_kind_catalog
 from ai_scientist.orchestrator.context_specs import (
@@ -810,7 +824,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
     except Exception as e:
         plan_context = f"CURRENT IMPLEMENTATION PLAN STATE: Could not load state ({str(e)})."
     
-    pi = Agent(
+    pi = _make_agent(
         name="Principal Investigator",
         instructions=(
             f"You are an expert Principal Investigator for project: {title}.\\n"
@@ -1062,7 +1076,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
                 custom_output_extractor=extract_run_output
             ),
         ],
-        model_settings=ModelSettings(tool_choice="required"),  # pyright: ignore[reportAnyInstantiation]
+        settings=common_settings
     )
 
     return pi
