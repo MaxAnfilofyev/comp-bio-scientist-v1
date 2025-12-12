@@ -2920,10 +2920,12 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     if not path_json:
          return {"error": "Failed to reserve path for model spec JSON."}
          
-    # Write JSON
-    write_res_json = write_text_artifact(name=path_json, content=content_json)
-    if "error" in write_res_json:
-        return write_res_json
+    # Write JSON directly to avoid double path resolution
+    try:
+        with open(path_json, "w", encoding="utf-8") as f:
+            f.write(content_json)
+    except Exception as e:
+        return {"error": f"Failed to write model spec: {e}"}
 
     # 3. Write README
     # We don't have a specific kind for the readme in ARTIFACT_TYPE_REGISTRY currently mapped to 'params_{name}_readme.txt'?
@@ -2942,7 +2944,11 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     readme_name = base_name.replace(".json", "_readme.txt")
     readme_path = os.path.join(dir_name, readme_name)
     
-    write_text_artifact(name=readme_path, content=readme)
+    try:
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write(readme)
+    except Exception as e:
+        return {"error": f"Failed to write readme: {e}"}
     
     return {
         "status": "success",
@@ -2972,7 +2978,13 @@ def save_verification_note(experiment_id: str, content: str):
         return {"error": "Failed to reserve path for verification note."}
         
     # 2. Write
-    return write_text_artifact(name=path, content=content)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        return {"error": f"Failed to write verification note: {e}"}
+        
+    return {"path": path, "status": "saved"}
 
 
 @function_tool
@@ -3026,7 +3038,14 @@ def save_simulation_metrics(experiment_id: str, metrics_json: str):
         return res
     
     path = res.get("reserved_path")
-    return write_text_artifact(name=path, content=metrics_json)
+    
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(metrics_json)
+    except Exception as e:
+        return {"error": f"Failed to write metrics: {e}"}
+        
+    return {"path": path, "status": "saved"}
 
 
 @function_tool
