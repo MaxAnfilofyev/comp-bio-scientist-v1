@@ -1540,6 +1540,12 @@ def run_biological_model(
     if enforce is None:
         enforce = os.environ.get("AISC_ENFORCE_PARAM_PROVENANCE", "true").strip().lower() not in {"0", "false", "no"}
     provenance_result = cast(Any, check_model_provenance)(model_key=model_key, allow_free_hyperparameters=not enforce)
+    if isinstance(provenance_result, str):
+        try:
+            provenance_result = json.loads(provenance_result)
+        except Exception:
+            pass
+
     if enforce and provenance_result.get("status") != "ready":
         reasons = []
         if provenance_result.get("missing_params"):
