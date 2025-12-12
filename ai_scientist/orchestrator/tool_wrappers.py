@@ -59,8 +59,9 @@ from ai_scientist.utils.transport_index import resolve_transport_sim
 from ai_scientist.utils import manifest as manifest_utils
 
 from ai_scientist.orchestrator.artifacts import (
-    reserve_typed_artifact as _reserve_typed_artifact_impl,
-    reserve_and_register_artifact as _reserve_and_register_impl,
+    ARTIFACT_TYPE_REGISTRY,
+    reserve_typed_artifact,
+    reserve_and_register_artifact,
 )
 
 from ai_scientist.orchestrator.summarization import ensure_module_summary_current
@@ -278,7 +279,7 @@ def check_project_state(base_folder: str) -> str:
     from .manifest_service import check_project_state
     return check_project_state(base_folder)
 
-@function_tool
+@function_tool(strict_mode=False)
 def manage_project_knowledge(
     action: Literal["add", "read"],
     category: Literal["general", "constraint", "decision", "failure_pattern", "reflection"] = "general",
@@ -940,7 +941,7 @@ def _checkpoint_required(name: str, summary: str, human_in_loop: bool) -> None:
 
 
 
-@function_tool
+@function_tool(strict_mode=False)
 def check_model_provenance(model_key: str, allow_free_hyperparameters: bool = False):
     """
     Validate that a model's spec and parameter ledger are complete and sourced.
@@ -1512,7 +1513,6 @@ def run_biological_model(
     model_key: str = "cooperation_evolution",
     time_end: float = 20.0,
     num_points: int = 200,
-    output_dir: Optional[str] = None,
     metadata_json: Optional[str] = None,
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
@@ -1541,15 +1541,7 @@ def run_biological_model(
     enforce = enforce_param_provenance
     if enforce is None:
         enforce = os.environ.get("AISC_ENFORCE_PARAM_PROVENANCE", "true").strip().lower() not in {"0", "false", "no"}
-    provenance_result = cast(Any, check_model_provenance)(model_key=model_key, allow_free_hyperparameters=not enforce)
-    if isinstance(provenance_result, str):
-        try:
-            provenance_result = json.loads(provenance_result)
-        except Exception:
-            pass
-
-    if isinstance(provenance_result, str):
-        raise RuntimeError(f"Provenance check failed: {provenance_result}")
+    provenance_result = evaluate_model_provenance(model_key=model_key, allow_free=not enforce)
 
     if enforce and provenance_result.get("status") != "ready":
         reasons = []
@@ -1560,7 +1552,7 @@ def run_biological_model(
         raise RuntimeError(f"Model provenance gate not satisfied for {model_key}: {', '.join(reasons)}")
     if not enforce and provenance_result.get("status") != "ready":
         try:
-            cast(Any, manage_project_knowledge)(
+            manifest_manage_project_knowledge(
                 action="add",
                 category="failure_pattern",
                 observation=f"Model provenance incomplete for {model_key}",
@@ -1573,11 +1565,21 @@ def run_biological_model(
         except Exception:
             pass
 
+    # Canonical path reservation
+    reservation = reserve_typed_artifact(
+        "biological_model_solution",
+        meta_dict={"model_key": model_key},
+    )
+    if reservation.get("error"):
+        raise RuntimeError(f"Failed to reserve artifact path: {reservation['error']}")
+    
+    output_path = reservation["reserved_path"]
+
     res = RunBiologicalModelTool().use_tool(
         model_key=model_key,
         time_end=time_end,
         num_points=num_points,
-        output_dir=_fill_output_dir(output_dir),
+        output_path=output_path,
         sweep_params=sweep_params,
     )
     _append_artifact_from_result(res, "output_json", metadata_json)
@@ -1610,7 +1612,6 @@ def run_bifurcation_sweep(
     end: float,
     steps: int = 50,
     time_end: float = 200.0,
-    output_dir: Optional[str] = None,
     metadata_json: Optional[str] = None,
     hypothesis_id: Optional[str] = None,
     experiment_id: Optional[str] = None,
@@ -1630,7 +1631,6 @@ def run_bifurcation_sweep(
     return run_biological_model(
         model_key=model_key,
         time_end=time_end,
-        output_dir=output_dir,
         metadata_json=metadata_json,
         hypothesis_id=hypothesis_id,
         experiment_id=experiment_id,

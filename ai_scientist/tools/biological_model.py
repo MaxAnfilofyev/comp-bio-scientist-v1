@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 import json
 import os
 import itertools
+from pathlib import Path
 import numpy as np
 import warnings
 from types import SimpleNamespace
@@ -568,7 +569,12 @@ class RunBiologicalModelTool(BaseTool):
             {
                 "name": "output_dir",
                 "type": "str",
-                "description": "Directory to store results JSON (default experiment_results)",
+                "description": "Directory to store results JSON (default experiment_results). Deprecated if output_path is set.",
+            },
+            {
+                "name": "output_path",
+                "type": "str",
+                "description": "Full path to save the output JSON. If provided, output_dir is ignored.",
             },
             {
                 "name": "sweep_params",
@@ -585,6 +591,7 @@ class RunBiologicalModelTool(BaseTool):
         num_points: int = 200,
         output_dir: str = "experiment_results",
         sweep_params: Optional[Dict[str, Any]] = None,
+        output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         models = create_sample_models()
         if model_key not in models:
@@ -593,15 +600,19 @@ class RunBiologicalModelTool(BaseTool):
         base_model = models[model_key]
         t = np.linspace(0, time_end, num_points)
         
-        out_dir = BaseTool.resolve_output_dir(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path, _, _ = resolve_output_path(
-            subdir=None,
-            name=f"{model_key}_solution.json",
-            run_root=out_dir,
-            allow_quarantine=True,
-            unique=True,
-        )
+        if output_path:
+            out_path = Path(output_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            out_dir = BaseTool.resolve_output_dir(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path, _, _ = resolve_output_path(
+                subdir=None,
+                name=f"{model_key}_solution.json",
+                run_root=out_dir,
+                allow_quarantine=True,
+                unique=True,
+            )
 
         results = []
         

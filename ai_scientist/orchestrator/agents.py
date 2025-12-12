@@ -484,7 +484,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             create_sensitivity_table_artifact,
             create_intervention_table_artifact,
             save_verification_note, # Replaces create_verification_note_artifact + write
-            create_model_spec_artifact, # Keep just in case, or remove if save_model_spec covers it? Plan said "Add save_model_spec". Maybe keep both or deprecate create? create_model_spec just reserves. save writes. Let's keep create_model_spec_artifact but rely on save_model_spec directives.
+            #create_model_spec_artifact, # Keep just in case, or remove if save_model_spec covers it? Plan said "Add save_model_spec". Maybe keep both or deprecate create? create_model_spec just reserves. save writes. Let's keep create_model_spec_artifact but rely on save_model_spec directives.
             save_model_spec,
             read_model_spec,
             read_experiment_config,
