@@ -156,6 +156,11 @@ ARTIFACT_TYPE_REGISTRY: Dict[str, Dict[str, str]] = {
         "pattern": "{slug}.png",
         "description": "Intermediate plot or diagnostic figure.",
     },
+    "figures_readme": {
+        "rel_dir": "figures",
+        "pattern": "README.md",
+        "description": "README file for the figures directory.",
+    },
     "manuscript_figure_png": {
         "rel_dir": "figures_for_manuscript",
         "pattern": "fig_{figure_id}.png",

@@ -2391,25 +2391,42 @@ def write_registered_artifact(reserved_path: str, content: str, append: bool = F
 
 
 @function_tool
-def write_interpretation_text(content: str, filename: str = "theory_interpretation.txt"):
+def write_interpretation_text(content: str):
     """
-    Convenience: save interpretation text to experiment_results/<filename> (default theory_interpretation.txt).
+    Convenience: save interpretation text to the canonical experiment_results/interpretation/interpretation.md file.
+    Does NOT accept a filename; forces the canonical path.
     """
-    return _write_text_artifact_raw(name=filename, content=content, subdir=None, metadata_json='{"type":"interpretation","source":"interpreter"}')
+    from ai_scientist.orchestrator.interpretation_tools import create_interpretation_md_artifact
+    # Reserve via the specialized tool (which registers it)
+    res = create_interpretation_md_artifact()
+    if res.get("error"):
+        return res
+    
+    path_str = res.get("reserved_path")
+    if not path_str:
+         return {"error": "Failed to reserve interpretation artifact."}
+
+    # Write content
+    return write_registered_artifact(reserved_path=path_str, content=content)
 
 
 @function_tool
-def write_figures_readme(content: str, filename: str = "README.md"):
+def write_figures_readme(content: str):
     """
-    Convenience: save a figures README under figures/ (default README.md).
+    Convenience: save a figures README to the canonical figures/README.md.
+    Does NOT accept a filename.
     """
-    # Force figures root
-    return _write_text_artifact_raw(
-        name=os.path.join("figures", filename),
-        content=content,
-        subdir=None,
-        metadata_json='{"type":"readme","source":"analyst"}',
-    )
+    # Reserve
+    res = reserve_and_register_artifact(kind="figures_readme", unique=False, meta_json='{"source": "analyst"}')
+    if res.get("error"):
+        return res
+        
+    path_str = res.get("reserved_path")
+    if not path_str:
+        return {"error": "Failed to reserve figures_readme."}
+        
+    # Write
+    return write_registered_artifact(reserved_path=path_str, content=content)
 
 
 @function_tool
@@ -3198,6 +3215,10 @@ def create_review_note_artifact(
         return res
         
     path_str = res.get("reserved_path")
+    # BUG FIX: Actually write the content!
+    if path_str and content:
+         write_registered_artifact(reserved_path=path_str, content=content)
+
     if not path_str:
         return {"error": "Failed to resolve path for review artifact."}
         
