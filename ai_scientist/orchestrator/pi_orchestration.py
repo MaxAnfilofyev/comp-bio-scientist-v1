@@ -28,20 +28,7 @@ class ToolCallRecord:
     arguments: dict[str, object]
 
 
-def truncate_for_inbox(text: str, max_chars: int = 4000) -> str:
-    """
-    Truncate text to max_chars, appending '...' if truncated.
-    
-    Args:
-        text: Text to truncate
-        max_chars: Maximum character count (default 4000)
-        
-    Returns:
-        Truncated text with '...' suffix if needed
-    """
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 3] + "..."
+
 
 
 def enforce_pi_writer_tools(
@@ -53,7 +40,7 @@ def enforce_pi_writer_tools(
     Enforces that the PI run performed at least one persistent write.
     
     If no writer tool was called, auto-log the final_message to user_inbox.md
-    via log_status_to_user_inbox (after truncation).
+    via log_status_to_user_inbox.
     
     Args:
         run_root: Root directory of the run (AISC_BASE_FOLDER)
@@ -72,5 +59,4 @@ def enforce_pi_writer_tools(
         return
 
     # Fallback: auto-persist final_message to user_inbox
-    truncated = truncate_for_inbox(final_message, max_chars=4000)
-    log_status_to_user_inbox(run_root=run_root, status_block=truncated)
+    log_status_to_user_inbox(run_root=run_root, status_block=final_message)
