@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import json
 import os
+import itertools
 import numpy as np
 import warnings
 from types import SimpleNamespace
@@ -569,6 +570,11 @@ class RunBiologicalModelTool(BaseTool):
                 "type": "str",
                 "description": "Directory to store results JSON (default experiment_results)",
             },
+            {
+                "name": "sweep_params",
+                "type": "dict",
+                "description": "Optional dictionary of parameters to sweep (e.g. {'beta': [0.1, 0.5, 1.0]})",
+            },
         ]
         super().__init__(name, description, parameters)
 
@@ -578,19 +584,15 @@ class RunBiologicalModelTool(BaseTool):
         time_end: float = 20.0,
         num_points: int = 200,
         output_dir: str = "experiment_results",
+        sweep_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         models = create_sample_models()
         if model_key not in models:
             raise ValueError(f"Unknown model_key '{model_key}'. Available: {list(models.keys())}")
 
-        model = models[model_key]
+        base_model = models[model_key]
         t = np.linspace(0, time_end, num_points)
-
-        if hasattr(model, "replicator_dynamics"):
-            sol = model.replicator_dynamics([0.01, 0.99], t)
-        else:
-            sol = solve_biological_model(model, t)
-
+        
         out_dir = BaseTool.resolve_output_dir(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path, _, _ = resolve_output_path(
@@ -601,21 +603,84 @@ class RunBiologicalModelTool(BaseTool):
             unique=True,
         )
 
-        # payload creation...
-        payload: Dict[str, Any] = {
-            "model": model_key,
-            "time": sol.get("time", []),
-            "variables": sol.get("variables", []),
-            "solutions": sol.get("solutions", []),
-            "success": sol.get("success", False),
-            "message": sol.get("message", ""),
-        }
-        # Convert numpy types to native for JSON
+        results = []
+        
+        if sweep_params:
+            keys = list(sweep_params.keys())
+            values = list(sweep_params.values())
+            # Ensure all values are lists
+            values = [[v] if not isinstance(v, list) else v for v in values]
+            
+            for combination in itertools.product(*values):
+                current_params = dict(zip(keys, combination))
+                
+                # Clone/reset model for this run
+                # (Simple reassignment since our models are stateful containers of params)
+                base_model.set_parameters(current_params)
+                
+                if hasattr(base_model, "replicator_dynamics"):
+                    sol = base_model.replicator_dynamics([0.01, 0.99], t)
+                else:
+                    sol = solve_biological_model(base_model, t)
+                
+                res_entry = {
+                    "parameters": current_params,
+                    "success": sol.get("success", False),
+                    "message": sol.get("message", ""),
+                    # Potentially summarize or store full time series? 
+                    # For sweeps, full time series can get huge. 
+                    # Let's store full for now, but user might want to limit this later.
+                    "time": sol.get("time", []),
+                    "variables": sol.get("variables", []),
+                    "solutions": sol.get("solutions", []),
+                }
+                
+                # Helper to convert numpy types within the loop
+                def _rec_to_native(x):
+                    if isinstance(x, np.ndarray):
+                        return x.tolist()
+                    if isinstance(x, np.floating):
+                        return float(x)
+                    if isinstance(x, np.integer):
+                        return int(x)
+                    if isinstance(x, list):
+                        return [_rec_to_native(i) for i in x]
+                    if isinstance(x, dict):
+                        return {k: _rec_to_native(v) for k, v in x.items()}
+                    return x
+
+                results.append(_rec_to_native(res_entry))
+                
+            payload = {
+                "model": model_key,
+                "sweep_params": sweep_params,
+                "results": results,
+                "success": all(r["success"] for r in results)
+            }
+            
+        else:
+            # Single run behavior (legacy)
+            if hasattr(base_model, "replicator_dynamics"):
+                sol = base_model.replicator_dynamics([0.01, 0.99], t)
+            else:
+                sol = solve_biological_model(base_model, t)
+
+            payload: Dict[str, Any] = {
+                "model": model_key,
+                "time": sol.get("time", []),
+                "variables": sol.get("variables", []),
+                "solutions": sol.get("solutions", []),
+                "success": sol.get("success", False),
+                "message": sol.get("message", ""),
+            }
+
+        # Convert numpy types to native for JSON (final pass for single run or top level)
         def _to_native(x):
             if hasattr(x, "tolist"):
                 return x.tolist()
             return x
 
+        # For sweep, payload["results"] is already converted, but top-level fields might need it
         payload = {k: _to_native(v) for k, v in payload.items()}
 
         with out_path.open("w") as f:

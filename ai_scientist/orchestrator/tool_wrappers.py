@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import ast
 import difflib
+import numpy as np
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING, cast
 
 try:
@@ -1506,7 +1507,7 @@ def build_graphs(n_nodes: int = 100, seed: int = 0):
             )
     return res
 
-@function_tool
+@function_tool(strict_mode=False)
 def run_biological_model(
     model_key: str = "cooperation_evolution",
     time_end: float = 20.0,
@@ -1519,6 +1520,7 @@ def run_biological_model(
     compute_metrics: bool = False,
     enforce_param_provenance: Optional[bool] = None,
     skip_lit_gate: bool = False,
+    sweep_params: Optional[Dict[str, Any]] = None,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
     ensure_lit_gate_ready(skip_gate=skip_lit_gate)
@@ -1545,6 +1547,9 @@ def run_biological_model(
             provenance_result = json.loads(provenance_result)
         except Exception:
             pass
+
+    if isinstance(provenance_result, str):
+        raise RuntimeError(f"Provenance check failed: {provenance_result}")
 
     if enforce and provenance_result.get("status") != "ready":
         reasons = []
@@ -1573,6 +1578,7 @@ def run_biological_model(
         time_end=time_end,
         num_points=num_points,
         output_dir=_fill_output_dir(output_dir),
+        sweep_params=sweep_params,
     )
     _append_artifact_from_result(res, "output_json", metadata_json)
     try:
@@ -1595,6 +1601,43 @@ def run_biological_model(
     except Exception:
         pass
     return res
+
+@function_tool(strict_mode=False)
+def run_bifurcation_sweep(
+    model_key: str,
+    parameter: str,
+    start: float,
+    end: float,
+    steps: int = 50,
+    time_end: float = 200.0,
+    output_dir: Optional[str] = None,
+    metadata_json: Optional[str] = None,
+    hypothesis_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    skip_lit_gate: bool = False,
+    enforce_param_provenance: Optional[bool] = None,
+):
+    """
+    Perform a 1D bifurcation sweep by varying a parameter linearly.
+    """
+    sweep_values = list(np.linspace(start, end, steps))
+    # JSON-serializable list
+    sweep_values = [float(x) for x in sweep_values]
+    
+    sweep_params = {parameter: sweep_values}
+    
+    # Delegate to run_biological_model
+    return run_biological_model(
+        model_key=model_key,
+        time_end=time_end,
+        output_dir=output_dir,
+        metadata_json=metadata_json,
+        hypothesis_id=hypothesis_id,
+        experiment_id=experiment_id,
+        skip_lit_gate=skip_lit_gate,
+        enforce_param_provenance=enforce_param_provenance,
+        sweep_params=sweep_params,
+    )
 
 @function_tool
 def run_sensitivity_sweep(

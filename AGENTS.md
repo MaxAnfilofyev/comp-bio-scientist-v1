@@ -83,7 +83,9 @@ This project orchestrates multiple agent flows (ideation → experiments → int
 - **RunValidationCompare** (`ai_scientist/tools/validation_compare.py`)
   - Params: `lit_path`, `sim_path`; computes simple correlations.
 - **RunBiologicalModel** (`ai_scientist/tools/biological_model.py`)
-  - Params: `model_key`, `time_end`, `num_points`, `output_dir`; runs a built-in model and saves JSON.
+  - Params: `model_key`, `time_end`, `num_points`, `output_dir`, `sweep_params`; runs a built-in model and saves JSON.
+- **run_bifurcation_sweep** (`ai_scientist/orchestrator/tool_wrappers.py`)
+  - Params: `model_key`, `parameter`, `start`, `end`, `steps`, `time_end`, `output_dir`, `skip_lit_gate`, `enforce_param_provenance`; performs a 1D parameter sweep delegation.
 - **RunBiologicalPlotting** (`ai_scientist/tools/biological_plotting.py`)
   - Params: `solution_path`, `output_dir`, `make_phase_portrait`; plots time series/phase portraits.
 - **RunBiologicalStats** (`ai_scientist/tools/biological_stats.py`)
