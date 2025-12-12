@@ -105,6 +105,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "transport_node_index_map",
             "transport_topology_summary",
             "hypothesis_trace_json",
+            "model_spec",
         ],
         write_scope=[
             "transport_manifest",
@@ -123,6 +124,7 @@ ROLE_CONTEXT_SPECS: Dict[str, ContextViewSpec] = {
             "verification_note",
             "model_metrics_json",
             "model_metrics_csv",
+            "model_spec",
         ],
         max_artifacts=14,
         summary_preferred=False,

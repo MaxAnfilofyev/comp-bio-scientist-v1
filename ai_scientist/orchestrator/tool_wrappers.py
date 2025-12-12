@@ -1146,16 +1146,22 @@ def compute_model_metrics(
     input_path: str,
     label: Optional[str] = None,
     model_key: Optional[str] = None,
-    output_dir: Optional[str] = None,
+    # output_dir removed
 ):
     """
     Compute domain-specific metrics from a sweep CSV/JSON or model output; writes *_metrics.csv and optional {model_key}_metrics.json.
     """
+    # Canonical behavior: colocate outputs with the input file
+    output_dir = os.path.dirname(input_path)
+    if not output_dir:
+        # Fallback to experiment_results root if just a filename is given
+        output_dir = _fill_output_dir(None)
+
     res = ComputeModelMetricsTool().use_tool(
         input_path=input_path,
         label=label,
         model_key=model_key,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=output_dir,
     )
     if isinstance(res, dict):
         if res.get("output_csv"):
@@ -1237,14 +1243,20 @@ def generate_reproduction_section(tag: str, style: str = "methods_and_supp"):
 @function_tool
 def sim_postprocess(
     sim_json_path: str,
-    output_dir: Optional[str] = None,
+    # output_dir removed
     graph_path: Optional[str] = None,
     failure_threshold: float = 0.2,
 ):
     """Convert sim.json into failure_matrix.npy, time_vector.npy, and nodes_order.txt."""
+    # Canonical behavior: colocate outputs with the source sim.json
+    output_dir = os.path.dirname(sim_json_path)
+    if not output_dir:
+        # Fallback to experiment_results root if just a filename is given
+        output_dir = _fill_output_dir(None)
+        
     return SimPostprocessTool().use_tool(
         sim_json_path=sim_json_path,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=output_dir,
         graph_path=graph_path,
         failure_threshold=failure_threshold,
     )
@@ -1581,7 +1593,7 @@ def run_biological_model(
 @function_tool
 def run_sensitivity_sweep(
     graph_path: str,
-    output_dir: Optional[str] = None,
+    # output_dir removed
     transport_vals: Optional[List[float]] = None,
     demand_vals: Optional[List[float]] = None,
     steps: int = 150,
@@ -1603,9 +1615,14 @@ def run_sensitivity_sweep(
     except Exception:
         pass
     ensure_lit_gate_ready(skip_gate=skip_lit_gate)
+
+    # Canonical path logic
+    sim_subdir = f"simulations/{experiment_id}" if experiment_id else "simulations/adhoc_sensitivity"
+    output_dir_path = _fill_output_dir(sim_subdir)
+
     res = RunSensitivitySweepTool().use_tool(
         graph_path=graph_path,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=output_dir_path,
         transport_vals=transport_vals,
         demand_vals=demand_vals,
         steps=steps,
@@ -2761,11 +2778,11 @@ def get_latest_metrics(model_key: str):
 @function_tool
 def read_model_spec(artifact_id_or_path: str):
     """
-    Read a model specification (parameter_set).
+    Read a model specification (model_spec or parameter_set).
     """
     # We should strictly enforce kind, but we only get a path/name.
     # We can lookup in manifest.
-    return _safe_read_artifact(artifact_id_or_path, allowed_kinds=["parameter_set"])
+    return _safe_read_artifact(artifact_id_or_path, allowed_kinds=["model_spec", "parameter_set"])
 
 
 @function_tool

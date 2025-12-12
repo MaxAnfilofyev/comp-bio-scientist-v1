@@ -2,6 +2,7 @@
 import json
 import os
 import time
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -422,13 +423,51 @@ def update_transport_manifest(
         suffix = f"; missing: {', '.join(missing)}" if notes else f"missing: {', '.join(missing)}"
         notes = notes + suffix if notes else suffix
 
+    # Ensure canonical directory exists
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Enforce canonical locations: Copy files if they are not in the seed_dir
+    canonical_targets = resolve_run_paths(seed_dir, baseline)
+    final_paths = {}
+    
+    for key, path_str in resolved_paths.items():
+        if not path_str:
+            final_paths[key] = None
+            continue
+            
+        src_path = Path(path_str)
+        if not src_path.exists():
+            final_paths[key] = path_str # Keep explicitly provided but missing path?
+            continue
+            
+        # Determine canonical target
+        target_path = canonical_targets.get(key)
+        if not target_path:
+            # Unknown key, keep as is
+            final_paths[key] = str(src_path)
+            continue
+            
+        try:
+            # Check if we need to copy
+            # We use absolute paths for comparison to be safe
+            if src_path.resolve() != target_path.resolve():
+                shutil.copy2(src_path, target_path)
+                final_paths[key] = str(target_path)
+            else:
+                final_paths[key] = str(target_path)
+        except Exception as e:
+            # If copy fails, fallback to source path but might warn?
+            # We append warning to notes if possible, but notes is string.
+            # Just fallback for now.
+            final_paths[key] = str(src_path)
+
     actor_name = actor or os.environ.get("AISC_ACTIVE_ROLE", "") or "unknown"
     return upsert_transport_manifest_entry(
         baseline=baseline,
         transport=transport,
         seed=seed,
         status=status,
-        paths=resolved_paths,
+        paths=final_paths,
         notes=notes,
         actor=actor_name,
     )
