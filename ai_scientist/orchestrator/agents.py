@@ -87,7 +87,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     run_transport_batch,
     run_validation_compare,
     run_writeup_task,
-    search_semantic_scholar,
     scan_transport_manifest,
     sim_postprocess,
     summarize_artifact,
@@ -388,7 +387,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             f"Related Work to Consider: {related_work}\n"
             f"{_get_path_context('Archivist', dirs)}\n{_get_file_io_policy('Archivist')}\n{_get_metadata_reminder('Archivist')}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n\n"
             "## CORE WORKFLOW\n"
-            "1. Use 'assemble_lit_data' or 'search_semantic_scholar' to gather papers\n"
+            "1. Use 'assemble_lit_data' to gather papers\n"
             "2. Use 'get_lit_recommendations' to discover highly relevant papers based on findings\n"
             "3. Maintain a claim graph via 'update_claim_graph' when mapping evidence\n"
             "3. Use specialized artifact creators (do NOT use generic reserve calls):\n"
@@ -418,7 +417,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             assemble_lit_data,
             validate_lit_summary,
             verify_references,
-            search_semantic_scholar,
             update_claim_graph,
             manage_project_knowledge,
             append_run_note_tool,
@@ -665,7 +663,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "3. Create interpretation artifacts via specialized tools:\n"
             "   - 'create_interpretation_json_artifact()' for JSON format\n"
             "   - 'create_interpretation_md_artifact()' for Markdown format\n"
-            "   - Use reserved path with 'write_text_artifact' or 'write_interpretation_text'\n"
+            "   - Use reserved path with 'write_interpretation_text'\n"
             "4. These tools handle path reservation and manifest registration automatically\n\n"
             "## SUCCESS CRITERIA\n"
             "✓ Only called for theoretical research type\n"
@@ -829,7 +827,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "**Delegation Examples**:\\n\\n"
             "✓ **GOOD - Direct execution**:\\n"
             "```\\n"
-            "archivist(task='Search Semantic Scholar for substantia nigra vulnerability papers. "
+            "archivist(task='Assemble literature for substantia nigra vulnerability papers. "
             "Create lit_summary.json with ≥10 refs. Run verify_references, ensure ≥80% found.')\\n"
             "```\\n\\n"
             "✗ **BAD - Meta-planning**:\\n"

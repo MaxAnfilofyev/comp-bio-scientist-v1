@@ -850,10 +850,10 @@ def log_strategic_pivot(reason: str, new_plan: str):
 def assemble_lit_data(
     queries: Optional[List[str]] = None,
     seed_paths: Optional[List[str]] = None,
-    max_results: int = 25,
+    max_results: int = 5,
     use_semantic_scholar: bool = True,
     run_verification: bool = True,
-    verification_max_results: int = 5,
+    verification_max_results: int = 3,
     excluded_ids: Optional[List[str]] = None,
 ):
     """
