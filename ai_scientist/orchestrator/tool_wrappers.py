@@ -1565,9 +1565,11 @@ def run_biological_model(
             pass
 
     # Canonical path reservation
-    reservation = reserve_typed_artifact(
-        "biological_model_solution",
-        meta_dict={"model_key": model_key},
+    # Canonical path reservation
+    reservation = _reserve_typed_artifact_impl(
+        kind="biological_model_solution",
+        meta_json=json.dumps({"model_key": model_key}),
+        unique=True,
     )
     if reservation.get("error"):
         raise RuntimeError(f"Failed to reserve artifact path: {reservation['error']}")
