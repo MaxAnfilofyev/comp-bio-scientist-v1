@@ -9,7 +9,7 @@ import backoff
 from ai_scientist.tools.base_tool import BaseTool
 
 
-def on_backoff(details: Dict) -> None:
+def on_backoff(details: Any) -> None:
     print(
         f"Backing off {details['wait']:0.1f} seconds after {details['tries']} tries "
         f"calling function {details['target'].__name__} at {time.strftime('%X')}"
@@ -72,7 +72,7 @@ class SemanticScholarSearchTool(BaseTool):
                 "query": query,
                 "limit": self.max_results,
                 # 'doi' is returned inside externalIds; requesting it directly triggers 400 on search endpoint.
-                "fields": "title,authors,venue,year,abstract,citationCount,externalIds",
+                "fields": "title,authors,venue,year,abstract,citationCount,externalIds,paperId,corpusId,tldr,url",
             },
         )
         print(f"Response Status Code: {rsp.status_code}")
@@ -125,7 +125,7 @@ def search_for_papers(query, result_limit=10) -> Union[None, List[Dict]]:
                 "query": query,
                 "limit": result_limit,
                 # 'doi' is nested under externalIds; requesting it directly causes API 400.
-                "fields": "title,authors,venue,year,abstract,citationStyles,citationCount,externalIds",
+                "fields": "title,authors,venue,year,abstract,citationStyles,citationCount,externalIds,paperId,corpusId,tldr,url",
             },
         )
     print(f"Response Status Code: {rsp.status_code}")

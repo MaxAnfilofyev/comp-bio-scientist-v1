@@ -74,8 +74,10 @@ def _fetch_semantic_scholar(
                     else None,
                     "venue": p.get("venue"),
                     "url": p.get("url"),
-                    "doi": p.get("doi"),
+                    "doi": p.get("externalIds", {}).get("DOI") or p.get("doi"),
                     "tldr": p.get("tldr", {}).get("text") if isinstance(p.get("tldr"), dict) else None,
+                    "paperId": p.get("paperId"),
+                    "corpusId": p.get("corpusId"),
                 }
             )
     return out

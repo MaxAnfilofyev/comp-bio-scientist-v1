@@ -64,6 +64,7 @@ from ai_scientist.utils import manifest as manifest_utils
 from ai_scientist.orchestrator.artifacts import (
     reserve_typed_artifact as _reserve_typed_artifact_impl,
     reserve_and_register_artifact as _reserve_and_register_impl,
+    ARTIFACT_TYPE_REGISTRY,
 )
 
 from ai_scientist.orchestrator.summarization import ensure_module_summary_current
@@ -1060,7 +1061,12 @@ def verify_references(
     """
     # Resolve canonical inputs/outputs to avoid path gymnastics.
     lit_summary_path = resolve_lit_summary_path(None)
-    out_dir = BaseTool.resolve_output_dir(None)
+    
+    # Resolve correct output subdir from registry
+    registry_entry = ARTIFACT_TYPE_REGISTRY["lit_reference_verification_json"]
+    rel_dir = registry_entry.get("rel_dir", "literature")
+    out_dir = BaseTool.resolve_output_dir(None) / rel_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     res = ReferenceVerificationTool().use_tool(
         lit_path=str(lit_summary_path),
