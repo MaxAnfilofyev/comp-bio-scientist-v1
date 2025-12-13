@@ -2958,7 +2958,7 @@ def save_model_spec(model_key: str, content_json: str, readme: str):
     res_json = reserve_and_register_artifact(
         kind="model_spec",
         meta_json=json.dumps(meta_json),
-        unique=True
+        unique=False,
     )
     if "error" in res_json:
         return res_json
