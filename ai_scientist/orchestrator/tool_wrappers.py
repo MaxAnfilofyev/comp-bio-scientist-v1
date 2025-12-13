@@ -3468,9 +3468,9 @@ def create_review_note_artifact(
         return res
         
     path_str = res.get("reserved_path")
-    # BUG FIX: Actually write the content!
-    if path_str and content:
-         write_registered_artifact(reserved_path=path_str, content=content)
+    # BUG FIX: content is written below explicitly.
+    # if path_str and content:
+    #      write_registered_artifact(reserved_path=path_str, content=content)
 
     if not path_str:
         return {"error": "Failed to resolve path for review artifact."}
@@ -3491,9 +3491,10 @@ def check_parameter_sources_for_manuscript(manuscript_id: Optional[str] = None):
     Validate that all parameter sets have declared source types and references.
     Scans 'parameter_set' artifacts and checks for 'source_type' and 'reference_id'/'lit_claim_id'.
     """
-    # 1. List parameter sets
+    # 1. List artifacts
     param_sets = list_artifacts_by_kind("parameter_set", limit=100)
-    paths = param_sets.get("paths", [])
+    model_specs = list_artifacts_by_kind("model_spec", limit=100)
+    paths = param_sets.get("paths", []) + model_specs.get("paths", [])
     
     report = []
     
@@ -3513,8 +3514,15 @@ def check_parameter_sources_for_manuscript(manuscript_id: Optional[str] = None):
              report.append(f"⚠️ {os.path.basename(p_path)}: Invalid format (not a dict)")
              continue
 
+        if "model_key" in data and "parameters" in data:
+            # Handle model_spec structure
+            params_dict = data["parameters"]
+        else:
+            # Handle direct parameter_set structure
+            params_dict = data
+
         file_issues = []
-        for param, details in data.items():
+        for param, details in params_dict.items():
             if not isinstance(details, dict):
                 continue # Skip metadata keys if any
             
