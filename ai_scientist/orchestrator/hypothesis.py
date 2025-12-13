@@ -722,18 +722,10 @@ def record_model_provenance_in_provenance(model_key: str, status_line: str) -> s
 def resolve_claim_graph_path() -> Path:
     # Always resolve via standard output directory logic to ensure consistency
     # with artifact creation which anchors to experiment_results.
-    try:
-        exp_dir = BaseTool.resolve_output_dir(None)
-    except Exception:
-        # Fallback if BaseTool logic fails (e.g. no env vars), try env or cwd
-        base = os.environ.get("AISC_BASE_FOLDER", ".")
-        exp_dir = Path(base).resolve() / "experiment_results"
-
-    if exp_dir.name != "experiment_results":
-        # Safety check/correction if resolve_output_dir returns something else
-        exp_dir = exp_dir / "experiment_results"
-
-    return exp_dir / "claim_graph.json"
+    target, _, _ = resolve_output_path(
+        subdir=".", name="claim_graph.json", allow_quarantine=False, unique=False
+    )
+    return target
 
 
 def _load_claim_graph(path: Path) -> List[Dict[str, Any]]:
