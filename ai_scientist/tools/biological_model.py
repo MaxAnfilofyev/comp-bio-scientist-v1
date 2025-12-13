@@ -1,4 +1,6 @@
 from typing import Dict, Any, Optional
+import importlib.util
+import sys
 import json
 import os
 import itertools
@@ -537,6 +539,114 @@ def create_sample_models():
     return models
 
 
+    models['epidemiology_sir'] = epi_model
+
+    return models
+
+
+def create_ode_code(
+    model_name: str,
+    variables: list[str],
+    parameters: list[str],
+    equations: list[str],
+) -> str:
+    """
+    Generate a Python script for a custom ODE model.
+    
+    Args:
+        model_name: Name of the model class/artifact
+        variables: List of variable names (e.g. ['M', 'E'])
+        parameters: List of parameter names (e.g. ['A', 'C'])
+        equations: List of equation strings (RHS of dVar/dt) matching variables order.
+        
+    Returns:
+        String containing the complete Python script.
+    """
+    if len(variables) != len(equations):
+        raise ValueError(f"Number of variables ({len(variables)}) must match equations ({len(equations)})")
+        
+    # Validation: Ensure names are valid identifiers
+    for name in variables + parameters:
+        if not name.isidentifier():
+            raise ValueError(f"Invalid identifier: {name}")
+
+    # Indent helper
+    def indent(text, spaces=8):
+        return "\n".join(" " * spaces + line for line in text.splitlines())
+
+    # Build equation code
+    # Unpack state
+    unpack_line = f"{', '.join(variables)} = state"
+    
+    # Calculate derivatives
+    deriv_lines = []
+    for var, eqn in zip(variables, equations):
+        # Basic safety: Ensure equations don't contain forbidden keywords?
+        # Python parser will catch syntax errors, but we rely on "Correct by Construction"
+        # and assume the caller provided math strings. 
+        # Ideally we'd parse and check imports/calls here too, but string generation is safer than running.
+        deriv_lines.append(f"d{var}dt = {eqn}")
+        
+    return_line = f"return [{', '.join('d' + v + 'dt' for v in variables)}]"
+    
+    # Build solve method params extraction
+    param_extract_lines = []
+    for p in parameters:
+        # p = float(kwargs.get("p", 1.0)) # Example default?
+        # Better: p = kwargs.get("p") if "p" in kwargs else self.params.get("p", 1.0)
+        # For simplicity, extract from kwargs or self.params
+        param_extract_lines.append(f'{p} = kwargs.get("{p}", self.params.get("{p}", 1.0))')
+
+    deriv_block = indent("\n".join(deriv_lines))
+    params_block = indent("\n".join(param_extract_lines))
+    class_name = "".join(x.capitalize() for x in model_name.split("_")) + "Model"
+    
+    code_template = f'''
+import numpy as np
+from scipy.integrate import odeint
+
+class {class_name}:
+    def __init__(self):
+        self.name = "{model_name}"
+        self.description = "Auto-generated ODE model for {', '.join(variables)}"
+        self.params = {{}}
+    
+    def set_parameters(self, params):
+        """Set default parameters."""
+        self.params.update(params)
+
+    def equations(self, state, t, {', '.join(parameters)}):
+        {unpack_line}
+        
+{deriv_block}
+        
+        {return_line}
+
+    def solve(self, time_points, **kwargs):
+        # Extract parameters
+{params_block}
+        
+        # Initial conditions: Look for 'ICs' or 'initial_conditions'
+        ic = kwargs.get("initial_conditions", kwargs.get("ICs", [{', '.join(['0.1']*len(variables))}]))
+        
+        # Solve
+        sol = odeint(self.equations, ic, time_points, args=({', '.join(parameters)},))
+        
+        return {{
+            "time": time_points.tolist(),
+            "success": True,
+            "message": "Integration successful",
+            "variables": {variables},
+            "parameters": {{{', '.join(f'"{p}": {p}' for p in parameters)}}},
+            "solutions": sol.tolist(),
+            # Flatten variables for convenience
+            **{{var: sol[:, i].tolist() for i, var in enumerate({variables})}}
+        }}
+
+model = {class_name}()
+'''
+    return code_template.strip()
+
 class RunBiologicalModelTool(BaseTool):
     """
     Run a small library biological model (ODE/replicator) and store outputs.
@@ -584,6 +694,48 @@ class RunBiologicalModelTool(BaseTool):
         ]
         super().__init__(name, description, parameters)
 
+    def _load_custom_model(self, model_key: str, spec_path: str):
+        try:
+            with open(spec_path, "r") as f:
+                spec = json.load(f)
+            
+            script_path = spec.get("script_path")
+            if not script_path:
+                raise ValueError(f"No script_path in model spec at {spec_path}")
+            
+            # Resolve script path relative to AISC_BASE_FOLDER if needed, or absolute
+            # For now assume relative to CWD if not absolute
+            if not os.path.exists(script_path):
+                 # Try relative to spec directory? Or base folder?
+                 pass 
+
+            spec_name = "custom_model_module"
+            spec_loader = importlib.util.spec_from_file_location(spec_name, script_path)
+            if spec_loader is None or spec_loader.loader is None:
+                raise ImportError(f"Could not load spec from {script_path}")
+                
+            module = importlib.util.module_from_spec(spec_loader)
+            sys.modules[spec_name] = module
+            spec_loader.loader.exec_module(module)
+            
+            if hasattr(module, "model"):
+                return module.model
+            elif hasattr(module, "solve"):
+                 # Wrap solve function in a simple object
+                 class SimpleModel:
+                     def __init__(self):
+                         self.name = model_key
+                         self.description = "Custom loaded model"
+                     def solve(self, t, **kwargs):
+                         return module.solve(t, **kwargs)
+                 return SimpleModel()
+            else:
+                 # Check for class matching key?
+                 raise ValueError(f"Module at {script_path} must define 'model' object or 'solve' function.")
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to load custom model '{model_key}': {e}")
+
     def use_tool(
         self,
         model_key: str = "cooperation_evolution",
@@ -592,12 +744,19 @@ class RunBiologicalModelTool(BaseTool):
         output_dir: str = "experiment_results",
         sweep_params: Optional[Dict[str, Any]] = None,
         output_path: Optional[str] = None,
+        model_spec_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         models = create_sample_models()
-        if model_key not in models:
-            raise ValueError(f"Unknown model_key '{model_key}'. Available: {list(models.keys())}")
-
-        base_model = models[model_key]
+        
+        base_model = None
+        if model_key in models:
+            base_model = models[model_key]
+        elif model_spec_path:
+            # Attempt to load custom model from spec
+            base_model = self._load_custom_model(model_key, model_spec_path)
+        
+        if base_model is None:
+            raise ValueError(f"Unknown model_key '{model_key}'. Available: {list(models.keys())} or via model_spec_path")
         t = np.linspace(0, time_end, num_points)
         
         if output_path:

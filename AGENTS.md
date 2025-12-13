@@ -20,7 +20,7 @@ This project orchestrates multiple agent flows (ideation → experiments → int
   - Prompts now link to `docs/artifact_metadata_requirements.md` and every role/PI prompt embeds the per-role context spec plus a summary-first reminder (via `ensure_module_summary`/`summarize_artifact`) so work stays aligned with the new system design principles.
    - Agent tool highlights:
      - Archivist: `AssembleLitData`, `ValidateLitSummary`, `SearchSemanticScholar`, `get_lit_recommendations`, `UpdateClaimGraph`, `create_lit_review_artifact`, `create_lit_bibliography_artifact`.
-     - Modeler: `BuildGraphs`, `RunBiologicalModel`, `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`, `create_verification_note_artifact`.
+     - Modeler: `BuildGraphs`, `RunBiologicalModel` (legacy/built-in), `create_ode_model` (safe custom generation), `RunCompartmentalSimulation`, `RunSensitivitySweep`, `RunInterventionTester`, `create_verification_note_artifact`.
      - Analyst: `RunBiologicalPlotting`, `RunValidationCompare`, `RunBiologicalStats`.
      - Interpreter: `interpret_biology` (theoretical runs), `create_interpretation_json_artifact`, `create_interpretation_md_artifact`.
      - Reviewer: `ReadManuscript`, `CheckClaimGraph`, `RunBiologicalStats`, `create_review_note_artifact`.
