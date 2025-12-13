@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
+from ai_scientist.tools.crossref import CrossRefSearchTool
 
 
 def _normalize_title(title: str) -> str:
@@ -232,6 +233,55 @@ class ReferenceVerificationTool(BaseTool):
                 notes = f"Best hit: '{best_hit.get('title', '')[:80]}', authors={', '.join(candidate_authors) or 'NA'}, year={best_hit.get('year')}, doi={hit_doi or 'NA'}"
                 if not doi and hit_doi:
                     doi = hit_doi
+            
+        # --- CrossRef Fallback ---
+        # If (not found) OR (found but missing DOI), try CrossRef
+        current_found = bool(best_score >= score_threshold)
+        if (not current_found) or (current_found and not doi):
+            try:
+                cr_tool = CrossRefSearchTool(max_results=5)
+                cr_results = cr_tool.search_works(query) or []
+            except Exception:
+                cr_results = []
+                # Keep calm and carry on
+                
+            cr_best_score = 0.0
+            cr_best_hit = None
+            
+            for hit in cr_results:
+                c_title = hit.get("title") or ""
+                c_authors = [] 
+                if hit.get("authors"):
+                     c_authors = _normalize_authors(hit.get("authors"))
+                
+                c_year = hit.get("year")
+                
+                score = _score_candidate(title, c_title, authors, c_authors, year, c_year)
+                if score > cr_best_score:
+                    cr_best_score = score
+                    cr_best_hit = hit
+            
+            # Decision logic
+            if cr_best_score >= score_threshold:
+                # CrossRef found a match
+                cr_doi = cr_best_hit.get("doi")
+                
+                # scenario 1: S2 failed, CrossRef succeeded
+                if not current_found:
+                    best_score = cr_best_score
+                    # We don't overwrite best_hit (S2) structure completely, but we take the DOI and status
+                    # constructing a note
+                    short_title = cr_best_hit.get('title', '')[:50]
+                    notes = f"Verified via CrossRef: '{short_title}...', doi={cr_doi}"
+                    if cr_doi:
+                        doi = cr_doi
+                
+                # scenario 2: S2 succeeded but missed DOI, CrossRef found it (and matches sufficiently)
+                elif current_found and not doi and cr_doi:
+                    # Ensure it's likely the same paper (double check score didn't drop massively? 
+                    # Actually we just checked cr_best_score >= threshold)
+                    doi = cr_doi
+                    notes += " (DOI added via CrossRef)"
 
         found = bool(best_score >= score_threshold)
         return {
@@ -269,8 +319,8 @@ class ReferenceVerificationTool(BaseTool):
         print(f"Verifying {n_total_recs} references...")
         
         for idx, record in enumerate(records):
-            # Optimization: If we just fetched it from S2, don't re-verify it against S2
-            if record.get("source") == "semantic_scholar":
+            # Optimization: If we just fetched it from S2 AND it has a DOI, don't re-verify
+            if record.get("source") == "semantic_scholar" and record.get("doi"):
                 ref_id, title, authors, year, doi = self._extract_fields(record, idx)
                 rows.append({
                     "ref_id": ref_id,
