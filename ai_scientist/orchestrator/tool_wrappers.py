@@ -1525,8 +1525,18 @@ def run_biological_model(
     sweep_params: Optional[Dict[str, Any]] = None,
 ):
     """Run a built-in biological ODE/replicator model and save JSON results."""
-    ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     ledger = ensure_model_spec_and_params(model_key)
+
+    # Automatically skip literature gate for custom experimental models (E1, E2, etc.)
+    # These models do not need to assume the project's baseline parameters.
+    if re.match(r"^E\d+", model_key):
+        if not skip_lit_gate:
+            skip_lit_gate = True
+        # Also relax provenance enforcement unless explicitly requested
+        if enforce_param_provenance is None:
+            enforce_param_provenance = False
+
+    ensure_lit_gate_ready(skip_gate=skip_lit_gate)
     if ledger.get("created_spec"):
         _append_manifest_entry(
             name=ledger["spec_path"],

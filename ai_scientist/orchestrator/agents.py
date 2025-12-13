@@ -597,7 +597,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "## REFERENCE AUDIT\\n"
             "3. Use 'check_references_completeness' and 'get_lit_reference_verification'\\n"
             "   - If completeness check fails, mark draft unsupported\\n"
-            "4. Run 'check_parameter_sources_for_manuscript' to validate parameter sourcing\\n"
+            "4. CRITICAL: Validate parameter REALISM. Use 'check_parameter_sources_for_manuscript'. For custom models (E*), flagged 'unsourced' parameters are allowed ONLY if the manuscript explicitly justifies them (e.g. 'we sweep A from 0 to 1'). Reject unjustified magic numbers.\\n"
             "   - Flag any reported issues\\n\\n"
             "## CONSISTENCY CHECKS\\n"
             "5. Run 'check_hypothesis_trace_consistency'\\n"
