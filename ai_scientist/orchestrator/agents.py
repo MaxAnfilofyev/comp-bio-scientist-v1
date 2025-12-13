@@ -50,7 +50,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     check_project_state,
     check_status,
     check_user_inbox,
-    coder_create_python,
     compute_model_metrics,
     generate_provenance_summary,
     graph_diagnostics,
@@ -84,8 +83,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     run_biological_stats,
     run_comp_sim,
     run_intervention_tests,
-    run_pyright,
-    run_ruff,
     run_sensitivity_sweep,
     run_transport_batch,
     run_validation_compare,
@@ -123,7 +120,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     list_experiment_results,
     get_latest_metrics,
     read_model_spec,
-    create_model_spec_artifact,
     read_experiment_config,
     read_metrics,
     save_model_spec,
@@ -693,58 +689,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
         settings=common_settings,
     )
 
-    coder = _make_agent(
-        name="Coder",
-        instructions=(
-            "You are an expert Utility Engineer.\n"
-            "Goal: Write or update lightweight Python helpers/tools confined to this run folder.\n\n"
-            "TL;DR: Create Python helpers → Document → Log to manifest → Lint check\n\n"
-            f"{_get_path_context('Coder', dirs)}\n{_get_file_io_policy('Coder')}\n{_get_metadata_reminder('Coder')}\n{_context_spec_intro('Coder')}\n{_summary_advisory('Coder')}\n\n"
-            "## CORE WORKFLOW\n"
-            "1. Use 'coder_create_python' to create/update files under run root\n"
-            "   - Do NOT write outside AISC_BASE_FOLDER\n"
-            "2. Document tools/helpers briefly\n"
-            "3. Log via 'append_manifest': name + kind + created_by + status\n"
-            "   - Include 'change_summary' if updating\n\n"
-            "## BEST PRACTICES\n"
-            "4. Prefer small, dependency-light snippets\n"
-            "5. Avoid large libraries or network access\n"
-            "6. If you need existing artifacts:\n"
-            "   - Use 'list_artifacts' to find them\n"
-            "   - Use 'read_artifact' with summary_only for large files\n"
-            "7. Reserve persisted outputs via 'reserve_typed_artifact' (e.g., verification_note)\n"
-            "8. Log code patterns or library constraints to Project Knowledge\n\n"
-            "## SUCCESS CRITERIA\n"
-            "✓ Code confined to run folder\n"
-            "✓ Dependencies minimal\n"
-            "✓ Tools documented\n"
-            "✓ Lint checks pass (run_pyright, run_ruff)\n\n"
-            f"{common_efficiency_note}\n\n"
-            f"{common_error_recovery}\n\n"
-            "9. Log reflections via manage_project_knowledge; never to manifest\n"
-            f"10. {reflection_instruction}"
-        ),
-        tools=[
-            get_run_paths,
-            resolve_path,
-            list_artifacts,
-            list_artifacts_by_kind,
-            read_artifact,
-            reserve_output,
-            reserve_typed_artifact,
-            reserve_and_register_artifact,
-            append_manifest,
-            read_manifest,
-            check_manifest_unique_paths,
-            write_registered_artifact,
-            coder_create_python,
-            run_ruff,
-            run_pyright,
-            manage_project_knowledge,
-        ],
-        model=model,
-        settings=common_settings,
-    )
+
 
     publisher = _make_agent(
         name="Publisher",

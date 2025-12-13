@@ -59,9 +59,8 @@ from ai_scientist.utils.transport_index import resolve_transport_sim
 from ai_scientist.utils import manifest as manifest_utils
 
 from ai_scientist.orchestrator.artifacts import (
-    ARTIFACT_TYPE_REGISTRY,
-    reserve_typed_artifact,
-    reserve_and_register_artifact,
+    reserve_typed_artifact as _reserve_typed_artifact_impl,
+    reserve_and_register_artifact as _reserve_and_register_impl,
 )
 
 from ai_scientist.orchestrator.summarization import ensure_module_summary_current
@@ -1705,7 +1704,7 @@ def run_sensitivity_sweep(
 @function_tool
 def run_intervention_tests(
     graph_path: str,
-    output_dir: Optional[str] = None,
+    # output_dir removed
     transport_vals: Optional[List[float]] = None,
     demand_vals: Optional[List[float]] = None,
     baseline_transport: float = 0.05,
@@ -1727,9 +1726,14 @@ def run_intervention_tests(
     except Exception:
         pass
     ensure_lit_gate_ready(skip_gate=skip_lit_gate)
+    
+    # Canonical path logic
+    sim_subdir = f"simulations/{experiment_id}" if experiment_id else "simulations/adhoc_interventions"
+    output_dir_path = _fill_output_dir(sim_subdir)
+
     res = RunInterventionTesterTool().use_tool(
         graph_path=graph_path,
-        output_dir=_fill_output_dir(output_dir),
+        output_dir=output_dir_path,
         transport_vals=transport_vals,
         demand_vals=demand_vals,
         baseline_transport=baseline_transport,
