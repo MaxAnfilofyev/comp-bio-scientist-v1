@@ -231,6 +231,13 @@ def check_manifest_unique_paths():
 
 @function_tool
 def list_artifacts(suffix: Optional[str] = None, subdir: Optional[str] = None):
+    """
+    List the contents of the artifact manifest.
+    
+    Args:
+        suffix: Filter by filename suffix (e.g. '.json').
+        subdir: Filter by subdirectory (e.g. 'figures').
+    """
     from .manifest_service import list_artifacts as _list_artifacts
     result = _list_artifacts(suffix, subdir)
     role = active_role()
@@ -536,6 +543,9 @@ async def extract_run_output(run_result: RunResult) -> str:
 def scan_transport_manifest(write: bool = True):
     """
     Scan transport_runs and (optionally) write manifest.json with status of (baseline, transport, seed).
+    
+    Args:
+        write: If True, writes the updated manifest to disk. If False, just scans.
     """
     return scan_transport_manifest_impl(write)
 
@@ -544,6 +554,11 @@ def scan_transport_manifest(write: bool = True):
 def resolve_transport_run(baseline: str, transport: str, seed: str):
     """
     Resolve paths for a transport run using the shared index (refreshes if stale).
+    
+    Args:
+        baseline: Baseline graph name (e.g. 'param_17').
+        transport: Transport rate (as string or float).
+        seed: Random seed (as string or int).
     """
     res = resolve_transport_sim(baseline=baseline, transport=float(transport), seed=int(seed))
     return res
@@ -557,7 +572,7 @@ def mirror_artifacts(
 ):
     """
     Copy or move artifacts into a canonical figures directory under the run root.
-    - src_paths: list of files to mirror.
+    - src_paths: list of files to mirror (must be absolute paths or resolvable).
     - dest_dir: relative or absolute dest; defaults to experiment_results/figures_for_manuscript.
     - mode: 'copy' (default) or 'move'.
     - prefix/suffix: optional disambiguation added to filename stem.
@@ -632,6 +647,9 @@ def resolve_baseline_path(baseline: str):
     """
     Resolve a baseline path by name or explicit path (searches experiment_results/morphologies for <baseline> with common suffixes).
     Returns {path} or an error with available baselines.
+    
+    Args:
+        baseline: The name of the baseline graph (e.g. 'param_17') or a path.
     """
     return resolve_baseline_path_impl(baseline)
 
@@ -641,6 +659,11 @@ def resolve_sim_path(baseline: str, transport: float, seed: int):
     """
     Resolve a sim.json path for (baseline, transport, seed) using the transport manifest with a scan fallback.
     Returns {path, status, missing, available_transports, available_pairs} or an error with suggestions.
+    
+    Args:
+        baseline: Name of the baseline graph (e.g. 'param_17').
+        transport: Transport rate value (float).
+        seed: Random seed integer.
     """
     return resolve_sim_path_impl(baseline, transport, seed)
 
@@ -1069,7 +1092,14 @@ def run_comp_sim(
     metrics: Optional[List[str]] = None,
     skip_lit_gate: bool = False,
 ):
-    """Runs a compartmental simulation and saves CSV data."""
+    """
+    Runs a compartmental simulation and saves CSV data.
+    
+    Args:
+        graph_path: Full or relative path to the graph file (e.g. experiment_results/morphologies/...).
+        metrics: List of metrics to compute/track.
+        metadata_json: Optional JSON string for extra metadata.
+    """
     try:
         human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
         _checkpoint_required(
@@ -1121,7 +1151,12 @@ def run_biological_plotting(
     experiment_id: Optional[str] = None,
     metrics: Optional[List[str]] = None,
 ):
-    """Generates plots from simulation data."""
+    """
+    Generates plots from simulation data.
+    
+    Args:
+        solution_path: Path to the simulation output file (e.g. sim.json or .npy).
+    """
     out_dir = _fill_figure_dir(output_dir)
     res = RunBiologicalPlottingTool().use_tool(
         solution_path=solution_path,
@@ -1154,6 +1189,10 @@ def compute_model_metrics(
 ):
     """
     Compute domain-specific metrics from a sweep CSV/JSON or model output; writes *_metrics.csv and optional {model_key}_metrics.json.
+    
+    Args:
+        input_path: Path to the simulation output or sweep CSV.
+        label: Label for the metrics (e.g. 'run_1' or model name).
     """
     # Canonical behavior: colocate outputs with the input file
     output_dir = os.path.dirname(input_path)
@@ -1302,6 +1341,9 @@ def graph_diagnostics(
 def read_manuscript(path: str, return_size_threshold_chars: int = 2000):
     """
     Reads the PDF or text of the manuscript. Truncates text over the threshold to avoid context blowups.
+    
+    Args:
+        return_size_threshold_chars: Max characters to return before truncating (default 2000).
     """
     result = ManuscriptReaderTool().use_tool(path=path)
     text = result.get("text")
@@ -1425,6 +1467,9 @@ def get_lit_recommendations(
     """
     Get recommended papers using the Semantic Scholar Recommendations API.
     If positive_paper_ids is None, pulls up to 20 IDs from the current lit_summary.json.
+    
+    Args:
+        positive_paper_ids: List of Semantic Scholar paper IDs (DOIs or S2 IDs) to use as seeds.
     """
     from ai_scientist.tools.semantic_scholar import SemanticScholarRecommendationsTool
     
@@ -1524,7 +1569,14 @@ def run_biological_model(
     skip_lit_gate: bool = False,
     sweep_params: Optional[Dict[str, Any]] = None,
 ):
-    """Run a built-in biological ODE/replicator model and save JSON results."""
+    """
+    Run a built-in biological ODE/replicator model and save JSON results.
+    
+    Args:
+        model_key: The identifier for the model (e.g. 'cooperation_evolution', 'E1', 'model_v2').
+        sweep_params: Optional dictionary of parameters to sweep (e.g. {'alpha': [0.1, 0.2]}).
+        enforce_param_provenance: If True, fails if parameters are not sourced. Defaults to True for standard models.
+    """
     ledger = ensure_model_spec_and_params(model_key)
 
     # Automatically skip literature gate for custom experimental models (E1, E2, etc.)
@@ -1747,7 +1799,13 @@ def run_sensitivity_sweep(
     compute_metrics: bool = True,
     skip_lit_gate: bool = False,
 ):
-    """Sweep transport_rate and demand_scale over a graph and log frac_failed."""
+    """
+    Sweep transport_rate and demand_scale over a graph and log frac_failed.
+    
+    Args:
+        transport_vals: List of transport rates to test (e.g. [0.01, 0.05, 0.1]).
+        demand_vals: List of demand scales to test (e.g. [0.5, 1.0]).
+    """
     try:
         human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
         _checkpoint_required(
@@ -1810,7 +1868,13 @@ def run_intervention_tests(
     compute_metrics: bool = True,
     skip_lit_gate: bool = False,
 ):
-    """Test parameter interventions vs a baseline and report delta frac_failed."""
+    """
+    Test parameter interventions vs a baseline and report delta frac_failed.
+    
+    Args:
+        transport_vals: List of transport rates to test.
+        demand_vals: List of demand scales to test.
+    """
     try:
         human_in_loop = os.environ.get("AISC_INTERACTIVE", "false").strip().lower() in {"true", "1", "yes"}
         _checkpoint_required(
@@ -1906,7 +1970,13 @@ def update_claim_graph(
     status: str = "unlinked",
     notes: str = "",
 ):
-    """Add or update a claim entry with support references."""
+    """
+    Add or update a claim entry with support references.
+    
+    Args:
+        support: List of supporting citation IDs or artifact paths.
+        status: status string (e.g. 'linked', 'unlinked').
+    """
     claim_path = resolve_claim_graph_path()
     return ClaimGraphTool().use_tool(
         path=str(claim_path),
@@ -2158,6 +2228,9 @@ def read_npy_artifact(
     Defaults to summary-only (shape/dtype/estimated_bytes + small sample stats).
     - For full data, set full_data=True or summary_only=False; requests exceeding caps return an error with a suggested sliced call.
     - Supports an optional slice JSON string: {"axis": int, "start": int, "stop": int, "step": int}.
+    
+    Args:
+        slice_spec_json: JSON string defining the slice, e.g. '{"axis": 0, "start": 0, "stop": 100}'.
     """
     p = BaseTool.resolve_input_path(path, allow_dir=False)
     base: Dict[str, Any] = {"path": str(p)}
@@ -2353,6 +2426,10 @@ def summarize_artifact(path: str, max_lines: int = 5):
     """
     Return a lightweight summary of a file without loading full contents.
     Supports: .json (keys), .csv (first lines), .npy/.npz (shape/keys), .gpickle (nodes/edges), .txt (head).
+    
+    Args:
+        path: Path to the artifact.
+        max_lines: Max number of lines/items to return.
     """
     p = BaseTool.resolve_input_path(path, allow_dir=False)
     info: Dict[str, Any] = {"path": str(p)}
@@ -2803,6 +2880,9 @@ def create_transport_artifact(baseline: str, transport: float, seed: int, artifa
     """
     Register a transport run artifact.
     artifact_type options: 'sim_json', 'status', 'failure_matrix', 'time_vector', 'nodes_order', 'per_compartment', 'node_index_map', 'topology_summary'.
+    
+    Args:
+        artifact_type: The type of artifact to register (must be one of the listed options).
     """
     kind_map = {
         "sim_json": "transport_sim_json",
