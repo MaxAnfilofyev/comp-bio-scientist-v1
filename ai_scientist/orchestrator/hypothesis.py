@@ -27,8 +27,7 @@ def bootstrap_hypothesis_trace(idea: Dict[str, Any]) -> Dict[str, Any]:
     """
     Initialize a hypothesis_trace.json skeleton from the idea JSON.
     """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    trace_path = exp_dir / "hypothesis_trace.json"
+    trace_path, _, _ = resolve_output_path(subdir=".", name="hypothesis_trace.json", allow_quarantine=False, unique=False)
     if trace_path.exists():
         try:
             return json.loads(trace_path.read_text())
@@ -72,8 +71,7 @@ def load_hypothesis_trace() -> Dict[str, Any]:
     """
     Load hypothesis_trace.json, bootstrapping from the active idea when missing.
     """
-    exp_dir = BaseTool.resolve_output_dir(None)
-    trace_path = exp_dir / "hypothesis_trace.json"
+    trace_path, _, _ = resolve_output_path(subdir=".", name="hypothesis_trace.json", allow_quarantine=False, unique=False)
     if trace_path.exists():
         try:
             return json.loads(trace_path.read_text())
@@ -83,8 +81,7 @@ def load_hypothesis_trace() -> Dict[str, Any]:
 
 
 def write_hypothesis_trace(trace: Dict[str, Any]) -> str:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    trace_path = exp_dir / "hypothesis_trace.json"
+    trace_path, _, _ = resolve_output_path(subdir=".", name="hypothesis_trace.json", allow_quarantine=False, unique=False)
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     trace_path.write_text(json.dumps(trace, indent=2))
     return str(trace_path)
@@ -372,8 +369,7 @@ def log_lit_gate_decision(
 
 
 def record_lit_gate_in_provenance(status_line: str) -> str:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    out_path = exp_dir / "provenance_summary.md"
+    out_path, _, _ = resolve_output_path(subdir=".", name="provenance_summary.md", allow_quarantine=False, unique=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     gate_line = f"- Lit gate: {status_line}"
 
@@ -681,8 +677,7 @@ def evaluate_model_provenance(model_key: str, allow_free: bool = False) -> Dict[
 
 
 def record_model_provenance_in_provenance(model_key: str, status_line: str) -> str:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    out_path = exp_dir / "provenance_summary.md"
+    out_path, _, _ = resolve_output_path(subdir=".", name="provenance_summary.md", allow_quarantine=False, unique=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     gate_line = f"- {model_key}: {status_line}"
 
@@ -765,9 +760,10 @@ def _gather_support_from_trace(trace: Dict[str, Any]) -> Dict[str, Dict[str, Any
 
 
 def evaluate_claim_consistency() -> Dict[str, Any]:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    claim_path = exp_dir / "claim_graph.json"
-    trace_path = exp_dir / "hypothesis_trace.json"
+    claim_path = resolve_claim_graph_path()
+    trace_path, _, _ = resolve_output_path(
+        subdir=".", name="hypothesis_trace.json", allow_quarantine=False, unique=False
+    )
     claims = _load_claim_graph(claim_path)
     trace = _load_hypothesis_trace_file(trace_path)
     support_map = _gather_support_from_trace(trace)
@@ -820,8 +816,7 @@ def evaluate_claim_consistency() -> Dict[str, Any]:
 
 
 def record_claim_consistency_in_provenance(status_line: str) -> str:
-    exp_dir = BaseTool.resolve_output_dir(None)
-    out_path = exp_dir / "provenance_summary.md"
+    out_path, _, _ = resolve_output_path(subdir=".", name="provenance_summary.md", allow_quarantine=False, unique=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     gate_line = f"- Claim consistency: {status_line}"
 
@@ -912,8 +907,7 @@ def render_provenance_markdown(sections: Dict[str, Any]) -> str:
 def generate_provenance_summary_impl() -> Dict[str, Any]:
     sections = collect_provenance_sections()
     content = render_provenance_markdown(sections)
-    exp_dir = BaseTool.resolve_output_dir(None)
-    out_path = exp_dir / "provenance_summary.md"
+    out_path, _, _ = resolve_output_path(subdir=".", name="provenance_summary.md", allow_quarantine=False, unique=False)
     out_path.write_text(content)
     entry = {
         "name": out_path.name,
