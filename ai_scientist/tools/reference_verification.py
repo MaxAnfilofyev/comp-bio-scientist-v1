@@ -233,6 +233,13 @@ class ReferenceVerificationTool(BaseTool):
                 notes = f"Best hit: '{best_hit.get('title', '')[:80]}', authors={', '.join(candidate_authors) or 'NA'}, year={best_hit.get('year')}, doi={hit_doi or 'NA'}"
                 if not doi and hit_doi:
                     doi = hit_doi
+
+            # Extract S2-specific fields from best_hit if available
+            s2_paper_id = best_hit.get("paperId") if best_hit else None
+            s2_url = best_hit.get("url") if best_hit else None
+            tldr_obj = best_hit.get("tldr") if best_hit else None
+            s2_tldr = tldr_obj.get("text") if isinstance(tldr_obj, dict) else None
+
             
         # --- CrossRef Fallback ---
         # If (not found) OR (found but missing DOI), try CrossRef
@@ -283,6 +290,14 @@ class ReferenceVerificationTool(BaseTool):
                     doi = cr_doi
                     notes += " (DOI added via CrossRef)"
 
+        # Ensure these variables exist for the return dict in case S2 wasn't used or failed
+        if "s2_paper_id" not in locals():
+            s2_paper_id = None
+        if "s2_url" not in locals():
+            s2_url = None
+        if "s2_tldr" not in locals():
+            s2_tldr = None
+
         found = bool(best_score >= score_threshold)
         return {
             "ref_id": ref_id,
@@ -292,6 +307,9 @@ class ReferenceVerificationTool(BaseTool):
             "doi": doi,
             "found": found,
             "match_score": round(best_score, 3),
+            "paperId": s2_paper_id,
+            "url": s2_url,
+            "tldr": s2_tldr,
             "notes": notes,
         }
 
@@ -330,6 +348,9 @@ class ReferenceVerificationTool(BaseTool):
                     "doi": doi,
                     "found": True,
                     "match_score": 1.0,
+                    "paperId": record.get("paperId") or record.get("paper_id"),
+                    "url": record.get("url"),
+                    "tldr": record.get("tldr"),
                     "notes": "Sourced directly from Semantic Scholar.",
                 })
             else:
@@ -344,7 +365,7 @@ class ReferenceVerificationTool(BaseTool):
         with json_path.open("w") as f:
             json.dump(rows, f, indent=2)
 
-        fieldnames = ["ref_id", "title", "authors", "year", "doi", "found", "match_score", "notes"]
+        fieldnames = ["ref_id", "title", "authors", "year", "doi", "found", "match_score", "paperId", "url", "tldr", "notes"]
         with csv_path.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
