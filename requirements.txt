@@ -1,4 +1,6 @@
 # LLM APIs
+sqlalchemy
+alembic
 anthropic
 backoff
 openai

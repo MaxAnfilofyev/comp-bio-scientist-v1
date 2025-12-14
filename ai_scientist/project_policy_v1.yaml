@@ -1,0 +1,179 @@
+policy_version: "v1.0"
+source_policy:
+  allowed_sources:
+    provider: "CORE"
+    require_full_text: true
+    require_doi: true
+    doi_validation: "crossref_required"
+  disallowed:
+    - type: "retracted"
+    - type: "no_doi"
+    - type: "no_full_text"
+  flagged_requires_human_decision:
+    - type: "expression_of_concern"
+    - type: "preprint"          # allowed only if explicitly permitted per-claim
+  venue_policy:
+    mode: "tiered"              # prefer tiered over brittle whitelist-only
+    allowlist_override: false   # if true: only allow venues in allowlist
+    tiers:
+      tier1:
+        description: "Top journals / society journals / flagship venues"
+        weight: 1.0
+      tier2:
+        description: "Solid specialty journals"
+        weight: 0.7
+      tier3:
+        description: "All other peer-reviewed venues"
+        weight: 0.4
+      unknown:
+        description: "Unclassified venues"
+        weight: 0.2
+    allowlist: []               # optional: explicit allowlist
+    blocklist:                  # always block
+      - "PredatoryJournalExample"
+  indexing_policy:
+    require_any_of:
+      - "pubmed"
+      - "medline"
+      - "scopus"
+      - "web_of_science"
+      - "doaj"
+    allow_reputable_publisher_without_indexing: true
+    reputable_publishers:
+      - "Springer Nature"
+      - "Elsevier"
+      - "Wiley"
+      - "Taylor & Francis"
+      - "Oxford University Press"
+      - "Cambridge University Press"
+      - "PLOS"
+      - "IEEE"
+      - "ACM"
+      - "Cell Press"
+  article_type_policy:
+    # used for ranking + promotion gates
+    preferred_order:
+      - "systematic_review"
+      - "meta_analysis"
+      - "primary_measurement"
+      - "methods_paper"
+      - "authoritative_review"
+    allowed_types:
+      - "systematic_review"
+      - "meta_analysis"
+      - "primary_measurement"
+      - "methods_paper"
+      - "authoritative_review"
+      - "narrative_review"      # allowed but weak; rarely promoted as sole support
+    disallowed_types:
+      - "conference_abstract"
+      - "editorial"
+      - "letter_without_data"
+      - "news"
+      - "blog"
+
+claim_policy:
+  claim_types:
+    - "background_fact"
+    - "measurement"
+    - "mechanism"
+    - "field_consensus"
+    - "model_assumption"
+    - "model_result"
+    - "interpretation"
+  evidence_required_rules:
+    background_fact: "citation"
+    measurement: "citation"
+    mechanism: "citation_or_both"        # depends on whether you’re asserting mechanism quantitatively
+    field_consensus: "citation"
+    model_assumption: "citation_or_none" # citation if claiming realism; none if explicitly a swept assumption
+    model_result: "analysis"
+    interpretation: "citation_or_both"
+
+promotion_gates:
+  # hard gates: must pass to be "Accepted Support"
+  require_text_anchor: true
+  anchor:
+    max_excerpt_words: 25                # to stay within copyright-safe quoting
+    require_location: true               # section + paragraph index or char offsets
+    require_claim_link: true             # must link to claim_id
+  integrity:
+    require_not_retracted: true
+    require_no_eoc: false                # if true, block expressions-of-concern
+  corroboration:
+    # applied only when claim strength_target=strong
+    strong_claim_min_supports: 2
+    allowed_strong_patterns:
+      - "2_independent_primary"
+      - "1_primary_plus_1_synthesis"
+    independence_rules:
+      avoid_same_first_or_last_author: true
+      avoid_same_institution_if_detectable: false
+      avoid_same_dataset_lineage: true    # if detectable; otherwise mark "unknown"
+  caps:
+    accepted_supports_per_claim_max: 5
+    shortlist_per_claim_max: 10
+    search_candidates_per_query_max: 200  # can store more in SearchRun, but only keep top-N for shortlist stage
+  strength_calibration:
+    # if support only justifies weaker form, force weakening unless PI overrides
+    enforce_weaken_if_overstated: true
+
+ranking:
+  # used for shortlisting, not acceptance
+  weights:
+    relevance: 0.35          # semantic similarity
+    directness: 0.25         # measures/explicitly states vs mentions
+    source_strength: 0.20    # tier + article type
+    freshness: 0.10          # applied depending on claim_type
+    graph_signal: 0.10       # citations network / centrality
+  freshness_windows_years:
+    field_consensus: 10
+    clinical_or_policy: 7
+    measurement: null        # no freshness requirement by default
+    mechanism: 15
+
+ledger_policy:
+  ledger_is_thin: true
+  ledger_must_not_store:
+    - "raw_search_results"
+    - "full_abstracts_for_candidates"
+    - "full_text"
+    - "long_quotes"
+  ledger_may_store:
+    - "accepted_support_refs"          # small list of ref_ids/artifact_ids
+    - "support_anchor_excerpt<=25w"
+    - "support_anchor_location"
+    - "verification_status"
+    - "gap_records"
+  audit:
+    require_event_log_on_mutation: true
+    optimistic_concurrency: true       # etag / per-claim version required
+
+roles:
+  permissions:
+    archivist:
+      can:
+        - "create_claim"
+        - "classify_claim"
+        - "propose_evidence_required"
+        - "create_search_run"
+        - "create_shortlist"
+        - "propose_support"
+        - "verify_reference"
+        - "add_gap"
+      cannot:
+        - "set_disposition_drop"
+        - "mark_claim_canonical_for_manuscript"
+    reviewer:
+      can:
+        - "audit_claim_extraction"
+        - "challenge_support"
+        - "open_gap"
+        - "flag_overstatement"
+      cannot:
+        - "set_disposition_drop"
+    pi:
+      can:
+        - "set_disposition_any"
+        - "override_policy_with_reason"
+        - "mark_claim_canonical_for_manuscript"
