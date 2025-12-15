@@ -191,6 +191,9 @@ aisci_outputs/
 slurm_logs/
 .out
 
+# database
+ai_scientist.sqlite
+
 # final papers
 final_papers/
 
