@@ -16,8 +16,8 @@ try:
 
     project_root = Path(__file__).resolve().parent.parent
     env_path = project_root / ".env"
-    # Load .env at project root; do not override already-set environment vars
-    load_dotenv(dotenv_path=env_path, override=False)
+    # Load .env at project root; override already-set environment vars to ensure .env usage
+    load_dotenv(dotenv_path=env_path, override=True)
 except Exception:
     # dotenv is optional; proceed if it is not installed
     pass
@@ -203,7 +203,7 @@ def get_batch_responses_from_llm(
                 "input": _format_messages_for_responses(new_msg_history),
                 "temperature": adjusted_temperature,
                 get_token_parameter_name(model): MAX_NUM_TOKENS,
-                "seed": 0,
+                get_token_parameter_name(model): MAX_NUM_TOKENS,
             }
             if response_format:
                 request_params["text"] = {"format": response_format}
@@ -317,7 +317,7 @@ def make_llm_call(client, model, temperature, system_message, prompt, response_f
             "instructions": system_message,
             "input": _format_messages_for_responses(prompt),
             "temperature": adjusted_temperature,
-            "seed": 0,
+            "temperature": adjusted_temperature,
         }
         request_params[token_param] = MAX_NUM_TOKENS
 
