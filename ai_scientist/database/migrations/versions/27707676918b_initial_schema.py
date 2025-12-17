@@ -75,6 +75,10 @@ def upgrade() -> None:
       year                      INTEGER,
       venue                     TEXT,                      -- journal/conference name
       publisher                 TEXT,
+      pmid                      TEXT,
+      pmcid                     TEXT,
+      pubmed_url                TEXT,                      -- [NEW]
+      pmc_url                   TEXT,                      -- [NEW]
       article_type_raw          TEXT,                      -- as observed from metadata/source
       article_type_norm         TEXT,                      -- normalized enum-like string (optional)
       is_peer_reviewed          INTEGER NOT NULL DEFAULT 1, -- 1=true, 0=false/unknown
@@ -93,6 +97,28 @@ def upgrade() -> None:
     CREATE INDEX IF NOT EXISTS idx_work_year ON work(year);
     CREATE INDEX IF NOT EXISTS idx_work_venue ON work(venue);
     CREATE INDEX IF NOT EXISTS idx_work_publisher ON work(publisher);
+    CREATE INDEX IF NOT EXISTS idx_work_pmid ON work(pmid);
+    CREATE INDEX IF NOT EXISTS idx_work_pmcid ON work(pmcid);
+
+    -- ============================================
+    -- 3b) Work Full Text Cache [GLOBAL]
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS work_fulltext_cache (
+      doi                       TEXT NOT NULL,
+      pmcid                     TEXT,
+      source                    TEXT NOT NULL,             -- 'PMC', 'CORE', etc.
+      format                    TEXT NOT NULL,             -- 'JATS_XML', 'TEI', 'PLAINTEXT'
+      content                   TEXT,                      -- The actual full text or blob
+      content_hash              TEXT,                      -- sha256
+      retrieved_at              TEXT NOT NULL,
+      license                   TEXT,
+      FOREIGN KEY (doi) REFERENCES work(doi) ON DELETE CASCADE,
+      UNIQUE (doi, source, format)
+    );
+    -- Unique index on PMCID+Hash for cache hits
+    CREATE UNIQUE INDEX IF NOT EXISTS uidx_cache_pmcid_hash ON work_fulltext_cache(pmcid, content_hash);
+
+    CREATE INDEX IF NOT EXISTS idx_cache_doi ON work_fulltext_cache(doi);
 
     -- ============================================
     -- 4) Search runs (one query execution / retrieval event)  [PROJECT-SCOPED]
@@ -128,8 +154,6 @@ def upgrade() -> None:
       composite_score           REAL,                      -- computed using policy/scoring version
       scoring_version           TEXT NOT NULL DEFAULT 'v1', -- scoring logic version
       policy_version            TEXT NOT NULL,
-      shortlist_status          TEXT NOT NULL DEFAULT 'none', -- 'none','shortlisted','rejected'
-      shortlist_reason          TEXT,
       created_at                TEXT NOT NULL,
       FOREIGN KEY (search_run_id) REFERENCES search_run(search_run_id) ON DELETE CASCADE,
       FOREIGN KEY (doi) REFERENCES work(doi) ON DELETE CASCADE,
@@ -140,7 +164,79 @@ def upgrade() -> None:
     CREATE INDEX IF NOT EXISTS idx_candidate_run ON candidate(search_run_id);
     CREATE INDEX IF NOT EXISTS idx_candidate_doi ON candidate(doi);
     CREATE INDEX IF NOT EXISTS idx_candidate_score ON candidate(search_run_id, composite_score DESC);
-    CREATE INDEX IF NOT EXISTS idx_candidate_shortlist ON candidate(search_run_id, shortlist_status);
+
+    -- ============================================
+    -- 5b) Candidate Quality Checks (append-only) [GLOBAL/PROJECT context]
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS candidate_quality_check (
+      check_id        TEXT PRIMARY KEY,
+      candidate_id    TEXT NOT NULL,
+      claim_id        TEXT, -- nullable => GLOBAL
+      check_type      TEXT NOT NULL,
+      verdict         TEXT NOT NULL,
+      policy_id       TEXT NOT NULL,
+      policy_hash     TEXT,
+      details_json    TEXT NOT NULL DEFAULT '{}',
+      executed_by     TEXT NOT NULL,
+      executed_at     TEXT NOT NULL,
+
+      FOREIGN KEY (candidate_id) REFERENCES candidate(candidate_id) ON DELETE CASCADE,
+      FOREIGN KEY (claim_id) REFERENCES claim(claim_id) ON DELETE CASCADE,
+
+      CHECK (check_type IN (
+        'has_doi',
+        'in_pmc_fulltext',
+        'preprint_policy',
+        'journal_whitelist',
+        'retraction_check',
+        'eoc_check',
+        'min_citations_check',
+        'trusted_type_check',
+        'supports_claim_check',
+        'anchor_extraction',
+        'claim_entailment_llm',
+        'top_triage_llm', -- [NEW]
+        'span_extraction', -- [NEW]
+        'span_relevance_llm' -- [NEW]
+      )),
+      CHECK (verdict IN ('PASS','FAIL','UNKNOWN','NA'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cqc_candidate ON candidate_quality_check(candidate_id);
+    CREATE INDEX IF NOT EXISTS idx_cqc_candidate_claim_type_time
+      ON candidate_quality_check(candidate_id, claim_id, check_type, executed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cqc_type_verdict
+      ON candidate_quality_check(check_type, verdict);
+
+    -- ============================================
+    -- 5c) Candidate Decisions (append-only) [GLOBAL/PROJECT context]
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS candidate_decision (
+      decision_id     TEXT PRIMARY KEY,
+      candidate_id    TEXT NOT NULL,
+      claim_id        TEXT, -- nullable => GLOBAL
+      outcome         TEXT NOT NULL,
+      basis_json      TEXT NOT NULL DEFAULT '{}',
+      policy_id       TEXT NOT NULL,
+      policy_hash     TEXT,
+      decided_by      TEXT NOT NULL,
+      decided_at      TEXT NOT NULL,
+
+      FOREIGN KEY (candidate_id) REFERENCES candidate(candidate_id) ON DELETE CASCADE,
+      FOREIGN KEY (claim_id) REFERENCES claim(claim_id) ON DELETE CASCADE,
+
+      CHECK (outcome IN (
+        'PROMOTED',
+        'REJECTED',
+        'HOLD',
+        'ELIGIBLE_SUPPORT',
+        'SELECTED_AS_SUPPORT'
+      ))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cd_candidate ON candidate_decision(candidate_id);
+    CREATE INDEX IF NOT EXISTS idx_cd_candidate_claim_time
+      ON candidate_decision(candidate_id, claim_id, decided_at DESC);
 
     -- ============================================
     -- 6) Claims (thin canonical ledger objects)  [PROJECT-SCOPED]
@@ -175,6 +271,26 @@ def upgrade() -> None:
     -- If you're iterating heavily and expect near-duplicates, you can drop this constraint.
     CREATE UNIQUE INDEX IF NOT EXISTS uidx_claim_project_statement
     ON claim(project_id, statement);
+    
+    -- ============================================
+    -- 6b) Claim Search Round (Control Loop Audit)  [PROJECT-SCOPED]
+    -- ============================================
+    CREATE TABLE IF NOT EXISTS claim_search_round (
+      round_id      TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL,
+      claim_id      TEXT NOT NULL,
+      search_run_id TEXT NOT NULL,
+      round_index   INTEGER NOT NULL,
+      summary_json  TEXT NOT NULL DEFAULT '{}',
+      next_action   TEXT NOT NULL, -- CONTINUE_SAME_QUERY, REWRITE_QUERY_TIGHTEN, etc.
+      created_at    TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE,
+      FOREIGN KEY (claim_id) REFERENCES claim(claim_id) ON DELETE CASCADE,
+      FOREIGN KEY (search_run_id) REFERENCES search_run(search_run_id) ON DELETE CASCADE,
+      UNIQUE (claim_id, round_index)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_csr_claim ON claim_search_round(claim_id, round_index);
 
     -- ============================================
     -- 7) Claim supports (promoted evidence links, with anchors)  [PROJECT-SCOPED]
@@ -288,6 +404,40 @@ def upgrade() -> None:
     WHERE w.full_text_available = 0
        OR w.retraction_status = 'retracted';
 
+    -- ============================================
+    -- 11) Latest Views
+    -- ============================================
+    CREATE VIEW IF NOT EXISTS vw_candidate_latest_checks AS
+    SELECT *
+    FROM (
+      SELECT
+        cqc.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            candidate_id,
+            COALESCE(claim_id, 'GLOBAL'),
+            check_type
+          ORDER BY executed_at DESC
+        ) AS rn
+      FROM candidate_quality_check cqc
+    ) x
+    WHERE x.rn = 1;
+
+    CREATE VIEW IF NOT EXISTS vw_candidate_latest_decision AS
+    SELECT *
+    FROM (
+      SELECT
+        cd.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            candidate_id,
+            COALESCE(claim_id, 'GLOBAL')
+          ORDER BY decided_at DESC
+        ) AS rn
+      FROM candidate_decision cd
+    ) x
+    WHERE x.rn = 1;
+
     -- Search runs with unusually high stored candidate volume (a canary for "Archivist firehose")
     CREATE VIEW IF NOT EXISTS v_project_search_runs_high_candidate_volume AS
     SELECT
@@ -333,12 +483,17 @@ def downgrade() -> None:
     DROP VIEW IF EXISTS v_project_search_runs_high_candidate_volume;
     DROP VIEW IF EXISTS v_project_supports_with_work_integrity_issues;
     DROP VIEW IF EXISTS v_project_canonical_claims_missing_verified_support;
+    DROP VIEW IF EXISTS vw_candidate_latest_decision;
+    DROP VIEW IF EXISTS vw_candidate_latest_checks;
     DROP TABLE IF EXISTS audit_event;
     DROP TABLE IF EXISTS claim_gap;
     DROP TABLE IF EXISTS claim_support;
     DROP TABLE IF EXISTS claim;
+    DROP TABLE IF EXISTS candidate_decision;
+    DROP TABLE IF EXISTS candidate_quality_check;
     DROP TABLE IF EXISTS candidate;
     DROP TABLE IF EXISTS search_run;
+    DROP TABLE IF EXISTS work_fulltext_cache;
     DROP TABLE IF EXISTS work;
     DROP TABLE IF EXISTS project;
     DROP TABLE IF EXISTS policy_snapshot;

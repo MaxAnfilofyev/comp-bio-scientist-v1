@@ -1,0 +1,1 @@
+https://api.semanticscholar.org/graph/v1/paper/search?query=ATP%20diffusion%20axon&openAccessPdf&fieldsOfStudy=Biology,Medicine&minCitationCount=1&fields=externalIds,title,abstract,tldr,citationCount,influentialCitationCount&limit=2&publicationTypes=Review,Journal,Article,CaseReport,ClinicalTrial,Conference,Dataset,MetaAnalysis,Study,Book,BookSection

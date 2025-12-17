@@ -1,0 +1,67 @@
+policy_version: "pmc_strict_v1.2.0"
+
+source_policy:
+  provider: "PUBMED"
+  require_doi: true
+  require_in_pmc_fulltext: true   # must resolve to PMCID via metadata or ELink
+  allow_preprints: false
+
+integrity_policy:
+  block_if_retracted: true
+  block_if_withdrawn: true
+  block_if_expression_of_concern: true
+  block_if_removed: true
+
+pubmed_query_templates:
+  # Archivist composes: template(query=user_query)
+  strict_pmc_only: "({query}) AND (\"pubmed pmc\"[sb]) NOT (preprint[pt]) NOT (retracted publication[pt]) NOT (expression of concern[pt])"
+  strict_pmc_only_recent: "({query}) AND (\"pubmed pmc\"[sb]) AND (\"last 10 years\"[dp]) NOT (preprint[pt]) NOT (retracted publication[pt]) NOT (expression of concern[pt])"
+
+article_type_policy:
+  # Metadata-only gate: be brutal
+  allow_pub_types_any_of:
+    - "Journal Article"
+    - "Clinical Trial"
+    - "Randomized Controlled Trial"
+    - "Meta-Analysis"
+    - "Systematic Review"
+  block_pub_types_any_of:
+    - "Preprint"
+    - "Retracted Publication"
+    - "Retraction of Publication"
+    - "Expression of Concern"
+    - "Editorial"
+    - "Letter"
+    - "News"
+    - "Comment"
+
+quality_checks:
+  enabled:
+    - has_doi
+    - in_pmc_fulltext
+    - preprint_policy
+    - retraction_check
+    - eoc_check
+    - min_citations_check
+  min_citations:
+    provider: "SEMANTIC_SCHOLAR"
+    threshold: 1
+    if_year_is_within_last_n: 2
+    verdict_if_missing: "UNKNOWN"   # don’t auto-fail just because S2 didn’t match
+
+decision_rules:
+  # pure metadata gating (no text access)
+  hard_fail_if_any:
+    - check_type: has_doi
+      verdict: "FAIL"
+    - check_type: in_pmc_fulltext
+      verdict: "FAIL"
+    - check_type: preprint_policy
+      verdict: "FAIL"
+    - check_type: retraction_check
+      verdict: "FAIL"
+    - check_type: eoc_check
+      verdict: "FAIL"
+
+  default_outcome_if_all_hard_pass: "ELIGIBLE_SUPPORT"
+  default_outcome_if_any_unknown: "HOLD"
