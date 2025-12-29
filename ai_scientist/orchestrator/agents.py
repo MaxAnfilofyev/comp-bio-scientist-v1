@@ -108,7 +108,6 @@ from ai_scientist.orchestrator.tool_wrappers import (
     create_lit_summary_artifact,
     create_claim_graph_artifact,
     list_lit_summaries,
-    list_claim_graphs,
     read_archivist_artifact,
     get_lit_recommendations,
     create_transport_artifact,

@@ -46,7 +46,6 @@ from ai_scientist.tools.semantic_scholar import SemanticScholarSearchTool
 from ai_scientist.tools.sim_postprocess import SimPostprocessTool
 from ai_scientist.tools.graph_diagnostics import GraphDiagnosticsTool
 from ai_scientist.tools.claim_graph import ClaimGraphTool
-from ai_scientist.tools.claim_graph_checker import ClaimGraphCheckTool
 from ai_scientist.tools.manuscript_reader import ManuscriptReaderTool
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.tools.repair_sim_outputs import RepairSimOutputsTool
@@ -93,7 +92,6 @@ from ai_scientist.orchestrator.hypothesis import (
     record_model_provenance_in_provenance,
     evaluate_claim_consistency,
     record_claim_consistency_in_provenance,
-    resolve_claim_graph_path,
     generate_provenance_summary_impl,
 )
 
