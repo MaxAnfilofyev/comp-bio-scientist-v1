@@ -34,6 +34,10 @@ class CheckType(str, Enum):
     ANCHOR_EXTRACTION = "anchor_extraction"
     CLAIM_ENTAILMENT_LLM = "claim_entailment_llm"
     MANUAL_REVIEW = "manual_review"
+    TOPIC_TRIAGE_LLM = "topic_triage_llm"
+    ABSTRACT_ENTAILMENT_LLM = "abstract_entailment_llm"
+    OPEN_ACCESS_PDF = "open_access_pdf"
+    FULLTEXT_FETCH = "fulltext_fetch"
 
 
 class Verdict(str, Enum):
@@ -94,6 +98,10 @@ class WorkUpsert(BaseModel):
     publisher: Optional[str] = None
     pmid: Optional[str] = None
     pmcid: Optional[str] = None
+    s2_paper_id: Optional[str] = None
+    is_open_access: bool = False
+    open_access_pdf_url: Optional[str] = None
+    license: Optional[str] = None
     indexing_json: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -231,6 +239,21 @@ class PromoteCandidateResponse(BaseModel):
     support_id: str
 
 
+class CreateSearchRoundRequest(BaseModel):
+    project_id: str
+    claim_id: Optional[str] = None
+    search_run_id: str
+    round_index: int
+    provider: str
+    base_query: str
+    compiled_query: str
+    filters_json: dict[str, Any] = Field(default_factory=dict)
+    summary_json: dict[str, Any] = Field(default_factory=dict)
+    next_action: str
+
+class CreateSearchRoundResponse(BaseModel):
+    search_round_id: str
+    created_at: datetime
 # ---------- Service Implementation ----------
 
 class EvidenceService:
@@ -311,11 +334,13 @@ class EvidenceService:
                 conn.execute(
                     text("""
                         INSERT INTO work (
-                            doi, title, year, venue, publisher, pmid, pmcid, indexing_json,
-                            created_at, updated_at
+                            doi, title, year, venue, publisher, pmid, pmcid, 
+                            s2_paper_id, is_open_access, open_access_pdf_url, license,
+                            indexing_json, created_at, updated_at
                         ) VALUES (
-                            :doi, :title, :year, :venue, :pub, :pmid, :pmcid, :idx,
-                            :now, :now
+                            :doi, :title, :year, :venue, :pub, :pmid, :pmcid,
+                            :s2id, :isoa, :oapdf, :lic,
+                            :idx, :now, :now
                         )
                         ON CONFLICT(doi) DO UPDATE SET
                             title=excluded.title,
@@ -324,6 +349,10 @@ class EvidenceService:
                             publisher=excluded.publisher,
                             pmid=excluded.pmid,
                             pmcid=excluded.pmcid,
+                            s2_paper_id=COALESCE(work.s2_paper_id, excluded.s2_paper_id),
+                            is_open_access=excluded.is_open_access,
+                            open_access_pdf_url=excluded.open_access_pdf_url,
+                            license=excluded.license,
                             indexing_json=excluded.indexing_json,
                             updated_at=excluded.updated_at
                     """),
@@ -335,6 +364,10 @@ class EvidenceService:
                         "pub": w.publisher,
                         "pmid": w.pmid,
                         "pmcid": w.pmcid,
+                        "s2id": w.s2_paper_id,
+                        "isoa": 1 if w.is_open_access else 0,
+                        "oapdf": w.open_access_pdf_url,
+                        "lic": w.license,
                         "idx": json.dumps(w.indexing_json),
                         "now": now_str
                     }
@@ -650,3 +683,37 @@ class EvidenceService:
             )
             
         return PromoteCandidateResponse(support_id=support_id)
+    def create_search_round(self, request: CreateSearchRoundRequest) -> CreateSearchRoundResponse:
+        import uuid
+        round_id = f"RND_{uuid.uuid4().hex}"
+        now_str = self._get_utc_now()
+        
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO search_round (
+                        search_round_id, search_run_id, claim_id, round_index, provider,
+                        base_query, compiled_query, filters_json, summary_json, next_action,
+                        created_at
+                    ) VALUES (
+                        :rid, :sid, :cid, :idx, :prov,
+                        :bq, :cq, :filt, :summ, :next,
+                        :now
+                    )
+                """),
+                {
+                    "rid": round_id,
+                    "sid": request.search_run_id,
+                    "cid": request.claim_id,
+                    "idx": request.round_index,
+                    "prov": request.provider,
+                    "bq": request.base_query,
+                    "cq": request.compiled_query,
+                    "filt": json.dumps(request.filters_json),
+                    "summ": json.dumps(request.summary_json),
+                    "next": request.next_action,
+                    "now": now_str
+                }
+            )
+            
+        return CreateSearchRoundResponse(search_round_id=round_id, created_at=datetime.fromisoformat(now_str))

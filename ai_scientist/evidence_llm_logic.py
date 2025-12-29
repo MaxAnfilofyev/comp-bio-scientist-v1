@@ -3,6 +3,7 @@ import json
 from ai_scientist.model.evidence import (
     LLMTopicTriageResponse,
     LLMRewriteQueryResponse,
+    QueryBlocks,
     MismatchCode
 )
 from ai_scientist.llm import (
@@ -60,11 +61,64 @@ TOPIC_TRIAGE_USER_TEMPLATE = """Claim:
 Candidate:
 - title: "{TITLE}"
 - abstract: "{ABSTRACT}"
+- tldr: "{TLDR}"
+- venue: "{VENUE}"
+- year: "{YEAR}"
+- citations: "{CITATIONS}"
+- pub_types: "{PUB_TYPES}"
+"""
+
+UNIVERSAL_ENTAILMENT_SYSTEM_PROMPT = """You are an evidence judge. Your job is to decide whether the provided SOURCE TEXT entails the CLAIM.
+
+Rules:
+- Be strict. Do not guess.
+- Treat TLDR as non-authoritative; use it only as context, never as the evidence basis.
+- If the claim is mechanistic or quantitative, require explicit mechanistic or quantitative statements.
+- Return STRICT JSON only.
+
+Labels:
+- "SUPPORTED": source clearly supports claim.
+- "NOT_SUPPORTED": source does not establish the claim.
+- "CONTRADICTED": source states the opposite or incompatible result.
+- "NEEDS_FULL_TEXT": source is suggestive but too vague/underspecified; likely requires full text.
+
+Also return:
+- support_strength: {STRONG|MODERATE|WEAK}
+- anchor_quote: <=25 words copied from SOURCE TEXT (empty if not supported)
+- rationale: 1-2 sentences, concrete.
+- required_next: {NONE|FETCH_FULLTEXT|FIND_DIFFERENT_PAPER|REFINE_CLAIM}
+
+JSON Format:
+{{
+  "verdict": "SUPPORTED", 
+  "support_strength": "STRONG",
+  "anchor_quote": "text...",
+  "rationale": "reasoning...",
+  "required_next": "NONE"
+}}
+"""
+
+UNIVERSAL_ENTAILMENT_USER_TEMPLATE = """CLAIM:
+- claim_text: "{CLAIM_TEXT}"
+- claim_type: "{CLAIM_TYPE}"
+
+SOURCE:
+- source_type: "{SOURCE_TYPE}"
+- title: "{TITLE}"
+- venue: "{VENUE}"
+- year: "{YEAR}"
+- text: \"\"\"{SOURCE_TEXT}\"\"\"
 """
 
 
-REWRITE_QUERY_SYSTEM_PROMPT = """You are a biomedical expert query optimizer.
-Your goal is to rewrite the search query to better find papers supporting the claim.
+REWRITE_QUERY_SYSTEM_PROMPT = """You are a biomedical expert query optimizer for Semantic Scholar.
+
+IMPORTANT: Semantic Scholar uses RELEVANCE-BASED search, NOT strict Boolean logic.
+- Generate simple keyword queries with the most important terms
+- Avoid complex Boolean operators (AND, OR, NOT)
+- Use 3-7 key terms that best represent the concept
+- Put exact phrases in quotes if critical
+- Keep queries simple and focused
 
 FAILURES DIAGNOSED:
 {failure_reason}
@@ -75,50 +129,56 @@ DRIFT CONCEPTS (What we found instead):
 STRATEGY: {mode}
 RULES:
 1. DISAMBIGUATE:
-   - You MUST add 1-2 positive anchors (specific methods, tissues, or measurements) that confirm the topic.
-   - You MAY add negative keywords (NOT ...) but max 4 terms.
-   - Do NOT remove the core entity.
-2. RELAX:
-   - Remove "modality" block first.
-   - Remove negative exclusions.
-   - Simplify context.
+   - Add 1-2 specific terms (methods, measurements, or context) to narrow focus
+   - Example: "ATP axon" → "ATP axon diffusion FRAP"
+2. BROADEN:
+   - Remove specific method terms
+   - Use more general synonyms
+   - Example: "ATP axon diffusion FRAP" → "ATP axon transport"
 3. TIGHTEN:
-   - Add a modality block or precise timestamp.
-   - Add negative exclusions for drift concepts.
+   - Add very specific measurement methods or context
+   - Example: "ATP axon" → "ATP axon diffusion coefficient fluorescence"
 
-OUTPUT FORMAT (JSON Blocks):
+OUTPUT FORMAT - Return STRICT JSON:
 {{
-  "entity": "core protein/gene",
-  "process": "mechanism or action",
-  "context": "tissue or cell type",
-  "modality": "measurement method (optional)",
-  "exclusion": "NOT (term1 OR term2)"
+  "keywords": ["term1", "term2", "term3", ...],
+  "exact_phrases": ["exact phrase 1", "exact phrase 2", ...],
+  "query": "simple keyword query (will be auto-generated)",
+  "note": "brief explanation of changes"
 }}
+
+EXAMPLES:
+- Good: "SNARE membrane fusion synaptic vesicle"
+- Good: "ATP diffusion axon FRAP"
+- Bad: "(ATP) AND (axon OR neurite) AND (diffusion OR FRAP)"
+- Bad: Complex nested Boolean expressions
 """
 
 REWRITE_QUERY_USER_TEMPLATE = """Claim: {CLAIM_TEXT}
-Current query (compiled): {CURRENT_QUERY}
+Current query: {CURRENT_QUERY}
 Mode: {MODE}
-Mismatches: {COUNTS}
-Near miss notes: {NEAR_MISS_NOTES}
-Drift Concepts (from triage): {DRIFT_CONCEPTS}
+Mismatches found: {COUNTS}
+Drift Concepts (what we found instead): {DRIFT_CONCEPTS}
 
-Instructions:
-- **DISAMBIGUATE (Phase A)**:
-  - Add 1 STRONG positive anchor to "modality" or "process" (e.g. "diffusion coefficient", "FRAP").
-  - Add up to 2 NEGATIVE anchors to "exclusion" derived from Drift Concepts.
-- **RELAX / BROADEN (Phase B)**:
-  - Remove "modality" block entirely.
-  - Simplify "process" block to core terms only.
-  - Drop "context" specificity.
-- **TIGHTEN / NARROW (Phase A)**:
-  - Reinstate "modality" block.
-  - Add specific "context" terms.
-  - Add "exclusion" for known drift.
-- **PAGINATE (Phase B)**:
-  - Keep query identical to semantic intent, maybe minor synonym expansion.
+{ROUND_HISTORY}
 
-Constraint: NEVER add broad verbs like "transport", "movement", "trafficking", "signaling", "regulation", "function", "role", "effect", "impact" unless the claim is specifically about that general concept.
+Your task: Generate a NEW keyword query that will find better papers.
+
+Instructions for {MODE} mode:
+- **DISAMBIGUATE**: Add 1-2 specific terms to narrow focus (e.g., add "FRAP" or "diffusion coefficient" for measurement methods)
+- **BROADEN**: Remove specific method terms, use more general synonyms
+- **TIGHTEN**: Add very specific measurement methods or experimental context
+
+IMPORTANT:
+- Generate 3-7 key terms
+- Use simple keywords, NOT Boolean operators
+- Put critical exact phrases in quotes if needed
+- Focus on the most discriminative terms
+- TARGET: Aim for 5-15 relevant papers (not 2, not 100)
+
+Example transformations:
+- DISAMBIGUATE: "ATP axon transport" → "ATP axon diffusion FRAP fluorescence"
+- BROADEN: "ATP axon diffusion FRAP" → "ATP axon transport"
 """
 
 REPAIR_QUERY_SYSTEM_PROMPT = """Fix this PubMed query to be syntactically valid and compliant.
@@ -141,6 +201,11 @@ def llm_topic_triage(
     claim_type: str,
     title: str,
     abstract: str,
+    tldr: str = None,
+    venue: str = None,
+    year: Any = None,
+    citations: int = 0,
+    pub_types: List[str] = [],
     policy_id: str = "default",
     model: str = DEFAULT_MODEL
 ) -> LLMTopicTriageResponse:
@@ -158,7 +223,12 @@ def llm_topic_triage(
         CLAIM_TEXT=claim_text,
         CLAIM_TYPE=claim_type,
         TITLE=title or "No Title",
-        ABSTRACT=abstract or "No Abstract"
+        ABSTRACT=abstract or "No Abstract",
+        TLDR=tldr or "N/A",
+        VENUE=venue or "N/A",
+        YEAR=str(year) if year else "N/A",
+        CITATIONS=str(citations),
+        PUB_TYPES=", ".join(pub_types) if pub_types else "N/A"
     )
 
     try:
@@ -212,6 +282,7 @@ def llm_rewrite_query(
     mode: str, # TIGHTEN, BROADEN, DISAMBIGUATE, RELAX
     failure_summary: dict,
     drift_concepts: List[str] = [],
+    round_history: List[dict] = [],  # New parameter for round feedback
     policy_id: str = "default",
     model: str = DEFAULT_MODEL
 ) -> LLMRewriteQueryResponse:
@@ -221,8 +292,16 @@ def llm_rewrite_query(
     client, model_name = create_client(model)
     
     counts = failure_summary.get("mismatch_code_counts", {})
-    # Extract near miss notes if available, or just generic info
-    # In a real impl, we'd pass specific notes from the summary
+    
+    # Format round history for prompt
+    history_text = ""
+    if round_history:
+        history_text = "Previous rounds:\n"
+        for rh in round_history[-3:]:  # Only show last 3 rounds
+            history_text += f"- Round {rh.get('round', '?')}: {rh.get('ingested', 0)} papers, "
+            history_text += f"{rh.get('eligible', 0)} eligible, T={rh.get('T', 0):.2f}\n"
+            if rh.get('top_mismatches'):
+                history_text += f"  Top mismatches: {', '.join(rh['top_mismatches'][:3])}\n"
     
     user_prompt = REWRITE_QUERY_USER_TEMPLATE.format(
         CLAIM_TEXT=claim_text,
@@ -230,8 +309,8 @@ def llm_rewrite_query(
         CURRENT_QUERY=current_query,
         MODE=mode,
         COUNTS=json.dumps(counts, indent=2),
-        NEAR_MISS_NOTES="(See mismatch codes)",
-        DRIFT_CONCEPTS=", ".join(drift_concepts) if drift_concepts else "None"
+        DRIFT_CONCEPTS=", ".join(drift_concepts) if drift_concepts else "None",
+        ROUND_HISTORY=history_text if history_text else "No previous rounds."
     )
 
     try:
@@ -247,28 +326,48 @@ def llm_rewrite_query(
         if not parsed:
              parsed = json.loads(response_text)
              
+        print(f"DEBUG LLM REWRITE: Raw response = {json.dumps(parsed, indent=2)}")
+        
         data = parsed
-        blocks_data = data.get("query_blocks", {})
+        blocks_data = None  # Initialize to avoid UnboundLocalError
         
-        # Compile Blocks into String
-        # (ENTITY) AND (CONTEXT) ...
-        parts = []
-        if blocks_data.get("entity"): parts.append(f"({blocks_data['entity'].strip('() ')})")
-        if blocks_data.get("context"): parts.append(f"({blocks_data['context'].strip('() ')})")
-        if blocks_data.get("process"): parts.append(f"({blocks_data['process'].strip('() ')})")
-        if blocks_data.get("modality"): parts.append(f"({blocks_data['modality'].strip('() ')})")
+        # New format: keywords and exact_phrases
+        if "keywords" in data:
+            keywords = data.get("keywords", [])
+            exact_phrases = data.get("exact_phrases", [])
+            
+            # Build simple query: keywords + "exact phrases"
+            query_parts = []
+            query_parts.extend(keywords)
+            query_parts.extend([f'"{phrase}"' for phrase in exact_phrases])
+            
+            base_query = " ".join(query_parts)
+            print(f"DEBUG: Compiled keywords {keywords} + phrases {exact_phrases} -> '{base_query}'")
+        else:
+            # Fallback to old format for backwards compatibility
+            blocks_data = data.get("query_blocks", {})
+            
+            # Compile Blocks into simple keyword query (not Boolean)
+            parts = []
+            if blocks_data.get("entity"): parts.append(blocks_data['entity'].strip('() '))
+            if blocks_data.get("context"): parts.append(blocks_data['context'].strip('() '))
+            if blocks_data.get("process"): parts.append(blocks_data['process'].strip('() '))
+            if blocks_data.get("modality"): parts.append(blocks_data['modality'].strip('() '))
+            
+            base_query = " ".join(parts)
         
-        base_query = " AND ".join(parts)
+        # Fallback: if blocks are empty but LLM provided a direct query string
+        if not base_query and data.get("query"):
+            base_query = data["query"]
         
-        # Add Exclusions
-        if blocks_data.get("exclusion"):
-            excl = blocks_data["exclusion"]
-            if not excl.startswith("NOT "): excl = f"NOT ({excl})"
-            base_query += f" {excl}"
+        # Final fallback: if still empty, use current query
+        if not base_query:
+            print(f"Warning: LLM rewrite produced empty query, using current query as fallback")
+            base_query = current_query
             
         return LLMRewriteQueryResponse(
             query=base_query,
-            query_blocks=blocks_data,
+            query_blocks=QueryBlocks(**blocks_data) if blocks_data else None,
             note=data.get("note")
         )
 
@@ -298,3 +397,51 @@ def llm_repair_query(
     except Exception as e:
         print(f"Query Repair Failed: {e}")
         return bad_query
+
+def llm_entailment_s2(
+    claim_text: str,
+    claim_type: str,
+    source_text: str,
+    source_type: str = "abstract",
+    title: str = "",
+    venue: str = "",
+    year: Any = "",
+    model: str = DEFAULT_MODEL
+) -> dict:
+    """
+    Universal entailment judge.
+    Returns dict compatible with LLMEntailmentJudgeResponse construction but generic dict for flexibility first.
+    """
+    client, model_name = create_client(model)
+    
+    user_prompt = UNIVERSAL_ENTAILMENT_USER_TEMPLATE.format(
+        CLAIM_TEXT=claim_text,
+        CLAIM_TYPE=claim_type,
+        SOURCE_TYPE=source_type,
+        TITLE=title,
+        VENUE=venue,
+        YEAR=str(year),
+        SOURCE_TEXT=source_text
+    )
+    
+    try:
+        response_text, _ = get_response_from_llm(
+            prompt=user_prompt,
+            client=client,
+            model=model_name,
+            system_message=UNIVERSAL_ENTAILMENT_SYSTEM_PROMPT,
+            temperature=0.0
+        )
+        parsed = extract_json_between_markers(response_text)
+        if not parsed:
+            parsed = json.loads(response_text)
+            
+        return parsed
+    except Exception as e:
+        print(f"Entailment Failed: {e}")
+        return {
+            "verdict": "NOT_SUPPORTED",
+            "support_strength": "WEAK",
+            "rationale": f"Error: {e}",
+            "required_next": "NONE"
+        }

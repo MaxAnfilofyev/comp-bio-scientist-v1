@@ -20,20 +20,24 @@ CheckType = Literal[
     "RETRACTION_POLICY",
     "TOPIC_TRIAGE_LLM",
     "SUPPORTS_CLAIM_CHECK",
-    "ANCHOR_EXTRACTION"
+    "ANCHOR_EXTRACTION",
+    "MIN_CITATIONS",
+    "OPEN_ACCESS_PDF",
+    "EOC_CHECK",
+    "ABSTRACT_ENTAILMENT_LLM",
+    "FULLTEXT_FETCH",
+    "FULLTEXT_PASSAGE_RETRIEVAL",
+    "FULLTEXT_ENTAILMENT_LLM"
 ]
 
 MismatchCode = Literal[
     "WRONG_DOMAIN",
     "WRONG_ENTITY",
     "WRONG_PROCESS",
+    "WRONG_CONTEXT",  # Added - LLM returns this for context mismatches
     "NON_AXONAL",
     "NO_MEASUREMENT",
     "REVIEW_ONLY",
-    "WRONG_PROCESS",
-    "WRONG_ENTITY",
-    "NON_AXONAL",
-    "NO_MEASUREMENT",
     "QUERY_SYNTAX_ERROR",
     "METHOD_MISMATCH",
     "AMBIGUOUS",
@@ -48,6 +52,7 @@ EntailmentVerdict = Literal[
 ]
 
 DecisionOutcome = Literal[
+    "PROMOTED",
     "REJECTED",
     "HOLD",
     "ELIGIBLE_SUPPORT",
@@ -106,8 +111,91 @@ GateName = Literal[
     "IN_PMC_FULLTEXT",
     "LANGUAGE_ALLOWED",
     "RETRACTION_OK",
-    "EOC_OK"
+    "EOC_OK",
+    "MIN_CITATIONS_CHECK",
+    "OPEN_ACCESS_PDF_CHECK"
 ]
+
+# -------------------------
+# S2 Models
+# -------------------------
+
+class S2SearchRequest(BaseModel):
+    query: str
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    fields_of_study: Optional[List[str]] = None
+    min_citation_count: Optional[int] = Field(default=1, ge=0)
+    require_open_access_pdf: bool = True
+    language: Optional[Literal["en"]] = "en"
+    publication_types_allow: Optional[List[str]] = None
+    publication_types_block: Optional[List[str]] = None
+    year_min: Optional[int] = None
+    year_max: Optional[int] = None
+    fields: List[str] = Field(default_factory=lambda: [
+        "paperId", "externalIds", "title", "abstract", "tldr",
+        "venue", "year", "publicationTypes",
+        "citationCount", "influentialCitationCount",
+        "openAccessPdf", "isOpenAccess",
+        "authors"
+    ])
+
+class S2PaperHit(BaseModel):
+    paper_id: str
+    rank: int
+    title: Optional[str]
+    abstract: Optional[str]
+    tldr: Optional[str]
+    external_ids: dict = Field(default_factory=dict)
+    year: Optional[int]
+    venue: Optional[str]
+    publication_types: Optional[List[str]]
+    citation_count: int = 0
+    influential_citation_count: int = 0
+    is_open_access: Optional[bool] = None
+    open_access_pdf_url: Optional[str] = None
+
+class S2SearchResponse(BaseModel):
+    total: int
+    offset: int
+    next_offset: Optional[int] = None
+    hits: List[S2PaperHit]
+    compiled_query: str
+
+class S2BatchFetchRequest(BaseModel):
+    ids: List[str]
+    fields: List[str] = Field(default_factory=lambda: [
+        "paperId", "externalIds", "title", "abstract", "tldr",
+        "venue", "year", "publicationTypes",
+        "citationCount", "influentialCitationCount",
+        "openAccessPdf", "isOpenAccess", "authors"
+    ])
+
+class S2RecommendationsRequest(BaseModel):
+    positive_paper_ids: List[str] = Field(default_factory=list)
+    negative_paper_ids: List[str] = Field(default_factory=list)
+    limit: int = Field(default=20, ge=1, le=100)
+    fields: List[str] = Field(default_factory=lambda: [
+        "paperId", "externalIds", "title", "abstract", "tldr",
+        "venue", "year", "publicationTypes",
+        "citationCount", "influentialCitationCount",
+        "openAccessPdf", "isOpenAccess"
+    ])
+
+class S2FetchPdfRequest(BaseModel):
+    paper_id: str
+    pdf_url: str
+    max_bytes: int = 10_000_000
+    extract_text: bool = True
+
+class S2FetchPdfResponse(BaseModel):
+    paper_id: str
+    sha256: str
+    content_type: str
+    size_bytes: int
+    extracted_text: Optional[str] = None
+    extraction_method: Optional[str] = None
+    errors: List[str] = Field(default_factory=list)
 
 # -------------------------
 # Tool I/O Models
@@ -199,10 +287,10 @@ class LLMEntailmentJudgeResponse(BaseModel):
     mismatch_codes: List[MismatchCode] = []
 
 class QueryBlocks(BaseModel):
-    entity: str
-    context: str
-    process: str
-    modality: str
+    entity: Optional[str] = None
+    context: Optional[str] = None
+    process: Optional[str] = None
+    modality: Optional[str] = None
     exclusion: Optional[str] = None # Negative clauses
 
 class LLMRewriteQueryResponse(BaseModel):
