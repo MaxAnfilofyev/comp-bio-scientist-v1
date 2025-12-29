@@ -2928,7 +2928,14 @@ def read_archivist_artifact(name: str):
     from ai_scientist.utils import manifest as manifest_utils
     from ai_scientist.tools.base_tool import BaseTool
     
+    import os
     entry = manifest_utils.find_manifest_entry(name, base_folder=BaseTool.resolve_output_dir(None))
+    if not entry:
+        # Fallback: try by basename if name is a path
+        if "/" in name or "\\" in name:
+            basename = os.path.basename(name)
+            entry = manifest_utils.find_manifest_entry(basename, base_folder=BaseTool.resolve_output_dir(None))
+            
     if not entry:
         return {"error": f"Artifact '{name}' not found in manifest. Archivist can only read registered artifacts."}
     
@@ -2943,6 +2950,9 @@ def read_archivist_artifact(name: str):
         "lit_coverage_json",
         "integration_memo_md",
         "claim_graph_main",
+        "lit_recommendations",
+        "manuscript_input_text",
+        "seed_idea_from_manuscript",
     }
     
     if kind not in allowed_kinds:

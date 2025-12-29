@@ -1,6 +1,5 @@
-import json
-from pathlib import Path
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
 from sqlalchemy import create_engine
 
 from ai_scientist.tools.base_tool import BaseTool
@@ -54,7 +53,7 @@ class ClaimGraphTool(BaseTool):
         # Ensure graph exists for project
         graph = self.service.get_graph(project_id)
         if not graph:
-            graph_id = self.service.create_graph(project_id)
+            self.service.create_graph(project_id)
         
         # Enforce thesis has no parent
         if claim_id.lower() == "thesis":
@@ -69,13 +68,14 @@ class ClaimGraphTool(BaseTool):
             ).fetchone()
             
             if not existing_claim:
+                now = datetime.now(timezone.utc).isoformat()
                 # Create claim in database
                 conn.execute(
                     text("""
                         INSERT INTO claim 
                         (claim_id, project_id, module, statement, claim_type, status, 
-                         created_by, policy_version)
-                        VALUES (:cid, :pid, :module, :stmt, :ctype, :status, :created_by, :policy)
+                         created_by, policy_version, created_at, updated_at)
+                        VALUES (:cid, :pid, :module, :stmt, :ctype, :status, :created_by, :policy, :cat, :uat)
                     """),
                     {
                         "cid": claim_id,
@@ -85,7 +85,9 @@ class ClaimGraphTool(BaseTool):
                         "ctype": "thesis" if claim_id.lower() == "thesis" else "hypothesis",
                         "status": status,
                         "created_by": "claim_graph_tool",
-                        "policy": "claim_graph_v1"
+                        "policy": "claim_graph_v1",
+                        "cat": now,
+                        "uat": now
                     }
                 )
                 conn.commit()
@@ -94,10 +96,15 @@ class ClaimGraphTool(BaseTool):
                 conn.execute(
                     text("""
                         UPDATE claim 
-                        SET statement = :stmt, status = :status
+                        SET statement = :stmt, status = :status, updated_at = :uat
                         WHERE claim_id = :cid
                     """),
-                    {"stmt": claim_text, "status": status, "cid": claim_id}
+                    {
+                        "stmt": claim_text, 
+                        "status": status, 
+                        "cid": claim_id,
+                        "uat": datetime.now(timezone.utc).isoformat()
+                    }
                 )
                 conn.commit()
         
