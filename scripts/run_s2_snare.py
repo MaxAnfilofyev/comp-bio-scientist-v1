@@ -28,9 +28,9 @@ def main():
 
     # 2. Setup Claim
     import uuid
-    claim_id = f"AXON_CLAIM_{uuid.uuid4().hex[:8]}"
-    project_id = "AXON_PROJECT"
-    claim_statement = "Axonal transport supplies energy-producing organelles."
+    claim_id = f"METAB_CLAIM_{uuid.uuid4().hex[:8]}"
+    project_id = "METAB_PROJECT"
+    claim_statement = "Regions with reduced local ATP supply are more vulnerable under metabolic stress."
     
     print(f"\nClaim ID: {claim_id}")
     print(f"Statement: {claim_statement}")

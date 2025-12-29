@@ -71,22 +71,34 @@ class EvidenceGrounderS2:
             # Fallback to claim text or previous round?
             current_query = claim["statement"]
         
-        # Remove common stopwords to improve S2 relevance search
-        # S2 works better with key terms, not full sentences
-        stopwords = {'of', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 
-                     'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-                     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
-                     'could', 'may', 'might', 'must', 'can', 'that', 'which', 'who', 'whom',
-                     'this', 'these', 'those', 'it', 'its', 'they', 'them', 'their',
-                     'involves', 'along', 'through', 'during', 'after', 'before', 'between'}
-        
-        # Only apply stopword removal to the initial claim statement, not to rewritten queries
+        # Extract content words using LLM (only for initial claim statement, not rewrites)
         if not req.current_query:
-            words = current_query.split()
-            filtered_words = [w for w in words if w.lower() not in stopwords]
-            current_query = ' '.join(filtered_words)
-            print(f"DEBUG: Removed stopwords. Original: {claim['statement']}")
-            print(f"DEBUG: Filtered query: {current_query}")
+            from ai_scientist.llm import get_response_from_llm, create_client
+            
+            client, model_name = create_client("gpt-5.2")
+            extract_prompt = f"""Extract only the key content words (nouns, verbs, adjectives) from this claim for a search query.
+Remove: articles (a, an, the), prepositions (of, in, on, under, with), conjunctions (and, or), comparatives (more, less), auxiliary verbs (is, are, be).
+Keep: nouns, main verbs, adjectives that describe the core concept.
+
+Claim: {claim["statement"]}
+
+Return ONLY the key words separated by spaces, nothing else."""
+
+            try:
+                response, _ = get_response_from_llm(
+                    prompt=extract_prompt,
+                    client=client,
+                    model=model_name,
+                    system_message="You are a helpful assistant that extracts key content words from scientific claims.",
+                    temperature=0.0
+                )
+                filtered_query = response.strip()
+                print(f"DEBUG: LLM extracted content words from '{claim['statement']}'")
+                print(f"DEBUG: Result: '{filtered_query}'")
+                current_query = filtered_query
+            except Exception as e:
+                print(f"Warning: LLM content word extraction failed: {e}, using claim as-is")
+                current_query = claim["statement"]
         
         # 2. Search S2
         # Use simple text search with filters from policy (mocked args for now)
