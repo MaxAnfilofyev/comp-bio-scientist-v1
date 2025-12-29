@@ -92,6 +92,7 @@ from ai_scientist.orchestrator.tool_wrappers import (
     summarize_artifact,
     ensure_module_summary,
     update_claim_graph,
+    gather_evidence_for_claim_graph,
     update_hypothesis_trace,
     update_transport_manifest,
     validate_lit_summary,
@@ -381,18 +382,18 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
         instructions=(
             f"You are an expert Literature Curator.\n"
             f"Goal: Verify novelty of '{title}' and map claims to citations.\n\n"
-            f"TL;DR: Search papers → Create lit_summary → Verify references → Build claim graph → Check quality gates\n\n"
+            f"TL;DR: Define claims → Auto-gather evidence → Review & Export → Verify references → Check quality gates\n\n"
             f"## CONTEXT\n"
             f"{abstract}\n"
             f"Related Work to Consider: {related_work}\n"
             f"{_get_path_context('Archivist', dirs)}\n{_get_file_io_policy('Archivist')}\n{_get_metadata_reminder('Archivist')}\n{_context_spec_intro('Archivist')}\n{_summary_advisory('Archivist')}\n\n"
             "## CORE WORKFLOW\n"
-            "1. Use 'assemble_lit_data' to gather papers\n"
-            "2. Use 'get_lit_recommendations' to discover highly relevant papers based on findings\n"
-            "3. Build claim graph via 'update_claim_graph(claim_id, claim_text, parent_id, support, status, notes)'\n"
-            "   - Use parent_id=None for thesis, otherwise link to parent claim\n"
-            "   - Support list can include DOIs (citations), file paths (artifacts), or SUP_* IDs (S2 evidence)\n"
-            "4. Use specialized artifact creators:\n"
+            "1. Define claims via 'update_claim_graph' (this establishes the graph in the database)\n"
+            "   - Use parent_id=None for thesis\n"
+            "2. Trigger automated evidence gathering via 'gather_evidence_for_claim_graph'\n"
+            "   - This runs the S2 pipeline to find, rank, and link papers to your claims\n"
+            "3. Review results via 'check_claim_graph' or 'get_lit_recommendations'\n"
+            "4. Use specialized artifact creators to export summaries:\n"
             "   - 'create_lit_summary_artifact(module=\"lit\")'\n"
             "   - 'create_claim_graph_artifact(module=\"lit\")' (exports graph to JSON for viewing)\n"
             "   - 'create_lit_review_artifact', 'create_lit_bibliography_artifact'\n"
@@ -402,23 +403,26 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "   - More than 20% of references are missing (found==False)\n"
             "   - Any match_score < 0.5\n"
             "   - Report FAILURE with specific counts\n"
-            "5. If verification repeatedly fails for a venue/source, log via manage_project_knowledge with the specific venue\n"
-            "6. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations\n\n"
+            "6. CRITICAL: If automated gathering fails, you may fall back to 'assemble_lit_data', but prefer the pipeline.\n"
+            "7. If verification repeatedly fails for a venue/source, log via manage_project_knowledge with the specific venue\n"
+            "8. CRITICAL: If no papers are found, report FAILURE. Do not invent 'TBD' citations\n\n"
             "## SUCCESS CRITERIA\n"
             "✓ lit_summary.json created with verified references\n"
             "✓ Reference verification shows ≥80% found, all match_score ≥0.5\n"
-            "✓ Claim graph built\n"
+            "✓ Claim graph built and populated with evidence (check via check_claim_graph)\n"
             "✓ No placeholder or 'TBD' citations\n\n"
             f"{common_efficiency_note}\n\n"
             f"{common_error_recovery}\n\n"
-            "8. Log reflections via 'append_run_note_tool' or manage_project_knowledge; never to manifest\n"
-            f"9. {reflection_instruction}"
+            "9. Log reflections via 'append_run_note_tool' or manage_project_knowledge; never to manifest\n"
+            f"10. {reflection_instruction}"
         ),
         tools=[
+            gather_evidence_for_claim_graph,
+            update_claim_graph,
             assemble_lit_data,
             validate_lit_summary,
             verify_references,
-            update_claim_graph,
+            check_claim_graph,
             manage_project_knowledge,
             append_run_note_tool,
             create_lit_summary_artifact,
@@ -428,7 +432,6 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             create_lit_coverage_artifact,
             create_lit_integration_memo_artifact,
             list_lit_summaries,
-            list_claim_graphs,
             read_archivist_artifact,
             get_lit_recommendations,
         ],
@@ -814,7 +817,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "Agents have their own tools with which they read/write files and perform tasks.\\n"
             "Tell agents what tasks you want for them to perform and relevant information for the task but not how to perform the tasks.\\n\\n"
             "**Available Agent Tools**:\\n"
-            "- `archivist` - Literature search, reference verification, claim graphs, lit summaries\\n"
+            "- `archivist` - Literature search, automated evidence gathering, claim graphs, lit summaries\\n"
             "- `modeler` - Simulations, parameter sweeps, metrics computation, hypothesis trace updates\\n"
             "- `analyst` - Figure generation, plotting, statistical analysis, manuscript gallery publishing\\n"
             "- `interpreter` - Theoretical biology interpretation (only for theoretical research)\\n"
@@ -828,8 +831,8 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
             "**Delegation Examples**:\\n\\n"
             "✓ **GOOD - Direct execution**:\\n"
             "```\\n"
-            "archivist(task='Assemble literature for substantia nigra vulnerability papers. "
-            "Create lit_summary.json with ≥10 refs. Run verify_references, ensure ≥80% found.')\\n"
+            "archivist(task='Establish claim graph for substantia nigra. Define claims with update_claim_graph, "
+            "then trigger automated evidence gathering. Export results to lit_summary.json.')\\n"
             "```\\n\\n"
             "✗ **BAD - Meta-planning**:\\n"
             "```\\n"

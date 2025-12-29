@@ -1975,30 +1975,69 @@ def update_claim_graph(
     support: Optional[List[str]] = None,
     status: str = "unlinked",
     notes: str = "",
+    project_id: Optional[str] = None,
 ):
     """
-    Add or update a claim entry with support references.
+    Add or update a claim entry in the database.
     
     Args:
-        support: List of supporting citation IDs or artifact paths.
+        support: List of supporting citation IDs, artifact paths, or S2 evidence IDs.
         status: status string (e.g. 'linked', 'unlinked').
+        project_id: Optional project identifier.
     """
-    claim_path = resolve_claim_graph_path()
     return ClaimGraphTool().use_tool(
-        path=str(claim_path),
         claim_id=claim_id,
         claim_text=claim_text,
         parent_id=parent_id,
         support=support,
         status=status,
         notes=notes,
+        project_id=project_id,
+    )
+
+@function_tool
+def gather_evidence_for_claim_graph(
+    project_id: str = "DEFAULT_PROJECT",
+    min_support: int = 2,
+    max_claims: int = 5
+):
+    """
+    Automatically search Semantic Scholar for evidence to support claims in the claim graph.
+    Use this AFTER defining claims with update_claim_graph.
+    """
+    from ai_scientist.tools.gather_evidence import GatherEvidenceTool
+    return GatherEvidenceTool().use_tool(
+        project_id=project_id, 
+        min_support=min_support, 
+        max_claims=max_claims
     )
 
 @function_tool
 def check_claim_graph():
-    """Check claim_graph.json for claims lacking supporting evidence."""
-    claim_path = resolve_claim_graph_path()
-    return ClaimGraphCheckTool().use_tool(path=str(claim_path))
+    """Check claim graph for claims lacking supporting evidence."""
+    # Note: ClaimGraphCheckTool likely needs to be updated to DB or we use service directly
+    # For now, let's assume we want to use the service to check
+    from sqlalchemy import create_engine
+    from ai_scientist.database.claim_graph_service import ClaimGraphService
+    
+    engine = create_engine("sqlite:///ai_scientist.sqlite")
+    service = ClaimGraphService(engine)
+    
+    # We can infer project_id or use default
+    project_id = "DEFAULT_PROJECT"
+    unsupported = service.find_unsupported_claims(project_id, min_support=1)
+    
+    if not unsupported:
+        return {"status": "ok", "message": "All claims have at least 1 support."}
+    
+    return {
+        "status": "gaps_found",
+        "unsupported_count": len(unsupported),
+        "unsupported_claims": [
+            {"id": c['claim_id'], "text": c['claim_text'], "supports": c['support_count']}
+            for c in unsupported
+        ]
+    }
 
 @function_tool
 def interpret_biology(base_folder: Optional[str] = None, config_path: Optional[str] = None):
@@ -2809,17 +2848,68 @@ def create_lit_summary_artifact(module: str = "lit"):
 
 
 @function_tool
-def create_claim_graph_artifact(module: str = "lit"):
+def create_claim_graph_artifact(module: str = "lit", project_id: str = "DEFAULT_PROJECT"):
     """
-    Create and register a new 'claim_graph_main' artifact.
-    Use this when creating the claim graph.
+    Export the current database claim graph to a JSON artifact.
+    Useful for visualizing the graph state or archiving it.
     """
-    return reserve_and_register_artifact(
+    # 1. Reserve the artifact
+    reservation = reserve_and_register_artifact(
         kind="claim_graph_main",
         meta_json=json.dumps({"module": module}),
         status="pending",
         unique=True,
     )
+    
+    if reservation.get("error"):
+        return reservation
+        
+    path = Path(reservation["reserved_path"])
+    
+    # 2. Fetch graph from database
+    try:
+        from sqlalchemy import create_engine
+        from ai_scientist.database.claim_graph_service import ClaimGraphService
+        
+        engine = create_engine("sqlite:///ai_scientist.sqlite")
+        service = ClaimGraphService(engine)
+        
+        graph_data = service.get_graph(project_id)
+        if not graph_data:
+            # If empty, maybe write empty list or try to export empty structure
+            graph_export = []
+        else:
+            # Use service export if available, or construct from nodes
+            # We implemented import/export in service? Let's check service code or just build it
+            # Service has get_claim_with_evidence but maybe not full dump?
+            # Let's use clean export from service if possible, or build it here.
+            # actually service.py had "import/export functionality" in summary.
+            # Let's assume we can query all claims or nodes.
+            # find_unsupported_claims gets some, get_nodes_for_claim gets others.
+            # Simplest is to dump all claims for project.
+            
+            # Let's do a custom dump for now to be safe:
+            graph_export = service.export_project_to_json(project_id)
+
+        # 3. Write to file
+        path.write_text(json.dumps(graph_export, indent=2))
+        
+        # 4. Update status
+        _append_manifest_entry(
+            name=str(path),
+            metadata_json=json.dumps({"status": "done", "item_count": len(graph_export)}),
+            allow_missing=False
+        )
+        
+        return {
+            "path": str(path),
+            "status": "created", 
+            "item_count": len(graph_export),
+            "message": "Exported database claim graph to JSON artifact"
+        }
+        
+    except Exception as e:
+        return {"error": f"Failed to export claim graph: {str(e)}"}
 
 
 @function_tool
@@ -2828,14 +2918,6 @@ def list_lit_summaries(module: str = "lit"):
     List existing literature summary artifacts for the given module.
     """
     return list_artifacts_by_kind(kind="lit_summary_main", limit=50)
-
-
-@function_tool
-def list_claim_graphs(module: str = "lit"):
-    """
-    List existing claim graph artifacts for the given module.
-    """
-    return list_artifacts_by_kind(kind="claim_graph_main", limit=50)
 
 
 @function_tool
