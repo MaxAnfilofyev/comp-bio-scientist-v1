@@ -352,24 +352,11 @@ class OrchestrateRoundResponse(BaseModel):
     claim_id: str
     query: str
     supports_found: int
-    supports_created: List[str]
-    next_action: NextAction
-    next_query: Optional[str] = None
-    reason: str
-    done: bool
-    summary_json: dict
-    failure_profile: Optional[RunFailureProfile] = None
-    claim_id: str
-    query: str
-
-    supports_found: int
     supports_created: List[str] = Field(default_factory=list)
-
     candidate_results: List[CandidateEvalResult] = Field(default_factory=list)
-
     next_action: NextAction
     next_query: Optional[str] = None
     reason: str
-
     done: bool = False
     summary_json: Dict[str, Any] = Field(default_factory=dict)
+    failure_profile: Optional[RunFailureProfile] = None

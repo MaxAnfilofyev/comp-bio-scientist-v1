@@ -1,9 +1,9 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from ai_scientist.tools.base_tool import BaseTool
 from ai_scientist.database.claim_graph_service import ClaimGraphService
 from ai_scientist.evidence.evidence_grounder_s2 import EvidenceGrounderS2
 from ai_scientist.evidence_service import EvidenceService
-from ai_scientist.model.evidence import S2SearchRoundRequest
+from ai_scientist.model.evidence import OrchestrateRoundRequest
 from sqlalchemy import create_engine
 
 class GatherEvidenceTool(BaseTool):
@@ -35,21 +35,23 @@ class GatherEvidenceTool(BaseTool):
             claim_id = claim_data['claim_id']
             print(f"Gathering evidence for: {claim_id}")
             
-            req = S2SearchRoundRequest(
+            req = OrchestrateRoundRequest(
+                project_id=project_id,
                 claim_id=claim_id,
-                search_round_index=1, # Always start new search round logic
+                search_round_index=1,
+                policy_id="s2_strict_v1.0", # Default policy for automated gathering
                 current_query=None,
                 pubmed_retmax=10
             )
 
             try:
                 res = grounder.orchestrate_round(req)
-                new_supports = len(res.new_support_ids)
+                new_supports = len(res.supports_created)
                 
                 # Link found supports back to graph
-                if res.new_support_ids:
+                if res.supports_created:
                     node_id = claim_data['node_id']
-                    for sid in res.new_support_ids:
+                    for sid in res.supports_created:
                         claim_service.add_support(
                             node_id, 
                             "claim_support", 
