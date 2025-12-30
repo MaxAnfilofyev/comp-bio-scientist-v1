@@ -3,13 +3,20 @@ import os
 import hashlib
 import io
 import time
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from ai_scientist.model.evidence import (
     S2SearchRequest, S2SearchResponse, S2PaperHit,
     S2BatchFetchRequest, S2RecommendationsRequest,
     S2FetchPdfRequest, S2FetchPdfResponse
 )
+
+# Load .env file from project root
+_project_root = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_project_root / ".env")
 
 # Optional imports for PDF extraction
 try:
@@ -22,23 +29,23 @@ S2_API_BASE = "https://api.semanticscholar.org/graph/v1"
 
 class S2Client:
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.environ.get("S2_API_KEY")
+        self.api_key = api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
         self.session = requests.Session()
         if self.api_key:
             self.session.headers.update({"x-api-key": self.api_key})
 
-    def _request(self, method: str, endpoint: str, params: dict = None, json_data: dict = None, retries: int = 3) -> requests.Response:
+    def _request(self, method: str, endpoint: str, params: Optional[dict] = None, json_data: Optional[dict] = None, retries: int = 3) -> requests.Response:
         url = f"{S2_API_BASE}/{endpoint}"
         for i in range(retries):
             try:
+                # Simple rate limiting: 1 request per second
+                time.sleep(1)
                 resp = self.session.request(method, url, params=params, json=json_data)
                 if resp.status_code == 429:
-                    # Rate limit backoff
-                    wait = int(resp.headers.get("Retry-After", (i + 1) * 2))
-                    time.sleep(wait)
+                    # Rate limited - wait 1 second and retry
                     continue
                 if 500 <= resp.status_code < 600:
-                    time.sleep((i + 1) * 2)
+                    # Server error - wait 1 second and retry
                     continue
                 
                 resp.raise_for_status()
