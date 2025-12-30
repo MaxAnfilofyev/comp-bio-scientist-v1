@@ -418,7 +418,7 @@ def build_team(model: str, idea: Dict[str, Any], dirs: Dict[str, str]) -> Any:
         tools=[
             gather_evidence_for_claim_graph,
             update_claim_graph,
-            assemble_lit_data,
+            #assemble_lit_data,
             validate_lit_summary,
             verify_references,
             check_claim_graph,
