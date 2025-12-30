@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union, List
 
-from pydantic import BaseModel, Field, constr
-from sqlalchemy import create_engine, text
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, text, Engine
 
 from ai_scientist.database.config import DATABASE_URL
+
 
 
 # ---------- Enums ----------
@@ -91,7 +92,7 @@ class CreateSearchRunResponse(BaseModel):
 # ---------- Work ----------
 
 class WorkUpsert(BaseModel):
-    doi: constr(min_length=3, max_length=255)
+    doi: str
     title: Optional[str] = None
     year: Optional[int] = None
     venue: Optional[str] = None
@@ -106,17 +107,17 @@ class WorkUpsert(BaseModel):
 
 
 class UpsertWorkBatchRequest(BaseModel):
-    works: list[WorkUpsert]
+    works: List[WorkUpsert]
 
 
 class UpsertWorkBatchResponse(BaseModel):
-    normalized_dois: list[str]
+    normalized_dois: List[str]
 
 
 # ---------- Candidate ingestion ----------
 
 class CandidateIngestItem(BaseModel):
-    doi: constr(min_length=3, max_length=255)
+    doi: str
     rank_in_results: int
     retrieval_score_raw: Optional[float] = None
     features_json: dict[str, Any] = Field(default_factory=dict)
@@ -126,12 +127,12 @@ class CandidateIngestItem(BaseModel):
 
 class IngestCandidatesRequest(BaseModel):
     search_run_id: str
-    candidates: list[CandidateIngestItem]
+    candidates: List[CandidateIngestItem]
     enforce_max_n: int = 500  # safety guardrail
 
 
 class IngestCandidatesResponse(BaseModel):
-    candidate_ids: list[str]
+    candidate_ids: List[str]
 
 
 # Note: `Base` for `WorkFulltextCache` is assumed to be defined elsewhere, e.g., `from sqlalchemy.ext.declarative import declarative_base; Base = declarative_base()`
@@ -205,20 +206,7 @@ class GetEffectiveStatusResponse(BaseModel):
     status: CandidateEffectiveStatus
 
 
-# ---------- FullText Cache ----------
 
-class StoreFulltextRequest(BaseModel):
-    doi: str
-    pmcid: Optional[str] = None
-    source: str = "PMC"
-    format: str = "JATS_XML"
-    content: str
-    license: Optional[str] = None
-
-class StoreFulltextResponse(BaseModel):
-    doi: str
-    content_hash: str
-    stored_at: str
 
 
 # ---------- Promotion ----------
@@ -257,8 +245,11 @@ class CreateSearchRoundResponse(BaseModel):
 # ---------- Service Implementation ----------
 
 class EvidenceService:
-    def __init__(self, db_url: str = DATABASE_URL):
-        self.engine = create_engine(db_url)
+    def __init__(self, db_url_or_engine: Union[str, Engine] = DATABASE_URL):
+        if isinstance(db_url_or_engine, str):
+            self.engine = create_engine(db_url_or_engine)
+        else:
+            self.engine = db_url_or_engine
 
     def _get_utc_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()

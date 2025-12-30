@@ -701,7 +701,7 @@ class RunBiologicalModelTool(BaseTool):
             
             script_path = spec.get("script_path")
             if not script_path:
-                raise ValueError(f"No script_path in model spec at {spec_path}")
+                raise ValueError(f"No script_path in model spec at {spec_path}. For custom ODE models, please use 'create_ode_model' to generate both the Python script and the compliant model specification.")
             
             # Resolve script path relative to AISC_BASE_FOLDER if needed, or absolute
             # For now assume relative to CWD if not absolute
